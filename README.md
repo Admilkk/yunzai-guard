@@ -45,8 +45,23 @@ npm --prefix plugins/yunzai-guard ci --include=dev
 | ---------------------------------- | ---------------------------------------------------------- |
 | `yunzai-guard-v*-win-x64.zip`      | Windows 包，**内置固定版本 Node 运行时**，首次启动无需下载 |
 | `yunzai-guard-v*-linux-x64.tar.gz` | Linux 包                                                   |
-| `node-v24.22.1-win-x64.exe`        | 与 Windows 包一致的独立 Node 运行时                        |
+| `node-v24.22.1-win-x64.exe`        | 独立 Node 运行时（可选，用法见下方）                       |
 | `SHA256SUMS.txt`                   | 全部资产的 SHA-256 校验和                                  |
+
+</details>
+
+<details><summary>独立 Node 运行时（可选）</summary>
+
+> [!NOTE]
+> Windows 发布包已内置运行时，通常无需单独下载 EXE。
+
+手动准备时，将 `node-v24.22.1-win-x64.exe` 重命名为 `node.exe`，放入 `plugins/yunzai-guard/runtime/node-v24.22.1-win-x64/`，Guard 启动时会自动识别并校验。
+
+也可在 Yunzai 根目录通过 PowerShell 指定该运行时启动：
+
+```powershell
+& ".\plugins\yunzai-guard\runtime\node-v24.22.1-win-x64\node.exe" .\app.js
+```
 
 </details>
 
