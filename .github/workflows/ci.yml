@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, public, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+          cache: npm
+      # 托管 runner 的 TEMP 为 8.3 短路径，与 realpath 不一致，会触发路径校验。
+      - if: runner.os == 'Windows'
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+      # prepare 脚本会完成 runtime 与面板构建，并核验随包原生组件的摘要。
+      - run: npm ci --include=dev
+      - run: npm run check
+      - run: npm run format:check
+      - run: npm run test:unit

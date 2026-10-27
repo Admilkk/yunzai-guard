@@ -1,0 +1,57 @@
+{
+  "name": "yunzai-guard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TRSS-Yunzai / 玖璃的进程接管、行为审计与函数完整性防护插件",
+  "author": "Admilkk",
+  "homepage": "https://github.com/Admilkk/yunzai-guard#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Admilkk/yunzai-guard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Admilkk/yunzai-guard/issues"
+  },
+  "engines": {
+    "node": ">=23.11.0"
+  },
+  "scripts": {
+    "test:prepare": "node tests/prepare.mjs",
+    "test:unit": "node scripts/test.mjs unit",
+    "test:platform": "npm run build && node scripts/test.mjs platform",
+    "test:all": "npm run build && node scripts/test.mjs all",
+    "test:integration": "node --test tests/environment-r29-managed.test.mjs",
+    "test:sandbox": "node --test tests/sandbox-*.test.mjs",
+    "test:environments": "node --test tests/environment-*.test.mjs",
+    "test:pm2-native": "node --test tests/environment-windows-native.test.mjs",
+    "test:pm2-auto": "node --test tests/environment-*pm2-auto.test.mjs",
+    "build": "npm run build:runtime && npm run build:web",
+    "test": "npm run build && npm run test:unit",
+    "check": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit && node scripts/check-layers.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "build:runtime": "node scripts/build-process-identity.mjs && node scripts/build-windows-broker.mjs && node scripts/build-bubblewrap.mjs && tsc -p tsconfig.json && node scripts/build-entrypoints.mjs && node scripts/build-protection.mjs && node scripts/build-sandbox.mjs",
+    "build:web": "vite build --config web/vite.config.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "prepare": "npm run build",
+    "package": "node scripts/package.mjs"
+  },
+  "devDependencies": {
+    "@ant-design/icons": "6.3.4",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "antd": "6.6.8",
+    "motion": "14.6.0",
+    "prettier": "3.9.6",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tar": "7.5.22",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vm2": "3.12.2"
+  },
+  "license": "GPL-3.0-only"
+}

@@ -1,0 +1,22 @@
+{
+  "purpose": "Exact frozen R26 historical agent/adapter import closure for cache-upgrade component regressions; intentional fixture duplication",
+  "source": "tests/runs/native-build-r26-20261024/guard",
+  "productManifestSha256": "de88fb7b656098a69787556d1153be84e5fdeedb6fc4632a864b268f843b684e",
+  "files": [
+    {
+      "path": "pm2-daemon.js",
+      "bytes": 25982,
+      "sha256": "6e64110be8c64fb3950284b3ee84cd0c96329dabbf03dc29e2b84a61653e8d16"
+    },
+    {
+      "path": "pm2-compat-v2.js",
+      "bytes": 10662,
+      "sha256": "eb1cef2fd9c63c2360db1885fb43c7b35485f407da179d7457b8121f4db4c164"
+    },
+    {
+      "path": "pm2-versions.js",
+      "bytes": 598,
+      "sha256": "1e061fefa62661d7a70e6b4c00fb219acb65a3d3179569cf9597018473fadcef"
+    }
+  ]
+}

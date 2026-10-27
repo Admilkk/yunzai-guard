@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "isolationMode": "managed",
+  "sandbox": {
+    "network": "none",
+    "writablePaths": ["data", "temp", "logs", "config/config"]
+  },
+  "startupTimeout": 60000,
+  "shutdownTimeout": 10000,
+  "handshakeTimeout": 5000,
+  "recovery": {
+    "maxRestarts": 3,
+    "windowMs": 60000,
+    "baseDelayMs": 250,
+    "maxDelayMs": 30000
+  },
+  "audit": {
+    "maxEventsPerSecond": 100,
+    "maxQueue": 1000,
+    "maxBytes": 10485760,
+    "maxFiles": 3
+  },
+  "protect": {
+    "enabled": true,
+    "intervalMs": 1000,
+    "action": "audit",
+    "targets": [
+      "Bot.sendFriendMsg",
+      "Bot.sendGroupMsg",
+      "Bot.sendMasterMsg",
+      "Bot.sendForwardMsg",
+      "Bot.fileToUrl",
+      "Bot.serverAuth",
+      "Bot.exitEvent",
+      "PluginsLoader.load",
+      "PluginsLoader.importPlugin",
+      "PluginsLoader.loadPlugin",
+      "PluginsLoader.unloadPlugin",
+      "PluginsLoader.changePlugin",
+      "PluginsLoader.registerHandlers",
+      "PluginsLoader.dealEvent",
+      "PluginsLoader.filtPermission",
+      "PluginsLoader.checkBlack",
+      "PluginsLoader.checkDisable",
+      "PluginsLoader.checkLimit",
+      "PluginsLoader.collectTask",
+      "PluginsLoader.startTask",
+      "Global.plugin.prototype.reply",
+      "Global.plugin.prototype.renderImg"
+    ],
+    "monitorInstrumentation": true
+  },
+  "rules": [],
+  "pluginSandbox": {
+    "plugins": []
+  }
+}

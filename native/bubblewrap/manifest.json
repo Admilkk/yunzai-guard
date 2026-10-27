@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "platform": "linux",
+  "architecture": "x64",
+  "version": "0.12.0",
+  "format": "elf-static",
+  "file": "bin/linux-x64/bwrap",
+  "bytes": 1977616,
+  "sha256": "309115174045c664e630347621bf48493977062b299a465740bcf2a73b34468e",
+  "source": {
+    "file": "sources/bubblewrap-0.12.0.tar.xz",
+    "url": "https://github.com/containers/bubblewrap/releases/download/v0.12.0/bubblewrap-0.12.0.tar.xz",
+    "sha256": "9760d007363e3abba7c747489910f9f82d9fca53ba3bd3282e396fa3c97a3314"
+  },
+  "libcap": {
+    "version": "2.78-r0",
+    "staticSha256": "6f783bc8fe44b635a58d97d58cd736e0fb840c121d156c9cf7ec3decbdf62297",
+    "headersSha256": "b9dd5ca2a572aa94fed4d3678101ea78a1d915fa9de045d7cc74dffb7bdcb6e5",
+    "distribution": "Alpine Linux v3.24 x86_64",
+    "signatureVerified": true,
+    "source": {
+      "file": "sources/libcap-2.78.tar.xz",
+      "sha256": "0d621e562fd932ccf67b9660fb018e468a683d7b827541df27813228c996bb11",
+      "url": "https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.78.tar.xz"
+    }
+  },
+  "compiler": {
+    "name": "Zig",
+    "version": "0.16.0",
+    "target": "x86_64-linux-musl"
+  },
+  "noticeSha256": "b4a0fb74156c128ed7e0e26deade4724f7ddb9bd7fe1bae5a66f653248dbc0cf"
+}

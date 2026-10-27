@@ -1,0 +1,166 @@
+# 监控与覆盖状态
+
+Guard 在受控工作进程加载核心之前安装内存钩子，桥接核心加载器并观察业务入口，磁盘核心与插件源码保持原样。默认 `audit` 保留业务操作及 Hook，不因为观察到变化而自动重启；Guard 自身文件和监控入口另有不可放行的自保护。
+
+## 控制台
+
+插件页列出已安装插件、最近活动和匹配规则，支持单独配置及多选批量配置。逐插件权限仍是带精确 `plugin` 字段的规则，和全局规则共用首条匹配顺序；选择继承后不增加该项覆盖。权限概况使用明确的示例事件评估，不代表该插件所有行为都已被观察或阻断。普通 `managed` 模式没有一般文件读写授权边界，独立沙箱的目录、文件和 Redis 授权另行配置。
+
+事件审计页可按插件、事件类型、动作、文本和时间筛选，分页查看脱敏详情；实时日志页显示宿主和业务进程的控制台输出。数量、趋势和插件活动来自当前保留事件，读取窗口及投递缺口仍受容量限制。`unknown` 归因不分配给任意业务插件，无记录不等于无操作。
+
+事件类型和已知操作使用中文名称，悬停可查看原始标识。事件详情可直接创建规则，规则页也提供常用场景；创建时显示匹配预览与近期样本中的命中、生效数量。样本预览沿用首条匹配语义，脱敏后无法精确判断的条件标为“无法验证”，不代表未来全部行为。
+
+配置修改先进入页面草稿，保存后按[字段范围](PERMISSIONS.md#配置生效)直接应用、重建业务进程或等待宿主重启。保存会携带读取时的配置版本；其他页面或程序已更新文件时，面板提示冲突并要求刷新，不自动覆盖。全局规则、逐插件规则和沙箱配置均使用现有配置校验。
+
+## 接管与监控范围
+
+普通 `app.js` 首次加载 Guard 后，由原进程完成退出交接，宿主确认旧资源退出，再建立受控工作进程。Guard 被发现之前的行为无法追回；显式 launcher 可让监控在核心入口前建立。PM2 的身份与交接条件见[运行指南](ENVIRONMENTS.md)。
+
+默认观察遇到无法识别的加载器时，记录覆盖缺失并继续原流程。选择沙箱或 `deny`、`restart` 等执行策略后，必须建立对应桥接，否则拒绝启动。
+
+Worker 与可确认的 Node 子进程使用独立监控通道。外部程序只记录创建等可见入口，不提供其内部逐 API 审计。自启 Redis 的交接只处理核心实际持有的进程；外部 Redis 不属于 Guard 的停止范围。
+
+Worker 构造器别名和子类同样经过预加载；Guard 的环境元数据不能由业务读写，普通 `getEnvironmentData`、`setEnvironmentData` 保持可用。SQLite 动态附库或缺少 authorizer 时会记录 `sqlite.authorizer` 覆盖不足，不能据此声称其文件操作已全部受控，详见[安全边界](../SECURITY.md)。
+
+可识别的 Node 子进程也覆盖公开 `ChildProcess.prototype.spawn` 入口。Guard 的启动快照在诊断发布前固定，订阅者可以观察但不能改写它；调用方原始参数保持可变。shell 命令、PATH 中的命令名和其他 Node 二进制仍按外部程序处理。
+
+## 网络、文件与原生扩展入口
+
+| kind         | operation                                                                     | 说明                                                                 |
+| ------------ | ----------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `network`    | `http.request/get`、`https.*`、`http.ClientRequest`、`fetch`、`http2.connect` | 目标省略凭据、查询参数与片段                                         |
+| `network`    | `socket.connect`、`tls.connect`、`udp.send`、`WebSocket`、`EventSource`       | 连接或首次发送前检查                                                 |
+| `network`    | `dns.resolve*`、`dns.reverse`（含 `Resolver` 与 `dns.promises`）              | 直接 DNS 查询；`dns.lookup` 被 net/http 内部使用，不单独记录以免重复 |
+| `network`    | `connection.observed`                                                         | 宿主系统层采样观察到的外部 TCP 连接，见下文                          |
+| `listen`     | `socket.listen`、`udp.bind`                                                   | 监听端口或绑定 UDP 端口                                              |
+| `filesystem` | `fs.writeFile`、`fs.open`、`fs.rename`、`fs.readFile` 等                      | 由 `monitor.files` 控制，见下文                                      |
+| `native`     | `native.load`                                                                 | `process.dlopen` 加载 `.node` 原生扩展                               |
+
+### 显式类型
+
+`listen`、`filesystem` 和 `native` 是 1.0.0 新增的**显式类型**：只有规则的 `kind` 原样写出它们时才匹配。省略 `kind`、写 `*` 或其他通配的规则不作用于这三类事件，因此升级前写下的宽泛规则不会意外拦截文件写入、原生扩展加载或端口监听。例如：
+
+```json
+[
+  { "id": "web-panel", "plugin": "web-dashboard", "kind": "listen", "action": "audit" },
+  { "id": "no-listen", "kind": "listen", "action": "deny" },
+  { "id": "no-native", "kind": ["native"], "plugin": "untrusted-*", "action": "deny" }
+]
+```
+
+宿主重算、工作进程检查和控制台预览使用同一套匹配规则。
+
+### 文件访问
+
+`monitor.files` 决定是否记录业务插件经 fs 路径入口的文件操作：`off` 不记录，`write`（默认）记录写入、创建、删除、移动、权限变更等修改操作，`all` 同时记录读取。检查点与 Guard 自保护共用同一收口，自保护先执行；规则可用 `kind: "filesystem"` 按插件或路径拒绝。基于 fd 的逐块 `read/write` 和 `FileHandle` 方法不逐次记录，打开文件时的 `fs.open` 已包含访问模式。
+
+同一插件对同一文件的同类操作，在 60 秒内只记录一次，避免日志、缓存等频繁写入占满审计速率。这只省略重复的 `audit` 记录，`deny` 和 `restart` 规则每次都会执行。
+
+### 原生扩展
+
+Guard 在 `process.dlopen` 记录原生扩展路径和加载插件，可用 `kind: "native"` 规则拒绝加载。加载完成后，原生代码直接调用操作系统接口，不经过 Node 的 JS 入口，因此：
+
+- 原生扩展内部的文件读写、网络连接、DNS 解析和进程创建**不会**产生 `filesystem`、`network` 或 `process` 事件；
+- 原生代码可以修改进程内存，绕过同进程的全部 JS 检查与自保护；
+- 原生扩展通过 Node-API 回调 JS 时，回调中的 JS 调用仍按普通入口检查。
+
+能覆盖原生代码的是进程外的两层：
+
+| 方式                                     | 能做什么                                      | 限制                                       |
+| ---------------------------------------- | --------------------------------------------- | ------------------------------------------ |
+| [系统隔离](SANDBOX.md)                   | 由 AppContainer/bubblewrap **拦截**文件与网络 | 作用于整个业务进程，不区分插件             |
+| [独立插件沙箱](NATIVE-PLUGIN-SANDBOX.md) | 把单个插件放进受限子进程                      | 实验功能，需按插件配置                     |
+| 系统层观察（`monitor.process`）          | **观察**进程树的读写字节与外部 TCP 连接       | 事后采样，不能拦截，无法归因到插件；见下文 |
+
+控制台总览会列出已记录的原生扩展；兼容托管模式下加载了原生扩展时，会提示启用系统隔离。可信插件的 `audit` 放行规则须排在拒绝规则之前（第一条匹配生效）。
+
+### 系统层观察
+
+`monitor.process`（默认开启）让宿主定期从进程外读取业务进程树的系统计数：Linux 每 10 秒读取 `/proc`，Windows 每 30 秒调用一次 PowerShell（`Get-CimInstance Win32_Process` 与 `Get-NetTCPConnection`）。采样包含进程数、累计读写字节（含文件、管道与套接字）和已建立的 TCP 连接，结果显示在总览和 `status.usage` 中。
+
+每个新出现的外部（非回环）连接写入一条 `connection.observed` 审计事件，来源为 `unknown`、`details.source` 为 `os-sample`。由于这些数据来自操作系统，原生扩展发起的连接同样可见；但它们：
+
+- 是事后采样，两次采样之间建立又关闭的短连接可能看不到；
+- 只覆盖 TCP，不含 UDP 与 Unix 套接字；
+- 无法归因到具体插件，也不能拦截；需要拦截时使用系统隔离；
+- Windows 上依赖 PowerShell 与 NetTCPIP 模块，不可用时不产生采样，也不影响业务。
+
+## 业务规则
+
+| operation          | target   | 调用前检查点                     |
+| ------------------ | -------- | -------------------------------- |
+| `plugin.import`    | `module` | 核心模块导入                     |
+| `plugin.load`      | 类名     | 核心实例化及初始化导出类         |
+| `plugin.construct` | 类名     | 核心消息与上下文处理中的实例构造 |
+| `plugin.call`      | 方法名   | 已包装的自有原型方法和实例函数   |
+| `plugin.task`      | `fnc`    | 核心收集的任务回调               |
+
+例如将下列规则加入 `rules`，可以阻止指定入口并请求重建工作进程：
+
+```json
+{
+  "id": "block-dangerous-method",
+  "kind": "plugin",
+  "plugin": "example-plugin",
+  "operation": "plugin.call",
+  "target": "dangerousAction",
+  "action": "restart"
+}
+```
+
+规则遵循[第一条匹配生效](PERMISSIONS.md)。插件自行 `import()`、自行构造类或保存未包装引用，不会自动纳入上述核心检查点。
+
+业务入口审计不保存消息正文、参数、返回值或异常正文。包装保留 `this`、同步结果、原 Promise 和异常行为；未桥接回调、部分实例箭头函数或继承方法不能视为逐方法覆盖。
+
+## 函数变化观察
+
+`protect.enabled` 开启后，Guard 定期检查配置中的目标，并观察主工作进程内业务 ESM 模块导出的函数及其静态、原型方法。观察调用在内存加载阶段加入，不改磁盘文件，也不冻结或恢复业务函数。
+
+默认清单聚焦 TRSS 的鉴权、权限检查、插件加载与卸载、消息发送和任务入口，不默认包含 `Bot.em`、`Bot.prepareEvent` 或通用事件方法，完整列表见[默认监控函数](../src/config/targets.ts)。监控的是函数和描述符变化，不逐条记录普通 `emit` 调用。已有自定义清单保持原样，可在面板点击“恢复默认函数”载入新清单后保存。
+
+对于已登记目标，14 个反射入口可即时观察：`Object.defineProperty/defineProperties/setPrototypeOf/assign/freeze/seal/preventExtensions`、`Reflect.defineProperty/set/deleteProperty/setPrototypeOf/preventExtensions`，以及 `__defineGetter__/__defineSetter__`。事件为 `protected-target-hook` 或 `module-function-hook`，标记 `details.detection: "during-call"`，记录调用结果；默认保留原反射操作及其返回、异常行为。
+
+模块变化事件使用 `kind: "integrity"`、`operation: "module-function-change"`，并标记 `blocked: false`、`details.detection: "after-change"`。默认 `audit` 记录变化；该检查点的 `deny` 无法撤销已经发生的修改，`restart` 则显式请求重建进程。
+
+基线在能够确认模块执行和函数身份后建立。解析失败、循环依赖中无法及时确定身份或容量不足，会记录 `module-audit-unavailable` 和 `coverage: "partial"`。容量与检查周期有上限，不能据此认定所有函数都被观察。
+
+普通 `object.fn = value`、`delete object.fn` 和直接 `__proto__` 赋值不会统一经过这些反射入口，仍需描述符与原型轮询；短暂替换后恢复可能漏报。观察不遍历任意对象图，不完整覆盖 CJS、闭包、Symbol 属性或未完成执行的模块，也不能拦截提前保存的原始反射引用。来源名称或 `observed-function` 只是归因线索，不能把即时观察解释为全部 Hook 留痕。
+
+## Guard 自保护
+
+工作进程及继承监控的 Worker、Node 子进程永久拒绝通过受控 fs 入口修改 Guard 根目录、`data/yunzai-guard` 和当前运行时清单。管理状态目录和运行时清单也禁止通过受控入口读取或复制到外部，源码读取不受此限制。检查包含读取、写入、移动、删除、链接、权限变更、流和已登记文件句柄；宿主在独立进程维护状态和日志。
+
+构建登记的 Guard 自有导出函数、类和原型会加固；必要的 fs、反射及 Node 监控包装槽不可替换，规则快照冻结。关键内部操作使用预先捕获的内建入口，不冻结业务全局原型。继承运行时的公开接口只返回身份与就绪状态，不提供监控卸载句柄；公开发送接口只接受审计遥测。自保护事件固定拒绝，不能被业务规则改成 `audit`。
+
+这是兼容模式的明确限制：修改正常 Bot 或业务函数仍可按规则执行，替换 Guard 的监控包装器会被拒绝。同进程加固仍不能替代操作系统权限边界；Windows 安装前打开的 fd、既有硬链接、并发路径替换、原生入口及未受控外部程序可能绕过 JS 文件检查，详见[安全说明](../SECURITY.md)。
+
+## 读取 status
+
+`monitoring.targets` 与配置中的 `protect.targets` 对应：
+
+| state               | 含义                                       |
+| ------------------- | ------------------------------------------ |
+| `protected`         | 已捕获基线，最近检查未报告变化             |
+| `pending`           | 尚未捕获；`reason: missing` 表示目标不存在 |
+| `inspection-failed` | getter、代理或根对象读取失败               |
+| `changed`           | 相对原基线发生变化，基线不会自动刷新       |
+| `disabled`          | 完整性检查已关闭                           |
+| `unreported`        | 尚未收到当前代的有效快照                   |
+
+目标在线后仍缺失或读取失败时，会产生覆盖提醒；提醒本身不触发重启。动态目标之后出现时可以建立基线。
+
+`monitoring.plugins.entries` 中的 `imports/loads/calls` 是入口尝试次数，`registered` 是累计注册实例数，`blocked` 是规则阻断次数，`unwrapped` 是无法包装的次数。它们不表示业务成功次数或活跃插件数；工作进程换代后清零。`truncated: true` 表示展示受容量限制，溢出项的规则检查仍执行。
+
+快照定期发送，`receivedAt` 由宿主记录；超过时限或工作进程正在退出、失败时标记为 `stale`。`current` 仅表示近期收到该代报告，不证明所有目标均受保护或报告不可伪造。
+
+## 日志与可信边界
+
+脱敏事件持久化到 `data/yunzai-guard/events.sqlite`，使用 Node 内建 SQLite，无需安装数据库组件。`audit.maxBytes * audit.maxFiles` 为脱敏事件负载的保留预算，超限淘汰最旧事件；数据库页、索引和 WAL 有额外磁盘开销。旧 JSONL 日志按有界、幂等方式导入，源文件保留，超出导入窗口的历史不会自动补全。
+
+工作进程与兼容插件共享 JS 环境，归因和覆盖状态属于 `worker-reported` 信息，可能被同进程代码干扰。系统隔离见[系统后端](SANDBOX.md)，逐插件隔离见[独立插件沙箱](NATIVE-PLUGIN-SANDBOX.md)。
+
+审计队列、传输和落盘均有容量限制，过载可能丢弃记录。`auditDropped` 显示宿主丢弃数量；`audit-rate-limited` 的顶层 `dropped` 是累计值，多条记录不能相加。汇总不能还原被丢弃的逐条操作。
+
+宿主根据自身配置和事件可见字段重算动作、规则，不以工作进程自报的标签授予重启权限。`exec`、`execSync` 的完整命令参数在传输前脱敏，因此参数匹配规则可在本地调用前拒绝，但宿主不能仅靠该标签确认参数匹配并执行重启；需宿主处理的规则应匹配其可见字段。重算也不能证明自报事件确实发生或归因正确。
+
+宿主先校验事件与规则，再限制日志保存；已授权的违规恢复不因日志限流被禁用。生命周期控制消息另有逐代签名和防重放校验，监控快照仍为工作进程报告。短线程退出、进程异常结束或通道故障仍可能产生覆盖缺口，不能把“未记录”解释为“未发生”。

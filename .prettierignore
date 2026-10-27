@@ -1,0 +1,30 @@
+# 生成产物与第三方依赖。
+/dist/
+/node_modules/
+
+# 原生包按原始字节校验摘要。
+/native/process-identity/
+/native/bubblewrap/
+
+# 固定版本的回归测试输入。
+/tests/fixtures/
+
+# 本地配置、运行数据、副本和缓存。
+/.cache/
+/data/
+/release/
+/runtime/
+/tests/runs/
+/tests/source/
+/tests/bundle/
+/tests/dependencies/
+/tests/core-manifest.json
+/tests/linux-evidence/
+/tests/linux-stage/
+/tests/linux-stage.tar
+/tests/*.log
+/AGENTS.md
+
+# 补丁和锁文件由对应工具维护。
+**/*.patch
+/package-lock.json

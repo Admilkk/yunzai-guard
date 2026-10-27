@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "platform": "win32",
+  "architecture": "x64",
+  "sourceDigest": "8c51e3a1c03b7e49edcd6b1c570f47b1c81f44497190445d7dd312ef69f8dc1a",
+  "file": "bin/win32-x64/GuardSandbox.exe",
+  "bytes": 115712,
+  "sha256": "6920d255ace238872085342734bf6a7932f3f5bd65d65d6fa418b853b7d2d344"
+}

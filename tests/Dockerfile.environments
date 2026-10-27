@@ -1,0 +1,6 @@
+FROM node:24.22.1-alpine3.24
+ARG PM2_VERSION=6.0.14
+RUN apk add --no-cache bubblewrap screen tmux util-linux-misc \
+    && npm install --global pm2@${PM2_VERSION} \
+    && npm cache clean --force
+USER node

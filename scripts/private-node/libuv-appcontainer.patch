@@ -1,0 +1,243 @@
+diff --git a/deps/uv/src/win/pipe.c b/deps/uv/src/win/pipe.c
+index cd11859d347..6d26d6cec82 100644
+--- a/deps/uv/src/win/pipe.c
++++ b/deps/uv/src/win/pipe.c
+@@ -106,8 +106,42 @@ static int includes_nul(const char *s, size_t n) {
+ }
+ 
+ 
++static int uv_is_app_container_;
++static uv_once_t uv_is_app_container_guard_ = UV_ONCE_INIT;
++
++
++/* 检查当前进程是否处于 Windows AppContainer。 */
++/* 检测依据：https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-for-legacy-applications- */
++static void uv__init__is_app_container(void) {
++  HANDLE token;
++  DWORD ac;
++  DWORD len;
++  int ok;
++
++  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
++    uv_is_app_container_ = 0;
++    return;
++  }
++  ac = 0;
++  len = sizeof(ac);
++  ok = GetTokenInformation(token, TokenIsAppContainer, &ac, len, &len);
++  CloseHandle(token);
++  uv_is_app_container_ = ok && ac != 0;
++}
++
++
++/* 检查当前进程是否处于 Windows AppContainer。 */
++/* 缓存进程内的重复查询结果。 */
++static int uv__is_appcontainer(void) {
++  uv_once(&uv_is_app_container_guard_, uv__init__is_app_container);
++  return uv_is_app_container_;
++}
++
++
+ static void uv__unique_pipe_name(unsigned long long ptr, char* name, size_t size) {
+-  snprintf(name, size, "\\\\?\\pipe\\uv\\%llu-%lu", ptr, GetCurrentProcessId());
++  snprintf(name, size, "\\\\?\\pipe\\%suv\\%llu-%lu",
++           uv__is_appcontainer() ? "LOCAL\\" : "",
++           ptr, GetCurrentProcessId());
+ }
+ 
+ 
+diff --git a/deps/uv/src/win/fs.c b/deps/uv/src/win/fs.c
+--- a/deps/uv/src/win/fs.c
++++ b/deps/uv/src/win/fs.c
+@@ -40,6 +40,7 @@
+ #include "req-inl.h"
+ #include "handle-inl.h"
+ #include "fs-fd-hash-inl.h"
++#include "yunzai-canonical.h"
+ 
+ 
+ #define UV_FS_FREE_PATHS         0x0002
+@@ -180,6 +181,7 @@
+   uv__allocation_granularity = system_info.dwAllocationGranularity;
+ 
+   uv__fd_hash_init();
++  uv__canonical_init();
+ }
+ 
+ 
+@@ -3016,15 +3018,23 @@
+ }
+ 
+ 
+-static ssize_t fs__realpath_handle(HANDLE handle, char** realpath_ptr) {
++static ssize_t fs__realpath_handle(HANDLE* owned_handle, char** realpath_ptr) {
+   int r;
+   DWORD w_realpath_len;
+   WCHAR* w_realpath_ptr = NULL;
+   WCHAR* w_realpath_buf;
+ 
+-  w_realpath_len = GetFinalPathNameByHandleW(handle, NULL, 0, VOLUME_NAME_DOS);
++  w_realpath_len = GetFinalPathNameByHandleW(*owned_handle, NULL, 0, VOLUME_NAME_DOS);
+   if (w_realpath_len == 0) {
+-    return -1;
++    DWORD error = GetLastError();
++    if (error != ERROR_ACCESS_DENIED ||
++        (w_realpath_buf = uv__canonical_metadata(owned_handle, &w_realpath_len)) == NULL) {
++      SetLastError(error);
++      return -1;
++    }
++    w_realpath_len++; /* 保持原 API 所需长度，包含 NUL。 */
++    w_realpath_ptr = w_realpath_buf;
++    goto canonical_ready;
+   }
+ 
+   w_realpath_buf = uv__malloc((w_realpath_len + 1) * sizeof(WCHAR));
+@@ -3035,12 +3045,13 @@
+   w_realpath_ptr = w_realpath_buf;
+ 
+   if (GetFinalPathNameByHandleW(
+-          handle, w_realpath_ptr, w_realpath_len, VOLUME_NAME_DOS) == 0) {
++          *owned_handle, w_realpath_ptr, w_realpath_len, VOLUME_NAME_DOS) == 0) {
+     uv__free(w_realpath_buf);
+     SetLastError(ERROR_INVALID_HANDLE);
+     return -1;
+   }
+ 
++canonical_ready:
+   /* convert UNC path to long path */
+   if (wcsncmp(w_realpath_ptr,
+               UNC_PATH_PREFIX,
+@@ -3081,13 +3092,14 @@
+   }
+ 
+   assert(req->ptr == NULL);
+-  if (fs__realpath_handle(handle, (char**) &req->ptr) == -1) {
+-    CloseHandle(handle);
+-    SET_REQ_WIN32_ERROR(req, GetLastError());
+-    return;
+-  }
+-
+-  CloseHandle(handle);
++  if (fs__realpath_handle(&handle, (char**) &req->ptr) == -1) {
++    DWORD error = GetLastError();
++    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
++    SET_REQ_WIN32_ERROR(req, error);
++    return;
++  }
++
++  if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+   req->flags |= UV_FS_FREE_PTR;
+   SET_REQ_RESULT(req, 0);
+ }
+diff --git a/lib/fs.js b/lib/fs.js
+--- a/lib/fs.js
++++ b/lib/fs.js
+@@ -2806,6 +2806,15 @@
+   const seenLinks = new SafeMap();
+   const knownHard = new SafeSet();
+   const original = p;
++  function resolveDeniedAncestor(error, base) {
++    if (!isWindows || base === p ||
++        (error?.code !== 'EACCES' && error?.code !== 'EPERM')) {
++      throw error;
++    }
++    const result = binding.realpath(original, 'utf8');
++    cache?.set(original, result);
++    return encodeRealpathResult(result, options);
++  }
+   // Whether the symlink this walk resolved last pointed at a pipe or a
+   // socket, which is where the walk stops. It cannot be read back from the
+   // shared stat buffer, which holds the last stat made anywhere in the
+@@ -2827,8 +2836,13 @@
+ 
+   // On windows, check that the root exists. On unix there is no need.
+   if (isWindows) {
+-    const out = binding.lstat(
+-      getRealpathRootLstatPath(base), false, undefined, true /* throwIfNoEntry */);
++    let out;
++    try {
++      out = binding.lstat(
++        getRealpathRootLstatPath(base), false, undefined, true /* throwIfNoEntry */);
++    } catch (error) {
++      return resolveDeniedAncestor(error, base);
++    }
+     if (out === undefined) {
+       return;
+     }
+@@ -2869,7 +2883,12 @@
+       // Use stats array directly to avoid creating an fs.Stats instance just
+       // for our internal use.
+ 
+-      const stats = binding.lstat(base, true, undefined, true /* throwIfNoEntry */);
++      let stats;
++      try {
++        stats = binding.lstat(base, true, undefined, true /* throwIfNoEntry */);
++      } catch (error) {
++        return resolveDeniedAncestor(error, base);
++      }
+       if (stats === undefined) {
+         return;
+       }
+@@ -2913,8 +2932,13 @@
+ 
+     // On windows, check that the root exists. On unix there is no need.
+     if (isWindows && !knownHard.has(base)) {
+-      const out = binding.lstat(
+-        getRealpathRootLstatPath(base), false, undefined, true /* throwIfNoEntry */);
++      let out;
++      try {
++        out = binding.lstat(
++          getRealpathRootLstatPath(base), false, undefined, true /* throwIfNoEntry */);
++      } catch (error) {
++        return resolveDeniedAncestor(error, base);
++      }
+       if (out === undefined) {
+         return;
+       }
+@@ -2965,6 +2989,19 @@
+   }
+   validatePath(p);
+   p = pathModule.resolve(p);
++  const original = p;
++  function resolveDeniedAncestor(error) {
++    if (!isWindows || base === p ||
++        (error?.code !== 'EACCES' && error?.code !== 'EPERM')) {
++      return callback(error);
++    }
++    const req = new FSReqCallback();
++    req.oncomplete = (err, resolved) => {
++      if (err) return callback(err);
++      callback(null, encodeRealpathResult(resolved, options));
++    };
++    binding.realpath(original, 'utf8', req);
++  }
+ 
+   const seenLinks = new SafeMap();
+   const knownHard = new SafeSet();
+@@ -2989,7 +3026,7 @@
+   // On windows, check that the root exists. On unix there is no need.
+   if (isWindows && !knownHard.has(base)) {
+     fs.lstat(getRealpathRootLstatPath(base), (err) => {
+-      if (err) return callback(err);
++      if (err) return resolveDeniedAncestor(err);
+       knownHard.add(base);
+       LOOP();
+     });
+@@ -3031,7 +3068,7 @@
+   }
+ 
+   function gotStat(err, stats) {
+-    if (err) return callback(err);
++    if (err) return resolveDeniedAncestor(err);
+ 
+     // If not a symlink, skip to the next path part
+     if (!stats.isSymbolicLink()) {
+@@ -3078,7 +3115,7 @@
+     // On windows, check that the root exists. On unix there is no need.
+     if (isWindows && !knownHard.has(base)) {
+       fs.lstat(getRealpathRootLstatPath(base), (err) => {
+-        if (err) return callback(err);
++        if (err) return resolveDeniedAncestor(err);
+         knownHard.add(base);
+         LOOP();
+       });

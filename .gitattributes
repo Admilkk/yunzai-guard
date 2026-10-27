@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+# 保留已按摘要校验的原生包字节。
+/native/process-identity/** -text
+/native/bubblewrap/** -text
+/native/windows/bin/** -text

@@ -1,0 +1,6 @@
+FROM local/yunzai-guard-environments:pm2-7.0.3
+USER root
+RUN apk add --no-cache qemu-system-x86_64 qemu-img cloud-utils openssh-client curl ovmf
+WORKDIR /vm
+RUN curl -fL --retry 3 https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img -o base.img && curl -fL https://cloud-images.ubuntu.com/minimal/releases/noble/release/SHA256SUMS -o SHA256SUMS && grep 'ubuntu-24.04-minimal-cloudimg-amd64.img$' SHA256SUMS | sed 's/ubuntu-24.04-minimal-cloudimg-amd64.img/base.img/' | sha256sum -c -
+CMD ["sleep","infinity"]

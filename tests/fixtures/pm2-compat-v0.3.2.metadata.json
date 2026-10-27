@@ -1,0 +1,7 @@
+{
+  "purpose": "Unmodified historical compiled adapter; intentional test-only fixture duplication.",
+  "sourceCommit": "72c33120a832993a8dabc2c2cac1734efc1ec30e",
+  "sourcePath": "dist/pm2-compat.js",
+  "sourceVersion": "0.3.2-alpha.1",
+  "sha256": "37aae5da3e926a1133906f20e876b1ce97868407f1eccdb1a95f8c29e65f8107"
+}

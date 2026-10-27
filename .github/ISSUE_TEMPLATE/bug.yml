@@ -1,0 +1,23 @@
+name: 缺陷报告
+description: 报告 Yunzai Guard 的问题（安全问题请走私密漏洞报告）
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Guard 版本或提交号
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 系统、Node 与 PM2 版本，Yunzai 分支（TRSS / 玖璃）
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤、预期与实际结果
+      description: 附上脱敏后的日志与 `cli.js status` 输出，不要粘贴令牌或账号配置。
+    validations:
+      required: true

@@ -1,0 +1,291 @@
+import { types } from "node:util"
+import {
+  apply,
+  objectDefine as define,
+  objectDescriptor as descriptor,
+  objectPrototype as prototype,
+  objectExtensible as extensible,
+  ownKeys,
+  newMap,
+  mapSet,
+  mapGet,
+  mapEach,
+  mapSize,
+  newWeakMap,
+  weakMapGet,
+  weakMapSet,
+  newSet,
+  setAdd,
+  setDelete,
+  setEach,
+  arrayEach,
+  arrayMap,
+  arrayPush,
+  string,
+  stringStartsWith,
+  stringEndsWith,
+  sameDescriptor as same,
+  isReference,
+} from "../protect/intrinsics.js"
+
+export interface HookRequest {
+  operation: string
+  object: object
+  key?: PropertyKey
+  receiver?: object
+}
+
+export interface HookChange extends HookRequest {
+  outcome: "returned" | "rejected" | "threw" | "blocked"
+  changed?: boolean
+  before?: PropertyDescriptor
+  after?: PropertyDescriptor
+  properties?: readonly {
+    key: PropertyKey
+    before?: PropertyDescriptor
+    after?: PropertyDescriptor
+  }[]
+  prototypeChanged?: boolean
+}
+
+export interface HookListener {
+  before?(request: HookRequest): void
+  after?(change: HookChange): void
+}
+
+export interface HookWatch {
+  track(object: object, listener: HookListener, key?: PropertyKey): () => void
+  targets(): readonly { object: object; key: string; value: Function }[]
+  close(): void
+}
+
+interface Registration {
+  key?: PropertyKey
+  listener: HookListener
+}
+
+interface Snapshot {
+  prototype: object | null
+  extensible: boolean
+  properties: Map<PropertyKey, PropertyDescriptor | undefined>
+}
+
+const isProxy = types.isProxy
+const slots = [
+  [Object, "defineProperty"],
+  [Object, "defineProperties"],
+  [Object, "setPrototypeOf"],
+  [Object, "assign"],
+  [Object, "freeze"],
+  [Object, "seal"],
+  [Object, "preventExtensions"],
+  [Reflect, "defineProperty"],
+  [Reflect, "set"],
+  [Reflect, "deleteProperty"],
+  [Reflect, "setPrototypeOf"],
+  [Reflect, "preventExtensions"],
+  [Object.prototype, "__defineGetter__"],
+  [Object.prototype, "__defineSetter__"],
+] as const
+
+/** 取对象属性描述符快照，不触发 Proxy trap、getter 或属性键的类型转换。 */
+function snapshot(object: object, key?: PropertyKey): Snapshot | undefined {
+  if (isProxy(object)) return undefined
+  try {
+    const keys = key === undefined ? ownKeys(object) : [key]
+    if (keys.length > 256) return undefined
+    const properties = newMap<PropertyKey, PropertyDescriptor | undefined>()
+    arrayEach(keys, item => mapSet(properties, item, descriptor(object, item)))
+    return {
+      prototype: prototype(object) as object | null,
+      extensible: extensible(object),
+      properties,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/** 比较快照是否变化，无法比较时返回 undefined。 */
+function changed(before?: Snapshot, after?: Snapshot): boolean | undefined {
+  if (!before || !after) return undefined
+  if (
+    before.prototype !== after.prototype ||
+    before.extensible !== after.extensible ||
+    mapSize(before.properties) !== mapSize(after.properties)
+  )
+    return true
+  let different = false
+  mapEach(before.properties, (value, key) => {
+    if (!same(value, mapGet(after.properties, key))) different = true
+  })
+  return different
+}
+
+/** 只拦截显式反射调用，保留业务属性描述符和普通赋值语义。 */
+export function installHookWatch(): HookWatch {
+  const registrations = newWeakMap<object, Set<Registration>>()
+  const patches: {
+    object: object
+    key: string
+    value: Function
+    original: PropertyDescriptor
+  }[] = []
+  let closed = false
+  let notifying = false
+
+  /** 调用原反射入口，并在目标被登记时通知监听者。 */
+  function invoke(operation: string, original: Function, receiver: unknown, args: unknown[]) {
+    const legacy = stringStartsWith(operation, "Object.prototype.")
+    const object = legacy ? receiver : args[0]
+    if (closed || !isReference(object)) return apply(original, receiver, args)
+    const prototypeCall = stringEndsWith(operation, "setPrototypeOf")
+    const keyed =
+      legacy ||
+      stringEndsWith(operation, ".defineProperty") ||
+      operation === "Reflect.set" ||
+      operation === "Reflect.deleteProperty"
+    const rawKey = keyed && !prototypeCall ? args[legacy ? 0 : 1] : undefined
+    const key =
+      typeof rawKey === "symbol" || typeof rawKey === "string"
+        ? rawKey
+        : typeof rawKey === "number"
+          ? string(rawKey)
+          : undefined
+    const objects = [object]
+    // Reflect.set 可以把属性写到另一个 receiver。
+    if (operation === "Reflect.set" && isReference(args[3]) && args[3] !== object)
+      arrayPush(objects, args[3])
+    const calls: { item: Registration; request: HookRequest; before?: Snapshot }[] = []
+    arrayEach(objects, target => {
+      const entries = weakMapGet(registrations, target)
+      if (!entries) return
+      setEach(entries, item => {
+        if (item.key !== undefined && key !== undefined && item.key !== key) return
+        arrayPush(calls, {
+          item,
+          request: {
+            operation,
+            object: target,
+            ...(key === undefined ? {} : { key }),
+            ...(operation === "Reflect.set" && isReference(args[3]) ? { receiver: args[3] } : {}),
+          },
+          before: notifying ? undefined : snapshot(target, key ?? item.key),
+        })
+      })
+    })
+    if (!calls.length) return apply(original, receiver, args)
+
+    /** 通知监听者本次修改的结果。 */
+    function notify(outcome: HookChange["outcome"]): void {
+      if (notifying) return
+      notifying = true
+      try {
+        arrayEach(calls, call => {
+          const after = snapshot(call.request.object, key ?? call.item.key)
+          const observedKey = key ?? call.item.key
+          const before = call.before
+          let properties: HookChange["properties"]
+          if (before && after) {
+            const keys = newSet<PropertyKey>()
+            mapEach(before.properties, (_value, key) => setAdd(keys, key))
+            mapEach(after.properties, (_value, key) => setAdd(keys, key))
+            const changes: NonNullable<HookChange["properties"]>[number][] = []
+            setEach(keys, key => {
+              const previous = mapGet(before.properties, key)
+              const current = mapGet(after.properties, key)
+              if (!same(previous, current))
+                arrayPush(changes, { key, before: previous, after: current })
+            })
+            properties = changes
+          }
+          try {
+            call.item.listener.after?.({
+              ...call.request,
+              outcome,
+              changed: changed(call.before, after),
+              properties,
+              prototypeChanged: before && after ? before.prototype !== after.prototype : undefined,
+              ...(observedKey === undefined
+                ? {}
+                : {
+                    before: call.before ? mapGet(call.before.properties, observedKey) : undefined,
+                    after: after ? mapGet(after.properties, observedKey) : undefined,
+                  }),
+            })
+          } catch {
+            // 观察失败不能改变业务调用的返回值或异常。
+          }
+        })
+      } finally {
+        notifying = false
+      }
+    }
+
+    try {
+      arrayEach(calls, call => call.item.listener.before?.(call.request))
+    } catch (error) {
+      notify("blocked")
+      throw error
+    }
+    let result: unknown
+    try {
+      result = apply(original, receiver, args)
+    } catch (error) {
+      notify("threw")
+      throw error
+    }
+    notify(result === false ? "rejected" : "returned")
+    return result
+  }
+
+  try {
+    arrayEach(slots, slot => {
+      const object = slot[0]
+      const key = slot[1]
+      const property = descriptor(object, key)!
+      const original = property.value as Function
+      const operation = `${object === Object ? "Object" : object === Reflect ? "Reflect" : "Object.prototype"}.${key}`
+      const value = new Proxy(original, {
+        /** 转发到带观察的反射调用。 */
+        apply(target, receiver, args) {
+          return invoke(operation, target, receiver, args)
+        },
+      })
+      define(object, key, { ...property, value })
+      arrayPush(patches, { object, key, value, original: property })
+    })
+  } catch (error) {
+    arrayEach(patches, patch => define(patch.object, patch.key, patch.original))
+    throw error
+  }
+
+  return {
+    /** 登记对象监听，返回取消函数。 */
+    track(object, listener, key) {
+      if (closed) return () => {}
+      let entries = weakMapGet(registrations, object)
+      if (!entries) weakMapSet(registrations, object, (entries = newSet()))
+      const item = {
+        listener: {
+          before: descriptor(listener, "before")?.value as HookListener["before"],
+          after: descriptor(listener, "after")?.value as HookListener["after"],
+        },
+        key: typeof key === "number" ? string(key) : key,
+      }
+      setAdd(entries, item)
+      return () => setDelete(entries, item)
+    },
+    targets: () => arrayMap(patches, ({ object, key, value }) => ({ object, key, value })),
+    /** 停止观察并恢复反射入口。 */
+    close() {
+      if (closed) return
+      closed = true
+      arrayEach(patches, patch => {
+        const current = descriptor(patch.object, patch.key)
+        if (current?.value === patch.value && (current.configurable || current.writable))
+          define(patch.object, patch.key, patch.original)
+      })
+    },
+  }
+}
