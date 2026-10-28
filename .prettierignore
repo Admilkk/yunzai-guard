@@ -28,3 +28,7 @@
 # 补丁和锁文件由对应工具维护。
 **/*.patch
 /package-lock.json
+
+# release-please 自动生成
+CHANGELOG.md
+.release-please-manifest.json
