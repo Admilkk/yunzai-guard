@@ -88,8 +88,7 @@ export function UpdateStrip() {
     const target = update?.rollback?.version ?? ""
     modal.confirm({
       title: `还原到 ${target}？`,
-      content:
-        "用保留的上一版本替换当前文件，宿主随后退出并重新启动。冷启动会自动拉起；PM2、systemd 由管理器拉起；launcher 方式需要手动启动。",
+      content: "宿主将重新启动，launcher 方式需手动启动。",
       okText: "还原",
       cancelText: "取消",
       onOk: async () => {
@@ -117,9 +116,9 @@ export function UpdateStrip() {
         <div className="update-confirm">
           <p>
             {git || update?.installMode !== "git"
-              ? "下载并校验 SHA-256 后替换插件文件"
-              : "从 release 分支拉取新版本"}
-            ，业务进程会重启。上一版本会保留，可随时还原；新版本无法上线时会自动还原。
+              ? "将下载并校验后替换文件"
+              : "将拉取 release 分支"}
+            ，业务进程随后重启；启动失败时自动还原。
           </p>
           {!force && update?.latest?.notes && (
             <Typography.Paragraph type="secondary" className="update-notes">
@@ -163,9 +162,7 @@ export function UpdateStrip() {
             {update.installMode === "git" && update.autoUpdate
               ? ` · Git 安装（${update.gitBranch} 分支）`
               : ""}
-            {git
-              ? " · 源码安装需在插件目录 git pull 后 npm ci --include=dev 手动更新，或改用 release 分支"
-              : ""}
+            {git ? " · 源码安装需手动更新" : ""}
           </span>
         </div>
       </div>

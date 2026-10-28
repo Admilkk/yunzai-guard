@@ -128,13 +128,13 @@ function SourceTag({ source }: { source?: PluginSource }) {
   return source.dirty ? (
     <Tooltip title={`${detail}\n改动：${(source.dirtyFiles ?? []).join("、")}`}>
       <Tag color="orange" className="source-tag">
-        与仓库不一致 {source.dirty}
+        已改动 {source.dirty}
       </Tag>
     </Tooltip>
   ) : (
     <Tooltip title={detail}>
-      <Tag color="green" className="source-tag">
-        与仓库一致
+      <Tag className="source-tag clean">
+        {source.branch ?? "git"}@{source.commit?.slice(0, 7) ?? "?"}
       </Tag>
     </Tooltip>
   )

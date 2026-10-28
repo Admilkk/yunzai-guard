@@ -1,7 +1,17 @@
 import { useEffect, useState } from "react"
-import { Alert, App, Badge, Button, Empty, Space, Table, Tag, Tooltip } from "antd"
+import { Alert, App, Button, Empty, Space, Table, Tag, Tooltip } from "antd"
 import type { TableColumnsType } from "antd"
-import { ArrowRightOutlined, ReloadOutlined, WarningOutlined } from "@ant-design/icons"
+import {
+  ApiOutlined,
+  ArrowRightOutlined,
+  AuditOutlined,
+  GlobalOutlined,
+  InboxOutlined,
+  ReloadOutlined,
+  SafetyCertificateOutlined,
+  StopOutlined,
+  WarningOutlined,
+} from "@ant-design/icons"
 import { motion, useReducedMotion } from "motion/react"
 import { api } from "../api"
 import { useConsole } from "../state"
@@ -140,12 +150,10 @@ function UsageCard({ usage, enabled }: { usage?: Usage; enabled: boolean }) {
                 )}
               </div>
             ) : (
-              <span className="muted">当前没有外部连接</span>
+              <span className="muted">无外部连接</span>
             )}
           </div>
-          <p className="card-footnote">
-            从进程外读取业务进程树的系统计数，包含原生扩展的读写与连接；无法归因到具体插件，也不能拦截。
-          </p>
+          <p className="card-footnote">系统层计数，含原生扩展；不区分插件，不能拦截。</p>
         </>
       )}
     </PanelCard>
@@ -162,12 +170,8 @@ function NativeCard({ items, isolated }: { items: NativeExtension[]; isolated: b
           showIcon
           icon={<WarningOutlined />}
           className="native-alert"
-          message="原生扩展内部的文件与网络访问不经过 JS 检查"
-          description={
-            <span>
-              兼容托管模式下只能记录加载本身。需要限制时，在运行设置中启用系统隔离，或为这些插件添加原生扩展规则。
-            </span>
-          }
+          message="原生扩展不受 JS 层检查"
+          description={<span>当前只记录加载。要限制，请开启系统隔离或添加原生扩展规则。</span>}
           action={
             <Button size="small" onClick={() => (location.hash = "runtime")}>
               运行设置
@@ -190,7 +194,7 @@ function NativeCard({ items, isolated }: { items: NativeExtension[]; isolated: b
           ))}
         </div>
       ) : (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未记录原生扩展加载" />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无原生扩展" />
       )}
     </PanelCard>
   )
@@ -300,9 +304,14 @@ export default function Overview() {
         />
       )}
       <section className="status-card">
-        <div className="status-hero">
+        <div
+          className="status-hero"
+          data-state={online ? "success" : connected ? "warning" : "error"}
+        >
           <div className="status-hero-main">
-            <Badge status={online ? "success" : connected ? "warning" : "error"} />
+            <span className="status-pulse">
+              {online ? <SafetyCertificateOutlined /> : <WarningOutlined />}
+            </span>
             <div>
               <strong>
                 {!connected
@@ -325,7 +334,7 @@ export default function Overview() {
               onClick={() =>
                 modal.confirm({
                   title: "重启业务进程？",
-                  content: "宿主与控制台保持运行，业务会短暂重连。",
+                  content: "业务会短暂断开，控制台不受影响。",
                   okText: "重启",
                   cancelText: "取消",
                   onOk: () => command("restart"),
@@ -354,14 +363,14 @@ export default function Overview() {
         <StatTile
           label="已记录行为"
           value={Number(summary.total ?? 0).toLocaleString()}
-          note={
-            summary.unknownPlugin ? `其中 ${summary.unknownPlugin} 条无法归因` : "保留期内全部记录"
-          }
+          icon={<AuditOutlined />}
+          note={summary.unknownPlugin ? `${summary.unknownPlugin} 条来源不明` : undefined}
         />
         <StatTile
           label="已拦截"
           value={blocked.toLocaleString()}
-          note={summary.restart ? `含 ${summary.restart} 次重启` : "拒绝与重启"}
+          icon={<StopOutlined />}
+          note={summary.restart ? `含 ${summary.restart} 次重启` : undefined}
           tone={blocked ? "danger" : undefined}
         />
         <StatTile
@@ -372,18 +381,20 @@ export default function Overview() {
               <small> / {business.length}</small>
             </>
           }
-          note="保留期内有记录的业务插件"
+          icon={<ApiOutlined />}
         />
         <StatTile
           label="外部连接"
           value={usage ? usage.remote.length : "—"}
-          note={usage ? `系统观察 · 本机 ${usage.loopback}` : "等待系统层采样"}
+          icon={<GlobalOutlined />}
+          note={usage ? `本机 ${usage.loopback}` : "未采样"}
           tone={usage ? undefined : "muted"}
         />
         <StatTile
           label="审计队列"
           value={Number(buffer.pendingRecords ?? 0).toLocaleString()}
-          note={`${buffer.dropped ?? status.auditDropped ?? 0} 条因过载丢弃`}
+          icon={<InboxOutlined />}
+          note={`丢弃 ${buffer.dropped ?? status.auditDropped ?? 0}`}
           tone={Number(buffer.dropped ?? status.auditDropped ?? 0) ? "warning" : undefined}
         />
       </div>

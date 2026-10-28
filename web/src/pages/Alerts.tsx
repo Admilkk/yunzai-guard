@@ -221,10 +221,7 @@ export default function Alerts() {
             ))}
           </div>
         ) : (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="还没有告警。拦截、熔断、函数被改动、画像异常与插件来源变化都会出现在这里"
-          />
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无告警" />
         )}
       </PanelCard>
     </div>

@@ -20,9 +20,7 @@ import {
   RadarChartOutlined,
   CodeOutlined,
   ControlOutlined,
-  BulbOutlined,
   DashboardOutlined,
-  FileTextOutlined,
   LockOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
@@ -34,7 +32,8 @@ import {
 } from "@ant-design/icons"
 import { motion, useReducedMotion } from "motion/react"
 import { useConsole } from "./state"
-import { setThemeMode, useTheme } from "./theme"
+import { useTheme } from "./theme"
+import { ThemeToggle } from "./components/ThemeToggle"
 import { ChangeBar } from "./components/ChangeBar"
 import { ConfigurationState } from "./components/Status"
 import Overview from "./pages/Overview"
@@ -176,15 +175,30 @@ export default function ConsoleApp() {
   }
 
   const groups = [
-    { label: "管理", ids: ["overview", "plugins", "policies", "profiles"] },
-    { label: "记录与系统", ids: ["audit", "alerts", "logs", "settings"] },
+    { label: "防护", ids: ["overview", "plugins", "policies", "profiles"] },
+    { label: "记录", ids: ["audit", "alerts", "logs", "settings"] },
   ]
   const items = groups.map(group => ({
     type: "group" as const,
     label: group.label,
     children: pages
       .filter(item => group.ids.includes(item.id))
-      .map(item => ({ key: item.id, icon: item.icon, label: item.title })),
+      .map(item => ({
+        key: item.id,
+        icon: item.icon,
+        label: (
+          <>
+            {item.id === current.id && (
+              <motion.span
+                layoutId="nav-indicator"
+                className="nav-indicator"
+                transition={{ type: "spring", stiffness: 520, damping: 40 }}
+              />
+            )}
+            <span className="nav-text">{item.title}</span>
+          </>
+        ),
+      })),
   }))
   const brand = (
     <div className={`brand ${collapsed && !mobile ? "brand-collapsed" : ""}`}>
@@ -201,7 +215,7 @@ export default function ConsoleApp() {
     >
       <Menu
         mode="inline"
-        theme="light"
+        theme="dark"
         selectedKeys={[current.id]}
         items={items}
         onClick={({ key }) => navigate(key)}
@@ -209,6 +223,7 @@ export default function ConsoleApp() {
     </motion.div>
   )
   const theme = useTheme()
+  const group = groups.find(item => item.ids.includes(current.id))?.label
   const version = String(ctx.meta?.version ?? "")
 
   if (ctx.booting)
@@ -232,8 +247,8 @@ export default function ConsoleApp() {
           {brand}
           {menu}
           <div className="sider-bottom">
-            <FileTextOutlined />
-            <span>{collapsed ? "" : version}</span>
+            <Badge status={ctx.connected ? "success" : "error"} />
+            {!collapsed && <span>{version ? `v${version}` : "—"}</span>}
           </div>
         </Layout.Sider>
       )}
@@ -263,41 +278,32 @@ export default function ConsoleApp() {
               aria-label={mobile ? "打开导航" : collapsed ? "展开导航" : "收起导航"}
               onClick={() => (mobile ? setMenuOpen(!menuOpen) : setCollapsed(!collapsed))}
             />
-            <span className="workspace-name">行为监控台</span>
+            <span className="workspace-name">
+              {group}
+              <span>/</span>
+              <b>{current.title}</b>
+            </span>
             {/demo/i.test(version) && <Tag className="demo-tag">DEMO</Tag>}
           </Space>
           <Space size={12} className="header-actions">
-            <span className="header-status">
+            <span className={`header-status ${ctx.connected ? "" : "offline"}`}>
               <Badge status={ctx.connected ? "success" : "error"} />
-              {ctx.connected ? "宿主已连接" : "宿主连接中断"}
+              {ctx.connected ? "在线" : "已断开"}
             </span>
-            <Tooltip title="刷新当前数据">
+            <Tooltip title="刷新">
               <Button
                 type="text"
                 icon={<ReloadOutlined spin={ctx.loading} />}
-                aria-label="刷新当前数据"
+                aria-label="刷新"
                 disabled={ctx.saving}
                 onClick={() => run(() => ctx.reload(true))}
               />
             </Tooltip>
-            <Dropdown
-              menu={{
-                selectedKeys: [theme.mode],
-                items: [
-                  { key: "system", label: "跟随系统" },
-                  { key: "light", label: "浅色" },
-                  { key: "dark", label: "深色" },
-                ],
-                onClick: ({ key }) => setThemeMode(key as "system" | "light" | "dark"),
-              }}
-              trigger={["click"]}
-            >
-              <Button type="text" icon={<BulbOutlined />} aria-label="切换主题" />
-            </Dropdown>
+            <ThemeToggle dark={theme.dark} />
             <Dropdown
               menu={{
                 items: [
-                  { key: "security", icon: <LockOutlined />, label: "会话与面板" },
+                  { key: "security", icon: <LockOutlined />, label: "登录与会话" },
                   { key: "logout", icon: <LogoutOutlined />, label: "退出登录" },
                 ],
                 onClick: ({ key }) => (key === "logout" ? run(ctx.logout) : navigate("security")),

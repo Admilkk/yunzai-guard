@@ -155,7 +155,9 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         setMeta(value)
         await enter()
       } catch (failure) {
-        if (live) setError((failure as Error).message)
+        // 首次打开尚未登录属于正常情况，不提示“登录已失效”。
+        const unauthorized = failure instanceof ApiError && failure.status === 401
+        if (live && !unauthorized) setError((failure as Error).message)
       } finally {
         if (live) setBooting(false)
       }

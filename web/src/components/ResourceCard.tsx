@@ -114,14 +114,14 @@ export function ResourceCard({ enabled }: { enabled: boolean }) {
               />
             </div>
             <div className="resource-tile resource-main">
-              <span className="resource-label">插件进程内存</span>
+              <span className="resource-label">业务进程内存</span>
               <strong className="resource-value">
                 {latest ? formatBytes(latest.rssBytes) : enabled ? "采集中" : "未启用"}
               </strong>
               <span className="resource-note">
                 {latest
-                  ? `业务进程树 · ${latest.processes} 个进程 · 占整机 ${(workerRatio * 100).toFixed(1)}%`
-                  : "业务进程树常驻内存"}
+                  ? `${latest.processes} 个进程 · 占整机 ${(workerRatio * 100).toFixed(1)}%`
+                  : "—"}
               </span>
               <Progress
                 percent={Math.round(workerRatio * 100)}
@@ -147,18 +147,16 @@ export function ResourceCard({ enabled }: { enabled: boolean }) {
               <span className="resource-label">Guard 宿主内存</span>
               <strong className="resource-value">{formatBytes(data.host.rss)}</strong>
               <span className="resource-note">
-                堆 {formatBytes(data.host.heapUsed)} · 事件循环延迟 {latest?.hostLagMs ?? 0} ms
+                堆 {formatBytes(data.host.heapUsed)} · 延迟 {(latest?.hostLagMs ?? 0).toFixed(1)} ms
               </span>
               <Spark values={points.map(item => item.hostRssBytes)} tone="warning" />
             </div>
           </div>
-          <p className="card-footnote">
-            所有插件共用同一个 Node
-            进程，无法精确到每个插件各占多少内存，这里统计整个业务进程树（含原生扩展与子进程）。
-            {system.load.some(Boolean)
-              ? ` 系统负载 ${system.load.map(value => value.toFixed(2)).join(" / ")}。`
-              : ""}
-          </p>
+          {system.load.some(Boolean) && (
+            <p className="card-footnote">
+              系统负载 {system.load.map(value => value.toFixed(2)).join(" / ")}
+            </p>
+          )}
         </>
       )}
     </PanelCard>

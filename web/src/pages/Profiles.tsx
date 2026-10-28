@@ -212,7 +212,7 @@ export default function Profiles() {
           type="info"
           showIcon
           message="行为画像未启用"
-          description="在「系统设置 → 运行与监控 → 行为画像」中开启。开启后先学习各插件的常规行为，学习期结束后出现的新行为、频率突增和非常规时段活动会被提示。"
+          description="请在 系统设置 → 运行与监控 中开启"
         />
       )}
       <div className="stat-grid">

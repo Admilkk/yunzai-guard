@@ -1,5 +1,6 @@
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { Card, Tag, Tooltip } from "antd"
-import type { ReactNode } from "react"
+import { animate, useReducedMotion } from "motion/react"
 
 const actions: Record<string, { label: string; color?: string }> = {
   audit: { label: "记录", color: "blue" },
@@ -44,19 +45,55 @@ export function StatTile({
   value,
   note,
   tone,
+  icon,
 }: {
   label: string
   value: ReactNode
   note?: ReactNode
   tone?: "danger" | "warning" | "muted"
+  icon?: ReactNode
 }) {
   return (
     <div className={`stat-tile ${tone ? `stat-${tone}` : ""}`}>
-      <span className="stat-label">{label}</span>
-      <strong className="stat-value">{value}</strong>
+      <span className="stat-label">
+        {icon && <span className="stat-icon">{icon}</span>}
+        {label}
+      </span>
+      <strong className="stat-value">{countable(value)}</strong>
       {note !== undefined && <span className="stat-note">{note}</span>}
     </div>
   )
+}
+
+/** 数字从上次的值滚动到新值。 */
+export function CountUp({ value }: { value: number }) {
+  const reduced = useReducedMotion()
+  const [shown, setShown] = useState(reduced ? value : 0)
+  const from = useRef(reduced ? value : 0)
+  useEffect(() => {
+    if (reduced) {
+      setShown(value)
+      return
+    }
+    const control = animate(from.current, value, {
+      duration: 0.9,
+      ease: [0.22, 1, 0.36, 1],
+      onUpdate: latest => {
+        from.current = latest
+        setShown(Math.round(latest))
+      },
+    })
+    return () => control.stop()
+  }, [value, reduced])
+  return <>{shown.toLocaleString()}</>
+}
+
+/** 纯数字（含千分位）的统计值改为滚动显示，其余原样返回。 */
+function countable(value: ReactNode): ReactNode {
+  if (typeof value === "number") return <CountUp value={value} />
+  if (typeof value === "string" && /^\d{1,3}(,\d{3})*$|^\d+$/.test(value))
+    return <CountUp value={Number(value.replace(/,/g, ""))} />
+  return value
 }
 
 /** 格式化时间，full 为 true 时包含年份与秒。 */

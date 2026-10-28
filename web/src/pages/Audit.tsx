@@ -452,7 +452,7 @@ export default function Audit() {
           <Dropdown
             menu={{
               items: [
-                { key: "csv", label: "导出 CSV（表格软件可直接打开）" },
+                { key: "csv", label: "导出 CSV" },
                 { key: "json", label: "导出 JSON" },
               ],
               onClick: ({ key }) => void exportAudit(key as "csv" | "json"),
@@ -462,7 +462,7 @@ export default function Audit() {
               导出
             </Button>
           </Dropdown>
-          <Tooltip title="包含面板登录、进程启动等宿主系统记录">
+          <Tooltip title="面板登录、进程启动等">
             <label className="inline-switch">
               <Switch
                 size="small"

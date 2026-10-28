@@ -144,8 +144,7 @@ export function BackupCard() {
       }
     >
       <Typography.Paragraph type="secondary" className="card-note">
-        每次保存前会自动备份当前配置，保留最近 30 份。导出的配置默认不含 Webhook
-        密钥，可分享规则文件给其他实例导入。
+        保存时自动备份，保留 30 份。导出不含 Webhook 密钥。
       </Typography.Paragraph>
       <Table
         rowKey="id"
@@ -153,12 +152,7 @@ export function BackupCard() {
         dataSource={backups}
         pagination={{ pageSize: 8, hideOnSinglePage: true }}
         locale={{
-          emptyText: (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="还没有备份，保存过一次配置后出现"
-            />
-          ),
+          emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无备份" />,
         }}
         columns={[
           { title: "时间", dataIndex: "time", render: value => formatTime(value, true) },
@@ -214,10 +208,10 @@ export function BackupCard() {
         okText="导入"
         cancelText="取消"
       >
-        <p className="muted">来自 {imported?.name}。导入前会自动备份当前配置，规则会经过校验。</p>
+        <p className="muted">来自 {imported?.name}，导入前会先备份当前配置。</p>
         <Radio.Group value={mode} onChange={event => setMode(event.target.value)}>
           <Space direction="vertical">
-            <Radio value="append">追加到现有规则之后（重名自动改名）</Radio>
+            <Radio value="append">追加（重名自动改名）</Radio>
             <Radio value="replace">替换全部现有规则</Radio>
           </Space>
         </Radio.Group>

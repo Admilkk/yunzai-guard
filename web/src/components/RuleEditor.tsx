@@ -339,7 +339,7 @@ export function RuleEditor({
           name="kind"
           extra={
             !kinds.length || kinds.includes("*")
-              ? "全部行为不含文件访问、原生扩展和端口监听，需要时请单独选择。"
+              ? "“全部”不含文件、原生扩展和端口监听。"
               : undefined
           }
           rules={[
@@ -410,9 +410,9 @@ export function RuleEditor({
             <FieldLabel
               help={
                 siteTarget
-                  ? { description: "原始路径已脱敏，当前按整个站点匹配。" }
+                  ? { description: "路径已脱敏，按站点匹配。" }
                   : targetRequired
-                    ? { description: "原始目标或命令参数已脱敏，请填写匹配模式。" }
+                    ? { description: "目标已脱敏，请手动填写匹配模式。" }
                     : undefined
               }
               helpKey="rule.target"
@@ -459,7 +459,7 @@ export function RuleEditor({
             <FieldLabel
               help={
                 afterChange
-                  ? { description: "函数修改可能在发生后才被发现，拒绝无法撤销已有修改。" }
+                  ? { description: "函数改动通常在发生后才被发现，拒绝无法撤销已有改动。" }
                   : undefined
               }
               helpKey="rule.action"

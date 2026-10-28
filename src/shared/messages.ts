@@ -163,20 +163,18 @@ const messages = {
     downloadFailed: (detail: unknown) => `下载失败：${detail}`,
     extractFailed: (detail: unknown) => `解压失败：${detail}`,
     packageInvalid: (detail: unknown) => `发布包内容不符：${detail}`,
-    gitDirty: "插件目录有未提交的改动，普通更新不会覆盖；确认放弃改动后请使用强制更新",
+    gitDirty: "插件目录存在未提交的改动，如需覆盖请使用强制更新",
     gitVersion: (expected: unknown, actual: unknown) =>
-      `release 分支的版本 ${actual} 与最新发布 ${expected} 不一致，稍后再试`,
-    gitSource:
-      "当前是 main 源码安装，更新需要重新编译。请改用 release 分支，或在插件目录执行 git pull 与 npm ci --include=dev",
-    gitInstall:
-      "检测到 Git 安装，请在插件目录执行 git pull 更新（main 分支还需 npm ci --include=dev 重新编译，release 分支不需要）",
+      `release 分支版本 ${actual} 与最新发布 ${expected} 不一致，请稍后重试`,
+    gitSource: "main 分支源码安装不支持自动更新，请切换至 release 分支或手动更新",
+    gitInstall: "Git 安装请在插件目录执行 git pull 更新",
     majorBlocked: (from: unknown, to: unknown) =>
-      `跨主版本更新（${from} → ${to}）可能含不兼容变更，请先阅读更新日志，确认后使用「强制更新」`,
-    busy: "更新正在进行，请稍候",
+      `跨主版本更新（${from} → ${to}）可能存在不兼容变更，请阅读更新日志后使用强制更新`,
+    busy: "更新正在进行中",
     noPrevious: "没有可还原的上一版本",
     downgrade: (current: unknown, latest: unknown) =>
-      `最新发布 ${latest} 低于当前版本 ${current}，不提供降级`,
-    disabled: "版本检查已在配置中关闭",
+      `最新发布 ${latest} 低于当前版本 ${current}，不支持降级`,
+    disabled: "版本检查已关闭",
     swapFailed: (detail: unknown) => `替换文件失败，已还原：${detail}`,
     unhealthy: "新版本未能正常上线，已还原",
     restarting: (version: unknown) => `正在切换到 ${version}`,
@@ -282,9 +280,9 @@ const messages = {
   },
   entry: {
     updateUnavailable: "当前运行环境不支持更新",
-    rollbackRequested: "已提交还原请求，宿主会用上一版本重新启动，结果会通知主人",
-    updateRequested: "已提交更新请求，进度与结果会通知主人",
-    updateForced: "已提交强制更新（重装最新版并允许跨主版本），进度与结果会通知主人",
+    rollbackRequested: "已开始还原至上一版本，宿主将重新启动",
+    updateRequested: "已开始更新",
+    updateForced: "已开始强制更新，将重新安装最新版本",
     pm2NoIpc: `${tag} 未检测到 PM2 的 IPC 通道，已退出，避免在无保护状态下运行`,
     externalUnsupported: `${tag} Windows 上不支持 node . start / node . daemon 方式接管，请改用 node . 启动`,
     replacing: `${tag} 外部托管启动，原地切换为 Guard 宿主（进程号不变）`,

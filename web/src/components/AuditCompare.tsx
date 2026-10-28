@@ -187,14 +187,12 @@ export function AuditCompare({
                 ]}
               />
               {(data.a.truncated || data.b.truncated) && (
-                <Alert type="warning" showIcon title="事件很多，每个时间段只对比了较新的 5000 条" />
+                <Alert type="warning" showIcon title="事件过多，每段只对比最新 5000 条" />
               )}
               <DeltaTable title="新出现的行为" items={data.added} empty="没有新增行为" />
               <DeltaTable title="不再出现的行为" items={data.removed} empty="没有消失的行为" />
               <DeltaTable title="次数明显变化" items={data.changed} empty="没有明显变化" />
-              <p className="card-footnote">
-                目标经过脱敏，只能对比脱敏后的文本；保留期之外的事件不在统计内。
-              </p>
+              <p className="card-footnote">按脱敏后的目标对比，不含保留期外的事件。</p>
             </>
           )}
         </Spin>

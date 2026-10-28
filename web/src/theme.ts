@@ -55,3 +55,39 @@ export function useTheme(): { mode: ThemeMode; dark: boolean } {
   const [preference, resolved] = current.split(":")
   return { mode: preference as ThemeMode, dark: resolved === "dark" }
 }
+
+/**
+ * 在明暗之间切换：支持 View Transitions 的浏览器里，新主题从 (x, y) 处圆形扩散铺满屏幕。
+ * render 用来同步提交 React 更新，确保过渡截图拿到的是新主题。
+ */
+export function toggleTheme(x: number, y: number, render: (update: () => void) => void): void {
+  const next = resolve() === "dark" ? "light" : "dark"
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches
+  const start = (
+    document as Document & {
+      startViewTransition?: (update: () => void) => { ready: Promise<void> }
+    }
+  ).startViewTransition
+  if (!start || reduce) {
+    setThemeMode(next)
+    return
+  }
+  const radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y))
+  const root = document.documentElement
+  root.classList.add("theme-transition")
+  const transition = start.call(document, () => render(() => setThemeMode(next)))
+  void transition.ready
+    .then(() =>
+      root
+        .animate(
+          { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
+          {
+            duration: 560,
+            easing: "cubic-bezier(0.65, 0, 0.35, 1)",
+            pseudoElement: "::view-transition-new(root)",
+          },
+        )
+        .finished.catch(() => undefined),
+    )
+    .finally(() => root.classList.remove("theme-transition"))
+}

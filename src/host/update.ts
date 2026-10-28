@@ -238,7 +238,7 @@ export class UpdateService {
         this.#busy = false
         return {
           ok: false,
-          message: `已是最新版本 ${current}（强制更新可重新安装 ${release.version}）`,
+          message: `已是最新版本 ${current}，如需重新安装请使用强制更新`,
         }
       }
       if (!force && crossesMajor(release.version, current))
@@ -369,7 +369,7 @@ export class UpdateService {
     const verb = result.rollback ? "还原" : "更新"
     const text = result.ok
       ? `【Yunzai Guard】已${result.rollback ? "还原到" : "更新到"} ${result.to}（原 ${result.from}）${
-          result.relaunch ? "，宿主已重新启动" : "；宿主进程需重启后完全生效，重启前面板仍为旧版本"
+          result.relaunch ? "，宿主已重新启动" : "，宿主重启后完全生效"
         }`
       : `【Yunzai Guard】${verb}失败：${result.message ?? "未知原因"}`
     this.#stored.lastResult = {
@@ -433,7 +433,7 @@ export class UpdateService {
         [
           `【Yunzai Guard】发现新版本 ${release.version}（当前 ${current}）`,
           brief(release.notes),
-          "发送 #guard更新 立即更新，或在控制台「总览」页操作。",
+          "发送 #guard更新 进行更新",
           release.url,
         ]
           .filter(Boolean)
