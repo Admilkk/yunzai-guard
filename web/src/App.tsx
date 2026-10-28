@@ -225,6 +225,9 @@ export default function ConsoleApp() {
   const theme = useTheme()
   const group = groups.find(item => item.ids.includes(current.id))?.label
   const version = String(ctx.meta?.version ?? "")
+  // 控制台热更新后，已打开的页面仍是旧代码：提示刷新。
+  const servedVersion = String(ctx.overview?.version ?? "")
+  const outdated = Boolean(version && servedVersion && servedVersion !== version)
 
   if (ctx.booting)
     return (
@@ -317,6 +320,14 @@ export default function ConsoleApp() {
           </Space>
         </Layout.Header>
         <Layout.Content className="console-content">
+          {outdated && (
+            <div className="reload-banner" role="status">
+              <span>控制台已更新至 {servedVersion}，刷新页面以加载新版本</span>
+              <Button size="small" type="primary" onClick={() => location.reload()}>
+                刷新
+              </Button>
+            </div>
+          )}
           <div className="page-heading">
             <h1>{current.title}</h1>
             <ConfigurationState />

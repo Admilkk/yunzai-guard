@@ -36,6 +36,8 @@ const messages = {
     targetPath: (i: unknown) => `settings.protect.targets[${i}] 须为点分属性路径`,
     targetsDuplicate: "settings.protect.targets 有重复路径",
     monitorFiles: "settings.monitor.files 须为 off、write 或 all",
+    workerRestart: "settings.update.workerRestart 须为 idle、window 或 now",
+    updateWindow: "settings.update.window 须为 HH:MM-HH:MM 格式的本地时段",
     rules: "settings.rules 须为最多 1000 条的数组",
     rulesDuplicate: "settings.rules 有重复 id",
     recoveryDelay: "settings.recovery.maxDelayMs 不能小于 baseDelayMs",
@@ -179,6 +181,14 @@ const messages = {
     swapFailed: (detail: unknown) => `替换文件失败，已还原：${detail}`,
     unhealthy: "新版本未能正常上线，已还原",
     restarting: (version: unknown) => `正在切换到 ${version}`,
+    noPending: "没有待生效的更新",
+    coreFailed: "新版控制台未能启动，已还原",
+    revertFailed: "新版本未能正常上线，自动还原也未成功，请手动处理",
+    revertedAfterFailure: (version: unknown) => `新版本未能正常上线，已自动还原至 ${version}`,
+    revertedTripped: (version: unknown) =>
+      `新版本未能正常上线，已将文件还原至 ${version}；业务进程清理未确认，已暂停自动恢复，确认没有残留进程后请重启宿主`,
+    pendingStarted: "业务进程正在重启以完成更新",
+    pendingCancelled: (version: unknown) => `已取消待生效的更新 ${version}`,
   },
   host: {
     deadline: "操作超时",

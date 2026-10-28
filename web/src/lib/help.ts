@@ -238,6 +238,27 @@ export const settingHelp: Record<string, SettingHelp> = {
     default: "开启。",
     change: "保存后立即生效。",
   },
+  "update.workerRestart": {
+    description:
+      "控制台与宿主的更新会热替换，不影响业务。只有改动了 Yunzai 进程内代码的更新才需要重启业务进程一次，这里决定何时重启：业务空闲时、维护时段内，或马上。等待期间再次发送 #guard更新 或点击“马上生效”即可提前执行。",
+    default: "业务空闲时。",
+    change: "保存后立即生效。",
+  },
+  "update.idleSeconds": {
+    description: "连续这么多秒没有插件处理消息，视为业务空闲。",
+    default: "60 秒。",
+    change: "保存后立即生效。",
+  },
+  "update.maxWaitHours": {
+    description: "按“业务空闲时”等待的上限，超过后不再等待空闲，直接重启业务进程使更新生效。",
+    default: "6 小时。",
+    change: "保存后立即生效。",
+  },
+  "update.window": {
+    description: "“维护时段内”使用的本地时间段，格式 HH:MM-HH:MM，可跨午夜，例如 23:00-02:00。",
+    default: "03:00-06:00。",
+    change: "保存后立即生效。",
+  },
   "update.intervalMs": {
     description:
       "两次检查之间的间隔，最短 1 分钟。使用 ETag 条件请求，未变化时不占用 GitHub 限额。",

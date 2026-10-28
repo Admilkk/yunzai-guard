@@ -62,6 +62,14 @@ export interface GuardSettings {
     check: boolean
     notify: boolean
     intervalMs: number
+    /** 业务侧更新的生效时机：空闲时、维护时段内或立即。 */
+    workerRestart: "idle" | "window" | "now"
+    /** 连续多少秒没有插件处理消息视为空闲。 */
+    idleSeconds: number
+    /** 空闲模式下最长等待小时数，超过后直接生效。 */
+    maxWaitHours: number
+    /** 维护时段，本地时间，如 03:00-06:00，可跨午夜。 */
+    window: string
   }
   /** 告警：把拦截、熔断、完整性与异常行为推给主人或 Webhook。 */
   alerts: {

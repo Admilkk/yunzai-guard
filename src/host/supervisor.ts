@@ -33,7 +33,8 @@ import {
   type WindowsCanonicalStats,
 } from "../sandbox/windows.js"
 import { acquireProjectLock, legacyProjectPort, type ProjectLock } from "./lock.js"
-import { panelLoginLink, startPanel, stopPanel } from "../web/index.js"
+import { CoreHost } from "./core.js"
+import type { CoreHandlers } from "../web/core-protocol.js"
 import { SettingsController } from "./settings.js"
 import type { GuardSettings } from "../shared/types.js"
 import {
@@ -57,12 +58,13 @@ import {
   type ProcessIdentity,
 } from "./platform.js"
 import { ResourceHistory, UsageWatch } from "./usage.js"
-import { UpdateService } from "./update.js"
+import { pendingDue, UpdateService } from "./update.js"
 import { AlertService } from "./alerts.js"
 import { SourceWatch } from "./sources.js"
 import { atLeast, BehaviorProfile, type Anomaly, type ProfileEvent } from "./profile.js"
 import { parseSettings } from "../config/index.js"
-import type { StagedRelease } from "../update/install.js"
+import { snapshotPrevious, workPaths, type StagedRelease } from "../update/install.js"
+import { syncFiles } from "../update/plan.js"
 import { M } from "../shared/messages.js"
 
 type Phase = "handoff" | "starting" | "online" | "restarting" | "backoff" | "tripped" | "stopping"
@@ -72,6 +74,7 @@ type Action = {
   staged?: StagedRelease
   from?: string
   rollback?: boolean
+  immediate?: boolean
 }
 interface Session {
   settings: GuardSettings
@@ -99,6 +102,8 @@ interface Session {
   windowsTransportStats?: () => WindowsSandboxTransportCounters
   windowsCanonicalStats?: () => WindowsCanonicalStats
   usage?: UsageWatch
+  /** 上一次监控报告中各插件处理调用的总数，用于判断业务是否空闲。 */
+  calls?: number
 }
 
 let settings = initialSettings
@@ -276,14 +281,26 @@ function saveRecovery(): void {
   saveRecoveryState(recoveryPath, recovery)
 }
 
+const pluginDir = fileURLToPath(new URL("../../", import.meta.url))
+const hotDir = workPaths(pluginDir).hot
+const maxVerifyAttempts = 2
+/** 上一宿主留下、等待本宿主确认的更新。 */
+let verifying: ReturnType<UpdateService["takeVerify"]>
+/** 最近一次观察到插件处理消息的时间，业务侧更新据此等待空闲。 */
+let lastActivityAt = Date.now()
 const updates = new UpdateService({
-  pluginDir: fileURLToPath(new URL("../../", import.meta.url)),
+  pluginDir,
   stateDir,
   settings: () => configuration.active.update,
   send: noticeToMasters,
   /** 暂存完成后排入生命周期队列。 */
-  install(staged, from, rollback) {
-    if (!enqueue({ type: "update", staged, from, rollback })) throw new Error(M.update.busy)
+  install(staged, from, rollback, immediate) {
+    if (!enqueue({ type: "update", staged, from, rollback, immediate }))
+      throw new Error(M.update.busy)
+  },
+  /** 取消等待中的更新：控制台回到当前文件。 */
+  async cancelPending() {
+    await core.swap(pluginDir)
   },
   record,
 })
@@ -319,6 +336,54 @@ const sourceWatch = new SourceWatch({
     })
   },
 })
+/** 控制台线程可调用的宿主能力；参数来自线程，按需收窄类型。 */
+const coreHandlers: CoreHandlers = {
+  getSettings: () => configuration.active,
+  configuration: () => configuration.state,
+  applySettings: next => {
+    const state = configuration.request(next as GuardSettings)
+    enqueue({ type: "configure" })
+    return state
+  },
+  status: () => status(),
+  "update.state": () => updates.state(),
+  "update.check": () => updates.check(true),
+  "update.apply": force => updates.apply(force === true, force === true),
+  "update.rollback": () => updates.rollback(),
+  "update.applyPending": () => updates.applyPending(),
+  "alerts.history": limit => alerts.history(Number(limit)),
+  "alerts.testWebhook": () => alerts.testWebhook(),
+  "alerts.state": () => alerts.state(),
+  "alerts.acknowledge": ids => alerts.acknowledge(ids as string[] | undefined),
+  "alerts.mute": (target, minutes) =>
+    alerts.mute(target as Parameters<AlertService["mute"]>[0], Number(minutes)),
+  "alerts.unmute": key => alerts.unmute(String(key)),
+  "alerts.raise": (...args) => alerts.raise(...(args as Parameters<AlertService["raise"]>)),
+  "profiles.summary": (...args) =>
+    profiles.summary(...(args as Parameters<BehaviorProfile["summary"]>)),
+  "profiles.detail": (...args) =>
+    profiles.detail(...(args as Parameters<BehaviorProfile["detail"]>)),
+  "profiles.trust": (...args) => profiles.trust(...(args as Parameters<BehaviorProfile["trust"]>)),
+  "profiles.forget": (...args) =>
+    profiles.forget(...(args as Parameters<BehaviorProfile["forget"]>)),
+  "profiles.endLearning": (...args) =>
+    profiles.endLearning(...(args as Parameters<BehaviorProfile["endLearning"]>)),
+  "profiles.reset": (...args) => profiles.reset(...(args as Parameters<BehaviorProfile["reset"]>)),
+  "sources.list": () => sourceWatch.list(),
+  "sources.scan": () => sourceWatch.scan(),
+  "resources.points": () => resources.points(),
+  restart: () => void enqueue({ type: "restart" }),
+  resume: () => void enqueue({ type: "resume" }),
+  audit: (type, details) => record(String(type), details as Record<string, unknown>),
+}
+const core = new CoreHost({
+  stateDir,
+  root: process.cwd(),
+  settings: () => configuration.active,
+  handlers: coreHandlers,
+  record,
+})
+
 const anomalyLabels = {
   "new-target": "出现新行为",
   "rate-spike": "频率突增",
@@ -573,12 +638,14 @@ function onMessage(session: Session, raw: unknown): void {
       return
     }
     switch (message.type) {
-      case "monitor-report":
-        session.monitor = {
-          report: parseMonitorReport(message.report, settings.protect.targets.length),
-          receivedAt: Date.now(),
-        }
+      case "monitor-report": {
+        const report = parseMonitorReport(message.report, settings.protect.targets.length)
+        session.monitor = { report, receivedAt: Date.now() }
+        const calls = report.plugins.entries.reduce((sum, entry) => sum + entry.calls, 0)
+        if (session.calls !== undefined && calls !== session.calls) lastActivityAt = Date.now()
+        session.calls = calls
         return
+      }
       case "preload-ready":
         if (!session.preloaded) record("preload-ready", { generation: session.generation })
         session.preloaded = true
@@ -606,7 +673,7 @@ function onMessage(session: Session, raw: unknown): void {
         void requestRollback()
         return
       case "login-link-request":
-        sendLoginLink()
+        void sendLoginLink()
         return
       case "update-request":
       case "update-force-request":
@@ -1066,17 +1133,17 @@ function pruneLogs(): void {
   }
 }
 
-/** 处理主人命令触发的更新，拒绝原因回复给主人。 */
+/** 处理主人命令触发的更新，拒绝原因回复给主人；强制更新不等待空闲。 */
 async function requestUpdate(force: boolean): Promise<void> {
-  const result = await updates.apply(force)
+  const result = await updates.apply(force, force)
   if (!result.ok) updates.notify(`【Yunzai Guard】${result.message}`)
 }
 
 /** 处理主人的 #guard登录：链接只经宿主私聊主人，不回传给工作进程里的调用方。 */
-function sendLoginLink(): void {
+async function sendLoginLink(): Promise<void> {
   let text: string
   try {
-    const { urls, ttlSeconds } = panelLoginLink()
+    const { urls, ttlSeconds } = await core.loginLink()
     text = [
       "【Yunzai Guard】控制台登录链接",
       ...urls,
@@ -1095,29 +1162,118 @@ async function requestRollback(): Promise<void> {
   if (!result.ok) updates.notify(`【Yunzai Guard】${result.message}`)
 }
 
-/** 停止业务进程、替换文件并重新上线；新版本无法上线时还原。 */
-async function applyUpdate(staged: StagedRelease, from: string, rollback = false): Promise<void> {
+/** 宿主能否用新文件重新启动自己：冷启动可自行拉起，外部管理器会在宿主退出后重新执行。 */
+function canRelaunch(): boolean {
+  return Boolean(bootstrapPid) || process.env.YUNZAI_GUARD_COLD === "1" || external
+}
+
+/**
+ * 按组件比较结果执行更新：
+ * - static / core：只替换变化的文件并换掉控制台线程，业务进程不受影响
+ * - worker：立即或择时重启业务进程一次；择时期间控制台先从暂存目录运行新版本
+ * - host：停止业务、替换文件后宿主重新启动，新宿主确认业务上线后才算成功，否则自动还原
+ */
+async function applyUpdate(
+  staged: StagedRelease,
+  from: string,
+  rollback = false,
+  immediate = false,
+): Promise<void> {
+  const plan = staged.plan ?? { level: "host" as const, changed: [] }
+  record("update-begin", { from, to: staged.version, level: plan.level })
+  if (plan.level === "static" || plan.level === "core")
+    return hotUpdate(staged, from, rollback, plan.level === "core")
+  if (plan.level === "worker" && !immediate && configuration.active.update.workerRestart !== "now")
+    return deferUpdate(staged, from, rollback)
+  if (plan.level === "host" && canRelaunch()) return relaunchUpdate(staged, from, rollback)
+  return restartUpdate(staged, from, rollback, plan.level === "host")
+}
+
+/** 热更新：只替换变化的文件，必要时换掉控制台线程；任何一步失败都还原文件与线程。 */
+async function hotUpdate(
+  staged: StagedRelease,
+  from: string,
+  rollback: boolean,
+  reloadCore: boolean,
+): Promise<void> {
+  const to = staged.version
+  let undo: () => void
+  let commit = (): void => {}
+  try {
+    if (staged.commit) {
+      const handle = updates.swap(staged)
+      undo = () => handle.rollback()
+      commit = () => handle.commit()
+    } else {
+      snapshotPrevious(pluginDir)
+      const sync = syncFiles(staged.directory, pluginDir, staged.plan?.changed ?? [], hotDir)
+      undo = () => sync.rollback()
+    }
+  } catch (error) {
+    updates.finish({
+      ok: false,
+      from,
+      to,
+      message: (error as Error).message,
+      mode: "hot",
+      rollback,
+    })
+    return
+  }
+  if (reloadCore && !(await core.swap(pluginDir))) {
+    await core.stop()
+    undo()
+    await core.start(pluginDir)
+    updates.finish({ ok: false, from, to, message: M.update.coreFailed, mode: "hot", rollback })
+    return
+  }
+  commit()
+  updates.finish({ ok: true, from, to, mode: "hot", rollback })
+}
+
+/** 业务侧更新择时生效：控制台先换成暂存目录中的新版本，业务进程等空闲时再重启。 */
+async function deferUpdate(staged: StagedRelease, from: string, rollback: boolean): Promise<void> {
+  if (!(await core.swap(staged.directory)))
+    record("update-core-preview-failed", { to: staged.version })
+  updates.defer(staged, from, rollback)
+}
+
+/**
+ * 重启业务进程完成更新：停止业务、替换文件、拉起新业务并确认上线，失败则还原。
+ * hostPending 为真时宿主外壳也有改动但无法自行重启，新代码在宿主下次启动时完全生效。
+ */
+async function restartUpdate(
+  staged: StagedRelease,
+  from: string,
+  rollback: boolean,
+  hostPending: boolean,
+): Promise<void> {
   const to = staged.version
   phase = "restarting"
-  record("update-begin", { from, to })
   await sleep(1500)
   await stopWorker()
+  // 控制台可能正从暂存目录运行，替换会移走这些文件，先停下再换。
+  await core.stop()
   let handle: ReturnType<UpdateService["swap"]>
   try {
     handle = updates.swap(staged)
   } catch (error) {
+    await core.start(pluginDir)
     if (!stopping) await startWorker()
-    updates.finish({ ok: false, from, to, message: (error as Error).message, relaunch: false })
+    updates.finish({
+      ok: false,
+      from,
+      to,
+      message: (error as Error).message,
+      mode: "worker",
+      rollback,
+    })
     return
   }
-  if (stopping) return handle.commit()
-  if (rollback) {
-    // 旧版本的业务进程不能由新宿主拉起，宿主带着旧文件重新启动。
+  // 新控制台与当前宿主的调用协议不兼容时线程拒绝启动，控制台在宿主重启后恢复。
+  await core.start(pluginDir)
+  if (stopping) {
     handle.commit()
-    relaunch = Boolean(bootstrapPid) || process.env.YUNZAI_GUARD_COLD === "1"
-    if (external) exitCode = 0
-    updates.finish({ ok: true, from, to, relaunch: relaunch || external, rollback: true })
-    enqueue({ type: "stop" })
     return
   }
   try {
@@ -1132,21 +1288,154 @@ async function applyUpdate(staged: StagedRelease, from: string, rollback = false
       record("update-stop-failed", { message: (error as Error).message })
       throw error
     }
+    await core.stop()
     handle.rollback()
+    await core.start(pluginDir)
     try {
       if (!stopping) await startWorker()
     } catch (error) {
       record("update-restore-failed", { message: (error as Error).message })
     }
-    updates.finish({ ok: false, from, to, message: M.update.unhealthy, relaunch: false })
+    updates.finish({ ok: false, from, to, message: M.update.unhealthy, mode: "worker", rollback })
     return
   }
   handle.commit()
-  relaunch = !stopping && (Boolean(bootstrapPid) || process.env.YUNZAI_GUARD_COLD === "1")
-  // 外部管理器会在宿主以 0 退出后重新执行 node . start，届时由新文件接管。
-  if (external && !stopping) exitCode = 0
-  updates.finish({ ok: true, from, to, relaunch: relaunch || (external && !stopping) })
-  if (relaunch || (external && !stopping)) enqueue({ type: "stop" })
+  updates.finish({ ok: true, from, to, mode: hostPending ? "host-pending" : "worker", rollback })
+}
+
+/**
+ * 宿主级更新：停止业务、替换文件后直接重新启动宿主，业务只重启一次。
+ * 结果由新宿主在业务上线后确认；新宿主无法让业务上线时会还原到原版本。
+ */
+async function relaunchUpdate(
+  staged: StagedRelease,
+  from: string,
+  rollback: boolean,
+  revert = false,
+): Promise<void> {
+  const to = staged.version
+  phase = "restarting"
+  await sleep(1500)
+  await stopWorker()
+  await core.stop()
+  let handle: ReturnType<UpdateService["swap"]>
+  try {
+    handle = updates.swap(staged)
+  } catch (error) {
+    await core.start(pluginDir)
+    if (!stopping) await startWorker()
+    updates.finish({
+      ok: false,
+      from,
+      to,
+      message: (error as Error).message,
+      mode: "relaunch",
+      rollback,
+    })
+    return
+  }
+  handle.commit()
+  updates.markVerify({ from, to, rollback, revert })
+  record("update-relaunch", { from, to })
+  relaunch = !external
+  if (external) exitCode = 0
+  enqueue({ type: "stop" })
+}
+
+/**
+ * 新宿主确认上一宿主留下的更新：业务上线即成功；未能上线或反复启动失败时还原并再次重启。
+ * 还原本身也失败时停止自动处理，保留现状并通知主人。
+ */
+async function verifyUpdate(): Promise<void> {
+  const pendingVerify = verifying
+  if (!pendingVerify) return
+  verifying = undefined
+  const online = Boolean(worker?.online && !worker.failure)
+  if (online && pendingVerify.attempts <= maxVerifyAttempts) {
+    updates.clearVerify()
+    if (pendingVerify.revert)
+      updates.finish({
+        ok: false,
+        from: pendingVerify.to,
+        to: pendingVerify.from,
+        message: M.update.revertedAfterFailure(pendingVerify.from),
+        mode: "relaunch",
+      })
+    else
+      updates.finish({
+        ok: true,
+        from: pendingVerify.from,
+        to: pendingVerify.to,
+        mode: "relaunch",
+        rollback: pendingVerify.rollback,
+      })
+    return
+  }
+  record("update-verify-failed", { ...pendingVerify, online })
+  if (pendingVerify.revert || !canRelaunch()) {
+    updates.clearVerify()
+    updates.finish({
+      ok: false,
+      from: pendingVerify.from,
+      to: pendingVerify.to,
+      message: M.update.revertFailed,
+      mode: "relaunch",
+    })
+    return
+  }
+  try {
+    const staged = await updates.stageRevert(pendingVerify.from)
+    try {
+      await stopWorker()
+    } catch (error) {
+      // 业务进程清理未确认时不能释放项目锁或拉起新进程：只还原文件，宿主保持熔断，
+      // 主人确认没有残留进程后重启宿主即运行原版本。
+      record("update-revert-cleanup-unconfirmed", { message: (error as Error).message })
+      await core.stop()
+      updates.swap(staged).commit()
+      await core.start(pluginDir)
+      if (!recovery.tripped) trip(`update-revert-cleanup-unconfirmed:${(error as Error).message}`)
+      updates.clearVerify()
+      updates.finish({
+        ok: false,
+        from: pendingVerify.from,
+        to: pendingVerify.to,
+        message: M.update.revertedTripped(pendingVerify.from),
+        mode: "relaunch",
+      })
+      return
+    }
+    await relaunchUpdate(staged, pendingVerify.to, true, true)
+  } catch (error) {
+    record("update-revert-failed", {
+      message: (error as Error).message,
+      causes:
+        error instanceof AggregateError
+          ? error.errors.map(item => (item instanceof Error ? item.message : String(item)))
+          : undefined,
+    })
+    updates.clearVerify()
+    updates.finish({
+      ok: false,
+      from: pendingVerify.from,
+      to: pendingVerify.to,
+      message: `${M.update.revertFailed}：${(error as Error).message}`,
+      mode: "relaunch",
+    })
+  }
+}
+
+/** 等待中的业务侧更新是否该执行：业务在线、队列空闲，且满足配置的时机。 */
+function pendingReady(): boolean {
+  const pendingUpdate = updates.pending
+  if (!pendingUpdate || !worker?.online || worker.failure || stopping) return false
+  if (phase !== "online" || active || pending) return false
+  return pendingDue({
+    since: pendingUpdate.since,
+    settings: configuration.active.update,
+    lastActivityAt,
+    now: Date.now(),
+  })
 }
 
 /** 加入生命周期动作队列，停止动作优先；返回是否接收或合并，避免更新被静默丢弃。 */
@@ -1229,7 +1518,7 @@ async function closeHost(): Promise<void> {
     // 不删除无法识别的控制文件。
   }
   await new Promise<void>(resolve => server.close(() => resolve()))
-  await stopPanel()
+  await core.stop()
   await projectLock?.close()
   process.exit(exitCode)
 }
@@ -1247,7 +1536,16 @@ async function pump(): Promise<void> {
           break
         case "start":
           if (recovery.tripped) phase = "tripped"
-          else if (!worker) await startWorker()
+          else if (!worker) {
+            try {
+              await startWorker()
+            } catch (error) {
+              // 待确认的更新在此失败时交给确认流程还原，不按普通故障处理。
+              if (!verifying) throw error
+              record("update-verify-start-failed", { message: (error as Error).message })
+            }
+          }
+          await verifyUpdate()
           break
         case "restart":
           phase = "restarting"
@@ -1268,7 +1566,12 @@ async function pump(): Promise<void> {
           await recover(active.reason || "unknown-worker-failure")
           break
         case "update":
-          await applyUpdate(active.staged!, active.from ?? "unknown", active.rollback)
+          await applyUpdate(
+            active.staged!,
+            active.from ?? "unknown",
+            active.rollback,
+            active.immediate,
+          )
           break
         case "configure":
           await configuration.applyPending()
@@ -1285,7 +1588,8 @@ async function pump(): Promise<void> {
           from: active.from ?? "unknown",
           to: active.staged?.version ?? "unknown",
           message: (error as Error).message,
-          relaunch: false,
+          mode: "worker",
+          rollback: active.rollback,
         })
       if (active.type === "stop") {
         stopping = false
@@ -1424,45 +1728,17 @@ try {
     record("bootstrap-exit-confirmed", { bootstrapPid })
   }
   bootstrapPending = false
+  // 上一宿主替换文件后重新启动了本宿主：反复启动失败时直接还原，否则等业务上线后确认。
+  verifying = updates.takeVerify()
+  if (verifying) record("update-verify-begin", { ...verifying })
   // 接管确认后再启动控制台：面板故障不会影响交接，此刻宿主已经是唯一权威。
-  await startPanel({
-    root: process.cwd(),
-    stateDir,
-    settings,
-    getSettings: () => configuration.active,
-    configuration: () => configuration.state,
-    applySettings: next => {
-      const state = configuration.request(next)
-      enqueue({ type: "configure" })
-      return state
-    },
-    status,
-    controllers: {
-      alerts: {
-        history: limit => alerts.history(limit),
-        testWebhook: () => alerts.testWebhook(),
-        state: () => alerts.state(),
-        acknowledge: ids => alerts.acknowledge(ids),
-        mute: (target, minutes) => alerts.mute(target, minutes),
-        unmute: key => alerts.unmute(key),
-        raise: (...args) => alerts.raise(...args),
-      },
-      profiles,
-      sources: sourceWatch,
-      resources: { points: () => resources.points() },
-    },
-    update: {
-      state: () => updates.state(),
-      check: () => updates.check(true),
-      apply: force => updates.apply(force),
-      rollback: () => updates.rollback(),
-    },
-    restart: () => enqueue({ type: "restart" }),
-    resume: () => enqueue({ type: "resume" }),
-    audit: record,
-  })
+  await core.start(pluginDir)
+  if (verifying && verifying.attempts > maxVerifyAttempts) await verifyUpdate()
   if (!stopping) enqueue({ type: "start" })
   if (!stopping) updates.start()
+  setInterval(() => {
+    if (pendingReady()) void updates.applyPending()
+  }, 5000).unref()
   if (!stopping) sourceWatch.start()
   pruneLogs()
   setInterval(pruneLogs, 3600000).unref()

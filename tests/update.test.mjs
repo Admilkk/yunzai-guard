@@ -12,7 +12,7 @@ import { parseSettings } from "../dist/config/index.js"
 import { planSettingsUpdate } from "../dist/config/update.js"
 import { crossesMajor, isNewer, parseRelease } from "../dist/update/release.js"
 import { assetName, checksumFor, stageRelease, swapPackage } from "../dist/update/install.js"
-import { UpdateService } from "../dist/host/update.js"
+import { pendingDue, UpdateService } from "../dist/host/update.js"
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "guard-update-"))
 const write = (file, text) => {
@@ -36,7 +36,21 @@ test("versions compare as semver with prerelease ordering", () => {
 
 test("update settings default to a five minute check and apply live", () => {
   const settings = parseSettings({})
-  assert.deepEqual({ ...settings.update }, { check: true, notify: true, intervalMs: 300000 })
+  assert.deepEqual(
+    { ...settings.update },
+    {
+      check: true,
+      notify: true,
+      intervalMs: 300000,
+      workerRestart: "idle",
+      idleSeconds: 60,
+      maxWaitHours: 6,
+      window: "03:00-06:00",
+    },
+  )
+  assert.throws(() => parseSettings({ update: { workerRestart: "later" } }))
+  assert.throws(() => parseSettings({ update: { window: "3-6" } }))
+  assert.equal(parseSettings({ update: { window: "23:00-02:00" } }).update.window, "23:00-02:00")
   assert.throws(() => parseSettings({ update: { intervalMs: 1000 } }))
   assert.throws(() => parseSettings({ update: { unknown: 1 } }))
   const plan = planSettingsUpdate(settings, parseSettings({ update: { check: false } }))
@@ -305,4 +319,109 @@ test("a refused package rollback preserves the previous version for retry", asyn
   service.swap(staged).commit()
   assert.equal(service.state().current, "1.0.0")
   assert.equal(service.state().rollback?.version, "1.1.0")
+})
+
+function deferredService(t) {
+  const plugin = tmp()
+  t.after(() => fs.rmSync(plugin, { recursive: true, force: true }))
+  write(path.join(plugin, "package.json"), '{"version":"1.0.0"}')
+  const installs = []
+  const sent = []
+  let cancelled = 0
+  const service = new UpdateService({
+    pluginDir: plugin,
+    stateDir: path.join(plugin, "state"),
+    settings: () => parseSettings({}).update,
+    send: text => sent.push(text) > 0,
+    install: (...args) => installs.push(args),
+    cancelPending: async () => {
+      cancelled++
+    },
+    record() {},
+  })
+  const staged = {
+    version: "1.1.0",
+    directory: path.join(plugin, ".update", "staged", "yunzai-guard"),
+    plan: { level: "worker", changed: ["dist/worker-preload.js"] },
+  }
+  return { service, installs, sent, staged, cancelled: () => cancelled }
+}
+
+test("等待中的业务侧更新：再次请求更新即马上执行，还原即取消", async t => {
+  const { service, installs, sent, staged, cancelled } = deferredService(t)
+  service.defer(staged, "1.0.0", false)
+  assert.equal(service.state().phase, "pending")
+  assert.equal(service.state().pending.version, "1.1.0")
+  assert.match(sent.at(-1), /业务侧更新将在空闲时生效，再次发送 #guard更新 可马上生效/)
+  // 有等待中的更新时不再联网检查，直接执行等待中的那次。
+  const applied = await service.apply(false)
+  assert.equal(applied.ok, true)
+  assert.deepEqual(installs.at(-1), [staged, "1.0.0", false, true])
+  assert.equal(service.state().pending, undefined)
+  assert.equal((await service.applyPending()).ok, false)
+
+  service.defer(staged, "1.0.0", false)
+  const cancelledResult = await service.rollback()
+  assert.equal(cancelledResult.ok, true)
+  assert.match(cancelledResult.message, /已取消待生效的更新 1\.1\.0/)
+  assert.equal(cancelled(), 1)
+  assert.equal(service.state().pending, undefined)
+  assert.equal(service.state().phase, "idle")
+})
+
+test("更新结果按完成方式说明业务是否中断", t => {
+  const { service, sent } = deferredService(t)
+  const cases = [
+    ["hot", false, /已更新至 1\.1\.0（原 1\.0\.0），业务未中断/],
+    ["worker", false, /业务进程已重启/],
+    ["relaunch", true, /已还原至 1\.1\.0（原 1\.0\.0），宿主已重新启动/],
+    ["host-pending", false, /宿主重启后完全生效/],
+  ]
+  for (const [mode, rollback, pattern] of cases) {
+    service.finish({ ok: true, from: "1.0.0", to: "1.1.0", mode, rollback })
+    assert.match(sent.at(-1), pattern)
+    assert.equal(service.state().hostRestartPending, mode === "host-pending")
+  }
+  service.finish({ ok: false, from: "1.0.0", to: "1.1.0", mode: "hot", message: "坏了" })
+  assert.match(sent.at(-1), /更新失败：坏了/)
+  assert.equal(service.state().phase, "failed")
+})
+
+test("宿主重启前的待确认记录累加启动次数并可清除", t => {
+  const { service } = deferredService(t)
+  assert.equal(service.takeVerify(), undefined)
+  service.markVerify({ from: "1.0.0", to: "1.1.0", rollback: false })
+  assert.deepEqual(service.takeVerify(), {
+    from: "1.0.0",
+    to: "1.1.0",
+    rollback: false,
+    revert: false,
+    attempts: 1,
+  })
+  assert.equal(service.takeVerify().attempts, 2)
+  service.clearVerify()
+  assert.equal(service.takeVerify(), undefined)
+})
+
+test("业务侧更新按配置择时执行", () => {
+  const settings = overrides => ({ ...parseSettings({}).update, ...overrides })
+  const hour = 3600_000
+  const at = (hours, minutes = 0) => new Date(2026, 0, 1, hours, minutes).getTime()
+  const base = { since: at(10), lastActivityAt: at(10), now: at(10, 0) }
+  assert.equal(pendingDue({ ...base, settings: settings({ workerRestart: "now" }) }), true)
+  // idle：最近有插件处理消息时等待，连续空闲达到阈值后执行，超过最长等待则直接执行。
+  const idle = settings({ idleSeconds: 60, maxWaitHours: 6 })
+  assert.equal(pendingDue({ ...base, settings: idle, now: at(10, 0) + 30_000 }), false)
+  assert.equal(pendingDue({ ...base, settings: idle, now: at(10, 1) }), true)
+  assert.equal(
+    pendingDue({ ...base, settings: idle, lastActivityAt: at(15, 59, 30), now: at(16) - 1 }),
+    false,
+  )
+  assert.equal(
+    pendingDue({ ...base, settings: idle, lastActivityAt: at(16), now: base.since + 6 * hour }),
+    true,
+  )
+  const window = settings({ workerRestart: "window", window: "03:00-06:00" })
+  assert.equal(pendingDue({ ...base, settings: window, now: at(4) }), true)
+  assert.equal(pendingDue({ ...base, settings: window, now: at(10, 2) + 7 * hour }), false)
 })

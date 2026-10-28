@@ -34,6 +34,30 @@ function fixture(t) {
       JSON.stringify({ name: "yunzai-guard", version }),
     )
     fs.writeFileSync(path.join(source, "index.js"), `// ${version}\n`)
+    // 发布入口与组件清单：两个版本之间只有控制台服务文件不同。
+    const files = {
+      "dist/launcher.js": ["a", ["shell"]],
+      "dist/entry/plugin.js": ["a", ["worker"]],
+      "dist/cli.js": ["a", ["shell"]],
+      "dist/web/server.js": [version === "1.0.0" ? "a" : "b", ["core"]],
+    }
+    for (const file of Object.keys(files)) {
+      fs.mkdirSync(path.join(source, path.dirname(file)), { recursive: true })
+      fs.writeFileSync(path.join(source, file), `// ${file} ${files[file][0]}\n`)
+    }
+    fs.writeFileSync(
+      path.join(source, "dist/components.json"),
+      JSON.stringify({
+        schema: 1,
+        version,
+        files: Object.fromEntries(
+          Object.entries(files).map(([file, [sha, roles]]) => [
+            file,
+            { sha256: sha.repeat(64), roles },
+          ]),
+        ),
+      }),
+    )
     run(source, "add", "-A")
     run(source, "commit", "-q", "-m", `release: v${version}`)
   }
@@ -65,6 +89,7 @@ test(
         if (refuseInstall) throw new Error("fixture install refused")
         installs.push(args)
       },
+      cancelPending: async () => {},
       record() {},
     }
     const service = new UpdateService(options)
@@ -105,10 +130,15 @@ test(
     assert.equal(restarted.state().phase, "failed")
     refuseInstall = false
     assert.equal((await restarted.rollback()).ok, true)
-    const [previous, from, rollback] = installs.at(-1)
+    const [previous, from, rollback, immediate] = installs.at(-1)
     assert.equal(previous.version, "1.0.0")
     assert.equal(from, "1.1.0")
     assert.equal(rollback, true)
+    assert.equal(immediate, true)
+    // 还原同样按组件比较：只差控制台服务文件，可以热替换。
+    assert.equal(previous.plan.level, "core")
+    assert.deepEqual(previous.plan.changed, ["dist/web/server.js"])
+    assert.equal(fs.existsSync(path.join(previous.directory, "dist/launcher.js")), true)
     restarted.swap(previous).commit()
     const restored = new UpdateService(options).state()
     assert.equal(restored.current, "1.0.0")

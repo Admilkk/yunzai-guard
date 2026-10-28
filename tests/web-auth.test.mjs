@@ -116,3 +116,24 @@ test("面板配置校验外部访问地址并默认开启聊天登录", t => {
   assert.equal(next.chatLogin, false)
   assert.equal(next.publicUrl, "https://guard.example.com/panel/")
 })
+
+test("控制台线程交接只转交内存会话，且仍不落盘", t => {
+  const { auth, directory, settings } = fixture(t)
+  const temporary = auth.issue({ address: "127.0.0.1" })
+  const trusted = auth.issue({ address: "127.0.0.1", remember: true })
+  const exported = auth.exportVolatile()
+  assert.equal(exported.length, 1)
+  const next = new PanelAuth(() => settings, directory)
+  next.importVolatile([
+    ...JSON.parse(JSON.stringify(exported)),
+    { hash: "x", session: exported[0].session },
+    { hash: "a".repeat(64), session: { ...exported[0].session, remember: true } },
+    null,
+  ])
+  assert.ok(next.verify(temporary))
+  assert.ok(next.verify(trusted))
+  const stored = JSON.parse(fs.readFileSync(path.join(directory, "auth-sessions.json"), "utf8"))
+  assert.equal(stored.sessions.length, 1)
+  assert.equal(stored.sessions[0].session.remember, true)
+  next.importVolatile("not-an-array")
+})

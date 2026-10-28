@@ -406,6 +406,21 @@ a:focus-visible,
 .configuration-state {
   max-width: 100%;
 }
+.reload-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin: 0 0 18px;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid #cfe5dc;
+  border-radius: var(--radius);
+  background: #eaf5f0;
+  color: #1f6d5b;
+  font-size: 13px;
+  animation: rise-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
 .configuration-state .ant-tag {
   margin: 0;
 }
@@ -2501,6 +2516,11 @@ a:focus-visible,
   background: #0d1311d9;
 }
 :root[data-theme="dark"] .header-status {
+  border-color: #23493d;
+  background: #14281f;
+  color: #7fdcbc;
+}
+:root[data-theme="dark"] .reload-banner {
   border-color: #23493d;
   background: #14281f;
   color: #7fdcbc;

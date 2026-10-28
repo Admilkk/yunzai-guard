@@ -16,11 +16,13 @@ type Update = {
   error?: string
   latest?: { version: string; name: string; notes: string; url: string }
   available: boolean
-  phase: "idle" | "downloading" | "installing" | "restarting" | "failed"
+  phase: "idle" | "downloading" | "installing" | "restarting" | "pending" | "failed"
   message?: string
   hostRestartPending: boolean
   rollback?: { version: string }
   lastResult?: { ok: boolean; version: string; message: string; at: number }
+  plan?: { level: "static" | "core" | "worker" | "host"; changed: number }
+  pending?: { version: string; since: number; rollback: boolean }
 }
 
 const busyPhases = new Set(["downloading", "installing", "restarting"])
@@ -44,8 +46,11 @@ export function UpdateStrip() {
   const busy = pending || Boolean(update && busyPhases.has(update.phase))
 
   useEffect(() => {
-    if (!update || !busyPhases.has(update.phase)) return
-    const timer = setInterval(() => void reload(true).catch(() => {}), 2000)
+    if (!update || (!busyPhases.has(update.phase) && update.phase !== "pending")) return
+    const timer = setInterval(
+      () => void reload(true).catch(() => {}),
+      update.phase === "pending" ? 5000 : 2000,
+    )
     return () => clearInterval(timer)
   }, [update?.phase, reload])
 
@@ -83,12 +88,43 @@ export function UpdateStrip() {
     }
   }
 
-  /** 还原到上一版本：宿主会用旧文件重新启动。 */
+  /** 让等待中的业务侧更新马上生效：重启业务进程一次。 */
+  async function applyPending() {
+    setPending(true)
+    try {
+      const result = await api("/api/update/apply-pending", { method: "POST", body: "{}" })
+      if (result.ok) message.success(result.message)
+      else message.warning(result.message)
+      await reload(true)
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : "执行失败")
+    } finally {
+      setPending(false)
+    }
+  }
+
+  /** 取消等待中的更新：控制台回到当前版本，业务进程不受影响。 */
+  async function cancelPending() {
+    setPending(true)
+    try {
+      const result = await api("/api/update/rollback", { method: "POST", body: "{}" })
+      if (result.ok) message.success(result.message)
+      else message.warning(result.message)
+      await reload(true)
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : "取消失败")
+    } finally {
+      setPending(false)
+    }
+  }
+
+  /** 还原到上一版本：同样按改动范围处理，能热替换的部分不中断业务。 */
   function confirmRollback() {
     const target = update?.rollback?.version ?? ""
     modal.confirm({
       title: `还原到 ${target}？`,
-      content: "宿主将重新启动，launcher 方式需手动启动。",
+      content:
+        "按改动范围还原：控制台与宿主的部分热替换，涉及业务进程时重启一次；宿主需要重新启动时，launcher 方式需手动启动。",
       okText: "还原",
       cancelText: "取消",
       onOk: async () => {
@@ -115,10 +151,8 @@ export function UpdateStrip() {
       content: (
         <div className="update-confirm">
           <p>
-            {git || update?.installMode !== "git"
-              ? "将下载并校验后替换文件"
-              : "将拉取 release 分支"}
-            ，业务进程随后重启；启动失败时自动还原。
+            {git || update?.installMode !== "git" ? "将下载并校验新版本" : "将拉取 release 分支"}
+            。控制台与宿主的改动热替换生效，涉及业务进程的改动按设置择时重启一次；新版本无法上线时自动还原。
           </p>
           {!force && update?.latest?.notes && (
             <Typography.Paragraph type="secondary" className="update-notes">
@@ -133,8 +167,13 @@ export function UpdateStrip() {
     })
   }
 
+  const waiting = update.phase === "pending" && update.pending
   const tone =
-    update.phase === "failed" || update.error ? "warning" : update.available ? "info" : "ok"
+    update.phase === "failed" || update.error
+      ? "warning"
+      : update.available || waiting
+        ? "info"
+        : "ok"
   return (
     <section className={`update-strip ${tone}`}>
       <div className="update-strip-main">
@@ -143,12 +182,20 @@ export function UpdateStrip() {
           <strong>
             {busy
               ? (update.message ?? "正在更新")
-              : update.available
-                ? `发现新版本 ${update.latest?.version}`
-                : `当前版本 ${update.current}`}
+              : waiting
+                ? `${update.pending!.version} 等待生效`
+                : update.available
+                  ? `发现新版本 ${update.latest?.version}`
+                  : `当前版本 ${update.current}`}
             {update.hostRestartPending && <Tag color="warning">宿主需重启后完全生效</Tag>}
           </strong>
           <span>
+            {waiting && (
+              <>
+                控制台已是新版本，业务侧更新将按设置择时生效（
+                {relativeTime(update.pending!.since)}开始等待）{" · "}
+              </>
+            )}
             {update.available
               ? `当前 ${update.current}`
               : update.enabled
@@ -186,9 +233,24 @@ export function UpdateStrip() {
         >
           检查更新
         </Button>
-        {!git && update.rollback && (
-          <Button size="small" disabled={!connected || saving || busy} onClick={confirmRollback}>
-            还原 {update.rollback.version}
+        {waiting && (
+          <Button
+            size="small"
+            type="primary"
+            disabled={!connected || saving || busy}
+            loading={busy}
+            onClick={() => void applyPending()}
+          >
+            马上生效
+          </Button>
+        )}
+        {!git && (update.rollback || waiting) && (
+          <Button
+            size="small"
+            disabled={!connected || saving || busy}
+            onClick={waiting ? () => void cancelPending() : confirmRollback}
+          >
+            {waiting ? "取消更新" : `还原 ${update.rollback?.version}`}
           </Button>
         )}
         {!git && update.latest && (
@@ -200,7 +262,7 @@ export function UpdateStrip() {
             强制更新
           </Button>
         )}
-        {!git && update.available && (
+        {!git && update.available && !waiting && (
           <Button
             size="small"
             type="primary"

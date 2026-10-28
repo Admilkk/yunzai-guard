@@ -65,6 +65,11 @@ export function versionAt(cwd: string, revision: string): string | undefined {
   }
 }
 
+/** 把某个提交的文件导出为 tar 包。 */
+export async function exportCommit(cwd: string, commit: string, file: string): Promise<void> {
+  await git(cwd, ["archive", "--format=tar", "-o", file, commit])
+}
+
 /** 拉取远端发布分支的最新提交，返回提交号与其中的版本号；不改动工作区。 */
 export async function fetchRelease(
   cwd: string,

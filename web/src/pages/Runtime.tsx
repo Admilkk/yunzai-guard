@@ -340,6 +340,33 @@ function Updates() {
         step={60000}
         unit="毫秒"
       />
+      <ConfigField
+        label="业务侧生效时机"
+        path={["update", "workerRestart"]}
+        type="select"
+        options={[
+          { value: "idle", label: "业务空闲时" },
+          { value: "window", label: "维护时段内" },
+          { value: "now", label: "马上" },
+        ]}
+      />
+      <ConfigField
+        label="空闲判定"
+        path={["update", "idleSeconds"]}
+        type="number"
+        min={10}
+        max={3600}
+        unit="秒"
+      />
+      <ConfigField
+        label="最长等待"
+        path={["update", "maxWaitHours"]}
+        type="number"
+        min={1}
+        max={72}
+        unit="小时"
+      />
+      <ConfigField label="维护时段" path={["update", "window"]} type="text" />
     </Card>
   )
 }

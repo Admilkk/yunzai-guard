@@ -35,4 +35,6 @@ export interface UpdateController {
   check: () => Promise<UpdateState>
   apply: (force: boolean) => Promise<{ ok: boolean; message: string }>
   rollback: () => Promise<{ ok: boolean; message: string }>
+  /** 立即执行等待中的业务进程重启，使业务侧更新生效。 */
+  applyPending: () => Promise<{ ok: boolean; message: string }>
 }

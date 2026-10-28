@@ -56,8 +56,8 @@ function sameSecret(a: string, b: string): boolean {
 /** 取字符串并截断，非字符串返回空串。 */
 const text = (value: unknown, length: number): string =>
   typeof value === "string" ? value.slice(0, length) : ""
-/** 校验持久化会话记录的结构。 */
-function validSession(value: unknown): value is Session {
+/** 校验会话记录的结构；落盘的只能是信任设备会话，线程交接的只能是内存会话。 */
+function validSession(value: unknown, remembered = true): value is Session {
   if (!value || typeof value !== "object") return false
   const item = value as Session
   return (
@@ -67,7 +67,7 @@ function validSession(value: unknown): value is Session {
     item.createdAt > 0 &&
     item.createdAt <= item.lastSeenAt &&
     item.lastSeenAt <= item.expiresAt &&
-    item.remember &&
+    item.remember === remembered &&
     typeof item.address === "string" &&
     item.address.length <= 128 &&
     typeof item.userAgent === "string" &&
@@ -183,6 +183,29 @@ export class PanelAuth {
   /** 注销当前会话。 */
   logout(token: unknown): void {
     if (typeof token === "string" && this.#sessions.delete(digest(token))) this.#persist()
+  }
+  /**
+   * 导出仅保存在内存中的会话（未勾选信任设备），只含令牌摘要。
+   * 热替换控制台线程时交给新线程，避免更新后需要重新登录；这类会话仍不落盘。
+   */
+  exportVolatile(): Array<{ hash: string; session: Session }> {
+    const now = Date.now()
+    return [...this.#sessions]
+      .filter(([, session]) => !session.remember && session.expiresAt > now)
+      .map(([hash, session]) => ({ hash, session: { ...session } }))
+  }
+  /** 接收上一个控制台线程交来的内存会话，格式不符的条目直接忽略。 */
+  importVolatile(entries: unknown): void {
+    if (!Array.isArray(entries)) return
+    const now = Date.now()
+    for (const entry of entries.slice(0, maxSessions)) {
+      const hash = (entry as { hash?: unknown })?.hash
+      const session = (entry as { session?: unknown })?.session
+      if (typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash) || !validSession(session, false))
+        continue
+      if (session.expiresAt <= now || this.#sessions.size >= maxSessions) continue
+      this.#sessions.set(hash, session)
+    }
   }
   /** 生成一次性登录验证码，已有有效验证码时拒绝。 */
   requestCode(): string {

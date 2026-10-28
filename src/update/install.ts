@@ -6,6 +6,7 @@ import { Readable, Transform } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { M } from "../shared/messages.js"
 import { requestHeaders, type ReleaseInfo } from "./release.js"
+import type { UpdatePlan } from "./plan.js"
 
 const maxArchiveBytes = 256 * 1024 * 1024
 const maxChecksumBytes = 64 * 1024
@@ -28,10 +29,12 @@ const managedItems = [
 
 export interface StagedRelease {
   version: string
-  /** 已解压并校验的包目录；Git 安装时为插件目录本身。 */
+  /** 已解压并校验的包目录。 */
   directory: string
   /** Git 安装：要切换到的提交。 */
   commit?: string
+  /** 与当前文件比较得出的更新级别。 */
+  plan?: UpdatePlan
 }
 
 export interface SwapHandle {
@@ -69,6 +72,8 @@ export function workPaths(pluginDir: string): {
   download: string
   staged: string
   previous: string
+  /** 热更新时被覆盖文件的临时备份，失败时据此还原。 */
+  hot: string
 } {
   const base = path.join(pluginDir, ".update")
   return {
@@ -76,6 +81,7 @@ export function workPaths(pluginDir: string): {
     download: path.join(base, "download"),
     staged: path.join(base, "staged"),
     previous: path.join(base, "previous"),
+    hot: path.join(base, "hot"),
   }
 }
 
@@ -121,12 +127,12 @@ async function download(
 }
 
 /** 调用系统 tar 解压；Windows 使用系统目录下的 bsdtar，避免依赖 PATH。 */
-function extract(archive: string, destination: string): Promise<void> {
+export function extract(archive: string, destination: string): Promise<void> {
   const executable =
     process.platform === "win32"
       ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
       : "tar"
-  const flags = archive.endsWith(".zip") ? "-xf" : "-xzf"
+  const flags = archive.endsWith(".zip") || archive.endsWith(".tar") ? "-xf" : "-xzf"
   return new Promise((resolve, reject) => {
     const child = spawn(executable, [flags, archive, "-C", destination], {
       stdio: ["ignore", "ignore", "pipe"],
@@ -175,6 +181,26 @@ function assertPackage(directory: string, version: string): void {
   for (const required of ["index.js", "dist/launcher.js", "dist/entry/plugin.js", "dist/cli.js"])
     if (!fs.existsSync(path.join(directory, required)))
       throw new Error(M.update.packageInvalid(required))
+}
+
+/** 把 Git 提交导出到暂存目录，用于比较组件与热替换；不改动工作区。 */
+export async function stageCommit(
+  pluginDir: string,
+  commit: string,
+  version: string,
+  exportCommit: (commit: string, file: string) => Promise<void>,
+): Promise<StagedRelease> {
+  const paths = workPaths(pluginDir)
+  clearWork(pluginDir)
+  fs.mkdirSync(paths.download, { recursive: true })
+  const directory = path.join(paths.staged, packageName)
+  fs.mkdirSync(directory, { recursive: true })
+  const archive = path.join(paths.download, "commit.tar")
+  await exportCommit(commit, archive)
+  await extract(archive, directory)
+  assertContained(paths.staged)
+  assertPackage(directory, version)
+  return { version, directory, commit }
 }
 
 /** 下载、校验并解压发布包到暂存目录；不触碰正在运行的文件。 */
@@ -267,9 +293,28 @@ export function swapPackage(staged: StagedRelease, pluginDir: string): SwapHandl
   }
 }
 
+/**
+ * 热更新前把当前发布文件完整复制到 previous 目录，供之后整体还原。
+ * 热更新只改动变化的文件，不能像整体替换那样把旧目录直接移过去。
+ */
+export function snapshotPrevious(pluginDir: string): void {
+  const paths = workPaths(pluginDir)
+  fs.rmSync(paths.previous, { recursive: true, force: true })
+  fs.mkdirSync(paths.previous, { recursive: true })
+  for (const name of managedItems) {
+    const current = path.join(pluginDir, name)
+    if (fs.existsSync(current))
+      fs.cpSync(current, path.join(paths.previous, name), {
+        recursive: true,
+        verbatimSymlinks: true,
+      })
+  }
+}
+
 /** 清理更新工作目录。 */
 export function clearWork(pluginDir: string): void {
   const paths = workPaths(pluginDir)
   fs.rmSync(paths.staged, { recursive: true, force: true })
   fs.rmSync(paths.download, { recursive: true, force: true })
+  fs.rmSync(paths.hot, { recursive: true, force: true })
 }

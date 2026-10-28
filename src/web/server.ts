@@ -47,6 +47,8 @@ export interface PanelOptions {
   resume: () => void
   audit?: (type: string, details?: Record<string, unknown>) => void
   log?: (message: string) => void
+  /** 上一个控制台线程交来的内存会话。 */
+  handover?: unknown
 }
 
 const maxBodyBytes = 1024 * 1024
@@ -241,6 +243,12 @@ export class GuardPanel {
           `login-blocked:${address}`,
         ),
     })
+    this.#auth.importVolatile(options.handover)
+  }
+
+  /** 交给下一个控制台线程的内存会话。 */
+  handover(): unknown {
+    return this.#auth.exportVolatile()
   }
 
   /** 当前面板配置。 */
@@ -326,7 +334,12 @@ export class GuardPanel {
     if (!server?.listening) return
     for (const response of this.#streams.keys()) response.end()
     this.#streams.clear()
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    // 热替换控制台时不能等浏览器的长连接自然断开：先关空闲连接，1 秒后强制关闭其余连接。
+    await new Promise<void>(resolve => {
+      server.close(() => resolve())
+      server.closeIdleConnections()
+      setTimeout(() => server.closeAllConnections(), 1000).unref()
+    })
   }
 
   /** 监听端口，被占用时按次数重试。 */
@@ -656,6 +669,7 @@ export class GuardPanel {
       const document = readSettingsDocument(this.#options.stateDir, active)
       const snapshot = readAudit(this.#options.stateDir)
       return sendJson(response, 200, {
+        version: this.#options.version,
         panel: {
           host: this.#settings.host,
           port: this.#settings.port,
@@ -751,6 +765,11 @@ export class GuardPanel {
       if (!this.#options.update) throw new PanelError(404, M.web.notFound)
       const body = await readBody(request)
       const result = await this.#options.update.apply(isPlainObject(body) && body.force === true)
+      return sendJson(response, 200, { ...result, update: this.#options.update.state() })
+    }
+    if (route === "POST /api/update/apply-pending") {
+      if (!this.#options.update) throw new PanelError(404, M.web.notFound)
+      const result = await this.#options.update.applyPending()
       return sendJson(response, 200, { ...result, update: this.#options.update.state() })
     }
     if (route === "POST /api/update/rollback") {

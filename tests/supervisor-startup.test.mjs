@@ -242,6 +242,14 @@ function fixture(options = {}) {
       throw new Error("No lifecycle dispatcher in ownership component")
     },
     bootstrapAbort: { abort() {} },
+    // 控制台线程与热更新：受管宿主无法自行重启，宿主级更新走重启业务进程的路径。
+    core: { async stop() {}, async start() {}, async swap() {} },
+    pluginDir: "/owned-project/plugins/yunzai-guard",
+    hotDir: "/owned-project/plugins/yunzai-guard/.update/hot",
+    external: false,
+    bootstrapPid: undefined,
+    verifying: undefined,
+    maxVerifyAttempts: 2,
   }
   const api = evaluate(
     path.join(build, "host/supervisor.js"),
@@ -254,6 +262,12 @@ function fixture(options = {}) {
       "enqueue",
       "closeHost",
       "applyUpdate",
+      "canRelaunch",
+      "hotUpdate",
+      "deferUpdate",
+      "restartUpdate",
+      "relaunchUpdate",
+      "verifyUpdate",
       "pump",
       "handleHostFailure",
     ],

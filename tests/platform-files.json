@@ -2,6 +2,7 @@
   "bootstrap-exit-watch.test.mjs",
   "core-sandbox.test.mjs",
   "default-observation-integration.test.mjs",
+  "environment-hot-update.test.mjs",
   "environment-jiuli-sandbox.test.mjs",
   "environment-linux-pm2-auto.test.mjs",
   "environment-linux-pm2-restore.test.mjs",

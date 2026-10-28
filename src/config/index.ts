@@ -8,6 +8,7 @@ import { newWeakSet, weakSetAdd, weakSetHas } from "../protect/intrinsics.js"
 import { defaultTargets } from "./targets.js"
 import { parseAlerts, parseBaseline, parseSources } from "./extras.js"
 import { M } from "../shared/messages.js"
+import { parseWindow } from "../shared/update-window.js"
 
 const maxSettingsBytes = 1024 * 1024
 const parsedSettings = newWeakSet<GuardSettings>()
@@ -112,7 +113,16 @@ export function parseSettings(value: unknown): GuardSettings {
   if (files !== "off" && files !== "write" && files !== "all")
     throw new TypeError(M.config.monitorFiles)
   const update = object(source.update === undefined ? {} : source.update, "settings.update")
-  keys(update, ["check", "notify", "intervalMs"], "settings.update")
+  keys(
+    update,
+    ["check", "notify", "intervalMs", "workerRestart", "idleSeconds", "maxWaitHours", "window"],
+    "settings.update",
+  )
+  const workerRestart = update.workerRestart ?? "idle"
+  if (workerRestart !== "idle" && workerRestart !== "window" && workerRestart !== "now")
+    throw new TypeError(M.config.workerRestart)
+  const window = update.window ?? "03:00-06:00"
+  if (typeof window !== "string" || !parseWindow(window)) throw new TypeError(M.config.updateWindow)
   const protect = object(source.protect === undefined ? {} : source.protect, "settings.protect")
   keys(
     protect,
@@ -178,6 +188,10 @@ export function parseSettings(value: unknown): GuardSettings {
       check: boolean(update.check, true, "settings.update.check"),
       notify: boolean(update.notify, true, "settings.update.notify"),
       intervalMs: number(update.intervalMs, 300000, "settings.update.intervalMs", 60000, 86400000),
+      workerRestart,
+      idleSeconds: number(update.idleSeconds, 60, "settings.update.idleSeconds", 10, 3600),
+      maxWaitHours: number(update.maxWaitHours, 6, "settings.update.maxWaitHours", 1, 72),
+      window,
     },
     alerts: parseAlerts(source.alerts),
     baseline: parseBaseline(source.baseline),

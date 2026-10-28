@@ -45,7 +45,10 @@ export class YunzaiGuard extends plugin {
     return (await context?.sandboxDispatch?.(event)) ? "return" : false
   }
 
-  /** 主人的 #guard更新 / #guard强制更新：转交宿主执行，结果由宿主通知主人。 */
+  /**
+   * 主人的 #guard更新 / #guard强制更新：转交宿主执行，结果由宿主通知主人。
+   * 需要重启业务进程的更新默认等空闲时生效；有等待生效的更新时再次发送即马上执行。
+   */
   async update(): Promise<boolean> {
     const context = (globalThis as unknown as Record<symbol, GuardContext | undefined>)[contextKey]
     if (!context?.requestUpdate) {
