@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import net from "node:net"
 import { spawn, type ChildProcess } from "node:child_process"
+import { fileURLToPath } from "node:url"
 import { randomBytes } from "node:crypto"
 import { sanitizeAuditEvent } from "../audit/event.js"
 import { redactAuditText as redact } from "../audit/redaction.js"
@@ -21,7 +22,7 @@ import { assertNoDebugger } from "../protect/debug.js"
 import { assertNoInternals } from "../protect/bindings.js"
 import { authorizeHostEvent } from "./event-policy.js"
 import { waitForBootstrapHandoff } from "./bootstrap/handoff.js"
-import { installHostLog, pipeHostOutput } from "./log.js"
+import { installHostLog, pipeHostOutput, pruneHostLog } from "./log.js"
 import { loadSandboxSources } from "../plugin-sandbox/filesystem.js"
 import { monitorStatus, parseMonitorReport, type MonitorReport } from "../monitor/report.js"
 import { buildLinuxSandbox } from "../sandbox/linux.js"
@@ -56,12 +57,21 @@ import {
   type ProcessIdentity,
 } from "./platform.js"
 import { UsageWatch } from "./usage.js"
+import { UpdateService } from "./update.js"
+import { AlertService } from "./alerts.js"
+import { SourceWatch } from "./sources.js"
+import { atLeast, BehaviorProfile, type Anomaly, type ProfileEvent } from "./profile.js"
+import { parseSettings } from "../config/index.js"
+import type { StagedRelease } from "../update/install.js"
 import { M } from "../shared/messages.js"
 
 type Phase = "handoff" | "starting" | "online" | "restarting" | "backoff" | "tripped" | "stopping"
 type Action = {
-  type: "start" | "restart" | "stop" | "resume" | "recover" | "configure"
+  type: "start" | "restart" | "stop" | "resume" | "recover" | "configure" | "update"
   reason?: string
+  staged?: StagedRelease
+  from?: string
+  rollback?: boolean
 }
 interface Session {
   settings: GuardSettings
@@ -92,7 +102,7 @@ interface Session {
 }
 
 let settings = initialSettings
-installHostLog(stateDir)
+installHostLog(stateDir, { maxBytes: settings.log.maxBytes })
 assertPlatform(settings.isolationMode)
 assertNoDebugger()
 assertNoInternals()
@@ -126,13 +136,16 @@ let active: Action | undefined
 let pumping = false
 let logAvailable = true
 let invalidMessages = 0
-let exitCode = 0
+/** 由 node . start 原地切换而来：外部管理器（Docker、node . daemon）负责拉起，主动停止返回 255 表示不要再拉起。 */
+const external = process.env.YUNZAI_GUARD_EXTERNAL === "1"
+let exitCode = external ? 255 : 0
 let lastAudit: ReturnType<AuditReceiver["stats"]> | undefined
 let lastAuditPermit: AuditClosePermit | undefined
 let lastWindowsTransport: WindowsSandboxTransportCounters | undefined
 let lastWindowsCanonical: WindowsCanonicalStats | undefined
 let lastBrokerTransport: ReturnType<RuntimeBroker["transportStats"]> | undefined
 let auditSink: SqliteAuditSink
+let relaunch = false
 const auditBuffer = new AuditBuffer({
   sink: { appendBatch: frames => auditSink.appendBatch(frames) },
   maxEventsPerSecond: settings.audit.maxEventsPerSecond,
@@ -151,6 +164,7 @@ const configuration = new SettingsController(settings, {
     auditSink.updateLimits(next.audit)
     auditBuffer.updateLimits(next.audit)
     settings = next
+    pruneLogs()
   },
   /** 以候选配置重建业务进程。 */
   async reload(candidate, sources) {
@@ -262,12 +276,105 @@ function saveRecovery(): void {
   saveRecoveryState(recoveryPath, recovery)
 }
 
+const updates = new UpdateService({
+  pluginDir: fileURLToPath(new URL("../../", import.meta.url)),
+  stateDir,
+  settings: () => configuration.active.update,
+  send: noticeToMasters,
+  /** 暂存完成后排入生命周期队列。 */
+  install(staged, from, rollback) {
+    enqueue({ type: "update", staged, from, rollback })
+  },
+  record,
+})
+
+/** 仅在业务进程已上线时送达主人。 */
+function noticeToMasters(text: string): boolean {
+  if (!worker?.online || worker.failure || worker.expectedExit) return false
+  send(worker, { type: "update-notice", generation: worker.generation, text })
+  return true
+}
+
+const alerts = new AlertService({
+  settings: () => configuration.active,
+  stateDir,
+  projectId,
+  send: noticeToMasters,
+  record,
+})
+const profiles = new BehaviorProfile({
+  file: path.join(stateDir, "profiles.json"),
+  settings: () => configuration.active.baseline,
+})
+const sourceWatch = new SourceWatch({
+  pluginsDir: path.join(root, "plugins"),
+  stateDir,
+  settings: () => configuration.active.sources,
+  /** 插件来源变化走“来源”类告警。 */
+  onChange(change) {
+    alerts.raise("source", change.plugin, `【Yunzai Guard】${change.text}`, {
+      key: `source:${change.plugin}:${change.type}`,
+      plugin: change.plugin,
+    })
+  },
+})
+const anomalyLabels = {
+  "new-target": "出现新行为",
+  "rate-spike": "频率突增",
+  "off-hours": "非常规时段活动",
+  burst: "批量新目标",
+} as const
+
+/** 把画像异常记入日志，达到推送级别时告警。 */
+function handleAnomaly(anomaly: Anomaly): void {
+  record("behavior-anomaly", {
+    plugin: anomaly.plugin,
+    type: anomaly.type,
+    severity: anomaly.severity,
+    kind: anomaly.kind,
+    key: anomaly.key,
+  })
+  if (!atLeast(anomaly.severity, configuration.active.baseline.minSeverity)) return
+  alerts.raise(
+    "anomaly",
+    `${anomaly.plugin} ${anomalyLabels[anomaly.type]}`,
+    `【Yunzai Guard】${anomaly.plugin} ${anomalyLabels[anomaly.type]}（${anomaly.severity === "high" ? "高" : anomaly.severity === "medium" ? "中" : "低"}风险）：${anomaly.key}。${anomaly.detail}`,
+    {
+      key: `anomaly:${anomaly.plugin}:${anomaly.type}:${anomaly.kind}:${anomaly.key}`,
+      plugin: anomaly.plugin,
+      severity: anomaly.severity,
+    },
+  )
+}
+
+/** 业务进程上报的事件：交给告警与行为画像，任何失败都不影响审计链路。 */
+function observeEvent(event: Record<string, unknown>): void {
+  try {
+    alerts.onEvent(event)
+    for (const anomaly of profiles.observe(event as unknown as ProfileEvent)) handleAnomaly(anomaly)
+  } catch (error) {
+    record("observer-error", { message: (error as Error).message })
+  }
+}
+
+/** 发给业务进程的配置不含告警目标与密钥，避免被插件读取。 */
+function forWorker(value: GuardSettings): GuardSettings {
+  return parseSettings({
+    ...value,
+    alerts: {
+      ...value.alerts,
+      webhook: { url: "", secret: "", format: value.alerts.webhook.format },
+    },
+  })
+}
+
 /** 汇总宿主、业务进程与监控状态，供 status 与面板使用。 */
 function status() {
   const runtimeSettings = worker?.settings ?? settings
   const sources = worker?.sandboxSources ?? sandboxSources
   return {
     configuration: configuration.state,
+    update: updates.state(),
     phase,
     hostPid: process.pid,
     workerPid: worker?.child.pid,
@@ -383,7 +490,8 @@ function send(session: Session, message: Record<string, unknown>): void {
 function fail(session: Session, reason: string): void {
   if (session !== worker || session.failure || session.expectedExit || stopping) return
   session.failure = reason
-  if (active?.type !== "configure") enqueue({ type: "recover", reason })
+  if (active?.type !== "configure" && active?.type !== "update")
+    enqueue({ type: "recover", reason })
 }
 
 /** 校验并脱敏工作进程上报的事件。 */
@@ -433,7 +541,7 @@ function onMessage(session: Session, raw: unknown): void {
         generation: session.generation,
         auditChannelNonce: session.auditChannelNonce,
         controlKey: session.controlKey,
-        settings,
+        settings: forWorker(settings),
         runtimeManifest: session.broker.manifestPath,
         sandboxSources,
       }
@@ -473,7 +581,12 @@ function onMessage(session: Session, raw: unknown): void {
           record("worker-online", { workerPid: session.child.pid, generation: session.generation })
           watchUsage(session)
         }
+        const first = !session.online
         session.online = true
+        if (first) {
+          updates.flush()
+          alerts.flush()
+        }
         return
       case "restart-request":
         enqueue({ type: "restart" })
@@ -481,11 +594,19 @@ function onMessage(session: Session, raw: unknown): void {
       case "stop-request":
         enqueue({ type: "stop" })
         return
+      case "rollback-request":
+        void requestRollback()
+        return
+      case "update-request":
+      case "update-force-request":
+        void requestUpdate(message.type === "update-force-request")
+        return
       case "audit":
       case "violation": {
         const authorized = authorizeHostEvent(settings, message.event)
         const event = auditEvent(authorized)
         if (!event) throw new Error("event")
+        observeEvent(event)
         if (event.action === "restart")
           fail(session, `policy-violation:${String(event.ruleId || event.kind)}`)
         auditBuffer.offer(
@@ -531,7 +652,11 @@ async function startWorker(): Promise<void> {
   const audit = new AuditReceiver({
     generation: currentGeneration,
     buffer: auditBuffer,
-    authorize: event => auditEvent(authorizeHostEvent(sessionSettings, event)),
+    authorize: event => {
+      const authorized = auditEvent(authorizeHostEvent(sessionSettings, event))
+      if (authorized) observeEvent(authorized)
+      return authorized
+    },
     /** 宿主重算为 restart 时请求重建业务进程。 */
     onAction(event) {
       if (session && event.action === "restart")
@@ -868,6 +993,11 @@ function trip(reason: string): void {
     console.error(M.host.recoveryPersist)
   }
   record("recovery-tripped", { reason, failures: recovery.failures.length })
+  alerts.raise(
+    "tripped",
+    "业务进程熔断",
+    `【Yunzai Guard】业务进程连续故障，已熔断：${redact(reason)}。修正后请在控制台或用 resume 命令解除熔断`,
+  )
 }
 
 /** 按退避策略恢复业务进程，超过上限时熔断。 */
@@ -909,7 +1039,85 @@ const priority: Record<Action["type"], number> = {
   resume: 2,
   configure: 2,
   recover: 3,
+  update: 3,
   stop: 4,
+}
+
+/** 按保留天数清理审计事件与宿主日志。 */
+function pruneLogs(): void {
+  const active = configuration.active
+  try {
+    const events = auditSink.pruneByAge(active.audit.maxDays)
+    const logs = pruneHostLog(stateDir, active.log.maxDays)
+    if (events || logs) record("log-pruned", { events, logs })
+  } catch (error) {
+    record("log-prune-failed", { message: (error as Error).message })
+  }
+}
+
+/** 处理主人命令触发的更新，拒绝原因回复给主人。 */
+async function requestUpdate(force: boolean): Promise<void> {
+  const result = await updates.apply(force)
+  if (!result.ok) updates.notify(`【Yunzai Guard】${result.message}`)
+}
+
+/** 处理主人命令触发的还原，拒绝原因回复给主人。 */
+async function requestRollback(): Promise<void> {
+  const result = await updates.rollback()
+  if (!result.ok) updates.notify(`【Yunzai Guard】${result.message}`)
+}
+
+/** 停止业务进程、替换文件并重新上线；新版本无法上线时还原。 */
+async function applyUpdate(staged: StagedRelease, from: string, rollback = false): Promise<void> {
+  const to = staged.version
+  phase = "restarting"
+  record("update-begin", { from, to })
+  await sleep(1500)
+  await stopWorker()
+  let handle: ReturnType<UpdateService["swap"]>
+  try {
+    handle = updates.swap(staged)
+  } catch (error) {
+    if (!stopping) await startWorker()
+    updates.finish({ ok: false, from, to, message: (error as Error).message, relaunch: false })
+    return
+  }
+  if (stopping) return handle.commit()
+  if (rollback) {
+    // 旧版本的业务进程不能由新宿主拉起，宿主带着旧文件重新启动。
+    handle.commit()
+    relaunch = Boolean(bootstrapPid) || process.env.YUNZAI_GUARD_COLD === "1"
+    if (external) exitCode = 0
+    updates.finish({ ok: true, from, to, relaunch: relaunch || external, rollback: true })
+    enqueue({ type: "stop" })
+    return
+  }
+  try {
+    await startWorker()
+  } catch (error) {
+    record("update-start-failed", { message: (error as Error).message })
+  }
+  if (!worker?.online || worker.failure) {
+    try {
+      await stopWorker()
+    } catch (error) {
+      record("update-stop-failed", { message: (error as Error).message })
+    }
+    handle.rollback()
+    try {
+      if (!stopping) await startWorker()
+    } catch (error) {
+      record("update-restore-failed", { message: (error as Error).message })
+    }
+    updates.finish({ ok: false, from, to, message: M.update.unhealthy, relaunch: false })
+    return
+  }
+  handle.commit()
+  relaunch = !stopping && (Boolean(bootstrapPid) || process.env.YUNZAI_GUARD_COLD === "1")
+  // 外部管理器会在宿主以 0 退出后重新执行 node . start，届时由新文件接管。
+  if (external && !stopping) exitCode = 0
+  updates.finish({ ok: true, from, to, relaunch: relaunch || (external && !stopping) })
+  if (relaunch || (external && !stopping)) enqueue({ type: "stop" })
 }
 
 /** 加入生命周期动作队列，停止动作优先。 */
@@ -937,6 +1145,10 @@ function enqueue(action: Action): void {
 
 /** 关闭宿主：停止业务进程、面板与控制端点。 */
 async function closeHost(): Promise<void> {
+  updates.stop()
+  alerts.stop()
+  sourceWatch.stop()
+  profiles.flush()
   bootstrapAbort.abort()
   await bootstrapHandoff?.catch(() => {})
   const lastSession = worker
@@ -1023,6 +1235,9 @@ async function pump(): Promise<void> {
         case "recover":
           await recover(active.reason || "unknown-worker-failure")
           break
+        case "update":
+          await applyUpdate(active.staged!, active.from ?? "unknown", active.rollback)
+          break
         case "configure":
           await configuration.applyPending()
           record(`configuration-${configuration.state.status}`, { ...configuration.state })
@@ -1051,6 +1266,10 @@ const server = createControlServer({
   handle(command) {
     if (command === "restart") enqueue({ type: "restart" })
     if (command === "resume" && phase === "tripped") enqueue({ type: "resume" })
+    if (command === "check-update") void updates.check(true)
+    if (command === "rollback") void requestRollback()
+    if (command === "update" || command === "force-update")
+      void requestUpdate(command === "force-update")
     if (command === "invoke-bot-restart" && worker)
       send(worker, { type: "invoke-bot-restart", generation: worker.generation })
     return status()
@@ -1084,6 +1303,7 @@ try {
     filePath: path.join(stateDir, "events.sqlite"),
     maxBytes: settings.audit.maxBytes,
     maxFiles: settings.audit.maxFiles,
+    durability: settings.audit.durability,
   })
 } catch (error) {
   await projectLock.close()
@@ -1127,6 +1347,18 @@ hostReady = true
 process.on("exit", code => {
   record("host-process-exit", { code })
   auditSink.close()
+  if (!relaunch) return
+  try {
+    spawn(process.execPath, [fileURLToPath(new URL("./supervisor.js", import.meta.url))], {
+      cwd: process.cwd(),
+      env: { ...process.env, YUNZAI_GUARD_COLD: "1" },
+      stdio: process.platform === "win32" ? "ignore" : "inherit",
+      windowsHide: true,
+      detached: true,
+    }).unref()
+  } catch {
+    // 无法拉起时宿主照常退出，由使用者手动启动。
+  }
 })
 process.on("SIGINT", () => enqueue({ type: "stop" }))
 process.on("SIGTERM", () => enqueue({ type: "stop" }))
@@ -1165,11 +1397,32 @@ try {
       return state
     },
     status,
+    controllers: {
+      alerts: {
+        history: limit => alerts.history(limit),
+        testWebhook: () => alerts.testWebhook(),
+      },
+      profiles,
+      sources: sourceWatch,
+    },
+    update: {
+      state: () => updates.state(),
+      check: () => updates.check(true),
+      apply: force => updates.apply(force),
+      rollback: () => updates.rollback(),
+    },
     restart: () => enqueue({ type: "restart" }),
     resume: () => enqueue({ type: "resume" }),
     audit: record,
   })
   if (!stopping) enqueue({ type: "start" })
+  if (!stopping) updates.start()
+  if (!stopping) sourceWatch.start()
+  pruneLogs()
+  setInterval(pruneLogs, 3600000).unref()
+  setInterval(() => {
+    for (const anomaly of profiles.tick()) handleAnomaly(anomaly)
+  }, 30000).unref()
 } catch (error) {
   if (!stopping) {
     record("handoff-failed", { message: (error as Error).message })

@@ -37,6 +37,24 @@ function rotate(file: string, size: number, maxBytes: number) {
   fs.unlinkSync(file)
 }
 
+/** 删除超过保留天数没有再写入的 host.log 及其轮转文件；maxDays 为 0 时不处理。 */
+export function pruneHostLog(directory: string, maxDays: number, now = Date.now()): number {
+  if (!Number.isFinite(maxDays) || maxDays <= 0) return 0
+  let removed = 0
+  for (const name of ["host.log", "host.log.1"]) {
+    const file = path.join(directory, name)
+    try {
+      const info = ordinaryFile(file)
+      if (!info || now - info.mtimeMs <= maxDays * 86400000) continue
+      fs.unlinkSync(file)
+      removed++
+    } catch {
+      // 无法确认或删除时保留原文件。
+    }
+  }
+  return removed
+}
+
 /** 把宿主控制台输出同时写入日志文件。 */
 export function installHostLog(
   directory: string,

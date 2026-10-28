@@ -23,13 +23,14 @@ import {
   instrumentCoreLoaderSource,
   requiresCoreLoaderBridge,
 } from "../monitor/loader.js"
-import type { CoreBot, GuardContext } from "../shared/types.js"
+import type { CoreBot, GuardContext, GuardEvent } from "../shared/types.js"
 import type { SandboxSource } from "../plugin-sandbox/types.js"
 import { shutdownBootstrapResources } from "../host/bootstrap/shutdown.js"
 import { AuditSender } from "../audit/sender.js"
 import { createAuditDeadline, parseAuditFrame, type AuditSealFrame } from "../audit/protocol.js"
 import type { WorkerAuditCloseOptions } from "./worker-monitor.js"
 import { RuntimeBus } from "./bus.js"
+import { EventCoalescer } from "./coalesce.js"
 import { seal, registerModule } from "../protect/objects.js"
 import { M } from "../shared/messages.js"
 
@@ -53,7 +54,6 @@ if (isMainThread) {
   const rawExit = process.exit.bind(process)
   const ipcSend = process.send?.bind(process)
   if (!ipcSend || !process.connected) throw new Error(M.runtime.workerIpc)
-  if (process.platform === "darwin") throw new Error(M.runtime.macos)
   const nonce = randomUUID()
   const hello = await new Promise<{
     generation: number
@@ -135,14 +135,18 @@ if (isMainThread) {
       })
     },
   })
+  const coalescer = new EventCoalescer({
+    windowMs: () => settings.audit.coalesceMs,
+    maxKeys: 4096,
+    forward: (event, critical) =>
+      auditSender.offer(event as unknown as Record<string, unknown>, critical).accepted,
+  })
   const bus = new RuntimeBus({
     generation: hello.generation,
     pid: process.pid,
     controlKey: hello.controlKey,
     connected: () => process.connected,
-    offer: (event, critical) => {
-      auditSender.offer(event, critical)
-    },
+    offer: (event, critical) => coalescer.offer(event as unknown as GuardEvent, critical),
     write: (message, done) => ipcSend(message, done),
     fail: () => {
       rawExit(1)
@@ -154,6 +158,9 @@ if (isMainThread) {
     send: bus.send,
     run: <T>(name: string, callback: () => T): T => storage.run(name, callback),
     sandboxDispatch: (event: Record<string, unknown>) => sandboxDispatcher.dispatch(event),
+    requestRollback: () => bus.command({ type: "rollback-request" }),
+    requestUpdate: (force: boolean) =>
+      bus.command({ type: force ? "update-force-request" : "update-request" }),
   })
   registerModule("runtime-context", {
     ...context,
@@ -429,6 +436,14 @@ if (isMainThread) {
     if (value?.generation !== hello.generation) return
     const bot = currentBot?.bot ?? currentBot
     if (value.type === "invoke-bot-restart" && bot) void bot.restart()
+    if (
+      value.type === "update-notice" &&
+      bot &&
+      typeof value.text === "string" &&
+      value.text.length <= 4000 &&
+      typeof bot.sendMasterMsg === "function"
+    )
+      void Promise.resolve(bot.sendMasterMsg(value.text, undefined, 0)).catch(() => {})
     if (value.type === "shutdown" && !shuttingDown) {
       shuttingDown = true
       monitor.stop()
@@ -457,6 +472,7 @@ if (isMainThread) {
         .finally(async () => {
           // 仅受信生命周期清理可封账主来源；审计等待共用该截止时间。
           try {
+            coalescer.close()
             runtime.instrumentation()
             if (auditClose) {
               auditSeal = await auditSender.seal({

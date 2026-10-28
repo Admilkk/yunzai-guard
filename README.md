@@ -22,22 +22,9 @@ Yunzai Guard 以独立插件形式运行，**不修改 Yunzai 核心与业务插
 
 ## 安装 💡
 
-**环境要求**：Windows x64 或 Linux x64、Node.js `>=23.11.0`，以及能正常启动的 [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai) 或 [玖璃（JiuLi）](https://github.com/HL-z7/JiuLi)。PM2 可选（`>=6.0.14`，fork 单实例）。
+**环境要求**：Windows x64、Linux x64 或 macOS（实验）、Node.js `>=23.11.0`，以及能正常启动的 [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai) 或 [玖璃（JiuLi）](https://github.com/HL-z7/JiuLi)。PM2 可选（`>=5.0.0`，fork 单实例）。
 
-在 Yunzai 根目录**任选一种**方式安装：
-
-<details open><summary>方式一：Git 安装（推荐，便于更新）</summary>
-
-```sh
-git clone --depth=1 --branch main https://github.com/Admilkk/yunzai-guard.git ./plugins/yunzai-guard
-npm --prefix plugins/yunzai-guard ci --include=dev
-```
-
-`npm ci` 会自动编译运行入口与控制台面板，请保留开发依赖并允许安装脚本。
-
-</details>
-
-<details><summary>方式二：下载发布包（免编译）</summary>
+在 Yunzai 根目录安装。推荐使用发布包，免编译，也是控制台与 `#guard更新` 支持的更新方式。
 
 从 [Releases](https://github.com/Admilkk/yunzai-guard/releases) 下载对应平台的包，解压为 `plugins/yunzai-guard`：
 
@@ -45,23 +32,19 @@ npm --prefix plugins/yunzai-guard ci --include=dev
 | ---------------------------------- | ---------------------------------------------------------- |
 | `yunzai-guard-v*-win-x64.zip`      | Windows 包，**内置固定版本 Node 运行时**，首次启动无需下载 |
 | `yunzai-guard-v*-linux-x64.tar.gz` | Linux 包                                                   |
-| `node-v24.22.1-win-x64.exe`        | 独立 Node 运行时（可选，用法见下方）                       |
+| `node-v24.22.1-win-x64.exe`        | 与 Windows 包一致的独立 Node 运行时                        |
 | `SHA256SUMS.txt`                   | 全部资产的 SHA-256 校验和                                  |
 
-</details>
+<details><summary>Git 安装（不推荐）</summary>
 
-<details><summary>独立 Node 运行时（可选）</summary>
+需要自行编译与更新；控制台和 `#guard更新` 只会提示新版本，不会替换 Git 工作区，请自行 `git pull` 后重新安装依赖。
 
-> [!NOTE]
-> Windows 发布包已内置运行时，通常无需单独下载 EXE。
-
-手动准备时，将 `node-v24.22.1-win-x64.exe` 重命名为 `node.exe`，放入 `plugins/yunzai-guard/runtime/node-v24.22.1-win-x64/`，Guard 启动时会自动识别并校验。
-
-也可在 Yunzai 根目录通过 PowerShell 指定该运行时启动：
-
-```powershell
-& ".\plugins\yunzai-guard\runtime\node-v24.22.1-win-x64\node.exe" .\app.js
+```sh
+git clone --depth=1 --branch main https://github.com/Admilkk/yunzai-guard.git ./plugins/yunzai-guard
+npm --prefix plugins/yunzai-guard ci --include=dev
 ```
+
+`npm ci` 会自动编译运行入口与控制台面板，请保留开发依赖并允许安装脚本。
 
 </details>
 
@@ -80,7 +63,7 @@ node app.js
 node plugins/yunzai-guard/dist/launcher.js
 ```
 
-PM2 与 systemd 的用法见[运行环境](docs/ENVIRONMENTS.md)。
+TRSS 官方 Docker 脚本（`node . start`）与 `node . daemon` 守护模式会原地接管，无需改启动命令。PM2、systemd 的用法见[运行环境](docs/ENVIRONMENTS.md)。
 
 ## 功能介绍 📖
 
@@ -89,6 +72,7 @@ PM2 与 systemd 的用法见[运行环境](docs/ENVIRONMENTS.md)。
 - 默认 `audit`：空规则，只记录不拦截。
 - 规则按顺序**第一条匹配生效**，支持全局与逐插件配置，动作为 `audit` / `deny` / `restart`。
 - 审计事件脱敏后存入 `data/yunzai-guard/events.sqlite`（Node 内置 SQLite，无需额外数据库）。
+- 日志清理有容量和保留天数两种方式，可同时启用：审计事件按 `audit.maxBytes × maxFiles` 与 `audit.maxDays`，宿主日志 `host.log` 按 `log.maxBytes` 与 `log.maxDays`；默认只按容量。
 
 | 类型       | 覆盖入口                                                                            |
 | ---------- | ----------------------------------------------------------------------------------- |
@@ -125,6 +109,25 @@ PM2 与 systemd 的用法见[运行环境](docs/ENVIRONMENTS.md)。
 
 </details>
 
+<details><summary>告警、行为画像与插件来源</summary>
+
+- **告警**：拦截、重启、熔断、函数被改动、画像异常、插件来源变化与版本更新推给主人，也可以发到 Webhook，支持签名。同类告警自动限流合并。
+- **行为画像**：学习每个插件的常规行为，之后出现新行为、频率突增、非常规时段活动或批量新目标时提示，并给出风险分。默认关闭，在「运行设置 → 行为画像」开启。
+- **插件来源**：Git 安装的插件会定期检查是否与仓库一致，被改动时通知。
+- 以上都可以在控制台逐项开关、调整阈值，详见[监控说明](docs/MONITORING.md#告警与行为画像)。
+
+</details>
+
+<details><summary>版本更新</summary>
+
+- 宿主每 5 分钟读取一次公开 Release（ETag 条件请求，未变化不占用 GitHub 限额），发现新版本后给主人发一条消息，同一版本只通知一次。
+- 主人发送 `#guard更新` 更新到最新版，`#guard回滚` 还原上一版本；`#guard强制更新` 重新安装最新版，并允许跨主版本。控制台「总览」页同样可以检查、更新和强制更新，CLI 为 `update [--force]`。
+- 下载发布包后先核对 `SHA256SUMS.txt`，业务进程停止后再替换文件；新版本无法上线时自动还原，上一版本保留在 `.update/previous`。
+- 冷启动（`node app.js`）的宿主会自动用新文件重新启动自己；launcher、PM2、systemd 托管的宿主需由管理器或你重启后才完全生效。
+- Git 安装只提示，不自动替换。检查间隔与通知可在「运行设置 → 版本更新」调整。
+
+</details>
+
 <details><summary>进程管理与隔离</summary>
 
 - 宿主统一管理重启、崩溃恢复和熔断。
@@ -141,6 +144,9 @@ PM2 与 systemd 的用法见[运行环境](docs/ENVIRONMENTS.md)。
 node plugins/yunzai-guard/dist/cli.js status   # 查看状态
 node plugins/yunzai-guard/dist/cli.js doctor   # 检查并准备依赖
 node plugins/yunzai-guard/dist/cli.js restart  # 重建工作进程
+node plugins/yunzai-guard/dist/cli.js check-update  # 立即检查新版本
+node plugins/yunzai-guard/dist/cli.js update [--force]  # 更新到最新发布
+node plugins/yunzai-guard/dist/cli.js rollback  # 还原到上一版本
 node plugins/yunzai-guard/dist/cli.js resume   # 解除熔断
 node plugins/yunzai-guard/dist/cli.js stop     # 停止
 ```
@@ -158,7 +164,6 @@ node plugins/yunzai-guard/dist/cli.js stop     # 停止
 | [系统隔离](docs/SANDBOX.md)                   | 整个工作进程的文件、网络与回收边界       |
 | [独立插件沙箱](docs/NATIVE-PLUGIN-SANDBOX.md) | 实验功能、原路径数据和 Redis 授权        |
 | [维护指南](docs/LIFECYCLE.md)                 | 升级、停用、卸载和回退                   |
-| [开发指南](docs/DEVELOPMENT.md)               | 代码结构、构建、测试与发布流程           |
 | [更新日志](CHANGELOG.md)                      | 版本变更                                 |
 
 ## 开发 🛠️
@@ -171,13 +176,13 @@ npm run format:check
 npm run package       # 生成发布资产到 release/
 ```
 
-平台测试用 `npm run test:platform`，全部测试用 `npm run test:all`，前提见[测试说明](tests/README.md)。面板开发使用 `npm run dev:web`。
+平台测试用 `npm run test:platform`，全部测试用 `npm run test:all`。面板开发使用 `npm run dev:web`。
 
 ## 反馈与贡献 🤝
 
 - 缺陷与建议：[Issues](https://github.com/Admilkk/yunzai-guard/issues)
 - 安全问题：请走[私密漏洞报告](https://github.com/Admilkk/yunzai-guard/security/advisories/new)，见 [SECURITY.md](SECURITY.md)
-- 提交 PR 前请运行上面的检查命令，并阅读[开发指南](docs/DEVELOPMENT.md)。
+- 提交 PR 前请运行上面的检查命令。
 
 ## 许可证 📄
 

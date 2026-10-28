@@ -12,6 +12,8 @@ export interface SqliteAuditOptions {
   filePath: string
   maxBytes: number
   maxFiles: number
+  /** 默认 full；宿主按配置传入 adaptive。 */
+  durability?: "adaptive" | "full"
   hostPid?: number
   wallNow?: () => number
 }
@@ -50,6 +52,7 @@ export class SqliteAuditSink {
   #evictedRecords = 0
   #evictedBytes = 0
   #error?: string
+  #sync: "FULL" | "NORMAL" = "FULL"
 
   /** 打开 SQLite 审计存储并准备语句。 */
   constructor(options: SqliteAuditOptions) {
@@ -275,6 +278,44 @@ export class SqliteAuditSink {
     return { records: count, bytes: removed }
   }
 
+  /**
+   * 设置本批写入的落盘强度：普通记录在 WAL 下用 NORMAL，进程崩溃不丢、仅断电可能丢最后几批；
+   * 含拦截或重启的批次以及 full 模式始终用 FULL。
+   */
+  #durability(critical: boolean): void {
+    const mode = critical || this.#options.durability !== "adaptive" ? "FULL" : "NORMAL"
+    if (mode === this.#sync) return
+    this.#database.exec(`PRAGMA synchronous=${mode}`)
+    this.#sync = mode
+  }
+
+  /** 删除早于保留天数的事件，返回删除条数；days 为 0 时不处理。 */
+  pruneByAge(days: number, now = Date.now()): number {
+    if (!Number.isFinite(days) || days <= 0) return 0
+    if (this.#closed) throw new Error(M.audit.dbClosed)
+    this.#checkFiles()
+    const cutoff = now - days * 86400000
+    this.#database.exec("BEGIN IMMEDIATE")
+    try {
+      const row = this.#database
+        .prepare(
+          "SELECT count(*) AS records,coalesce(sum(bytes),0) AS bytes FROM events WHERE time<?",
+        )
+        .get(cutoff)!
+      const records = Number(row.records)
+      if (records) this.#database.prepare("DELETE FROM events WHERE time<?").run(cutoff)
+      this.#database.exec("COMMIT")
+      this.#records -= records
+      this.#bytes -= Number(row.bytes)
+      return records
+    } catch (error) {
+      try {
+        this.#database.exec("ROLLBACK")
+      } catch {}
+      throw error
+    }
+  }
+
   /** 更新保留预算并立即淘汰超出部分。 */
   updateLimits(options: Pick<SqliteAuditOptions, "maxBytes" | "maxFiles">): void {
     limits(options.maxBytes, options.maxFiles)
@@ -340,6 +381,9 @@ export class SqliteAuditSink {
     let begun = false
     try {
       this.#checkFiles()
+      this.#durability(
+        prepared.some(item => item.value.action === "deny" || item.value.action === "restart"),
+      )
       this.#database.exec("BEGIN IMMEDIATE")
       begun = true
       let bytes = 0

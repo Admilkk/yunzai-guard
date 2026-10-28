@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useConsole } from "../state"
 import { ConfigField, actionOptions, fileOptions, networkOptions } from "../lib/fields"
 import { FieldLabel } from "../components/FieldHelp"
+import { AlertSettings, BaselineSettings, SourceSettings } from "./RuntimeExtras"
 
 /** 控制端口设置。 */
 function ControlPort() {
@@ -224,6 +225,57 @@ function AuditStorage() {
         max={100}
         unit="倍"
       />
+      <ConfigField
+        label="相同事件合并"
+        path={["audit", "coalesceMs"]}
+        type="number"
+        min={0}
+        max={60000}
+        step={100}
+        unit="毫秒（0 为逐条）"
+      />
+      <ConfigField
+        label="写盘策略"
+        path={["audit", "durability"]}
+        type="select"
+        options={[
+          { value: "adaptive", label: "自适应（拦截记录强制落盘）" },
+          { value: "full", label: "每批强制落盘" },
+        ]}
+      />
+      <ConfigField
+        label="按天数保留"
+        path={["audit", "maxDays"]}
+        type="number"
+        min={0}
+        max={3650}
+        unit="天（0 为不限）"
+      />
+    </Card>
+  )
+}
+
+/** 宿主日志清理设置。 */
+function HostLog() {
+  return (
+    <Card title="宿主日志" className="setting-section">
+      <ConfigField
+        label="单文件上限"
+        path={["log", "maxBytes"]}
+        type="number"
+        min={65536}
+        max={1073741824}
+        step={65536}
+        unit="字节"
+      />
+      <ConfigField
+        label="按天数保留"
+        path={["log", "maxDays"]}
+        type="number"
+        min={0}
+        max={3650}
+        unit="天（0 为不限）"
+      />
     </Card>
   )
 }
@@ -273,6 +325,25 @@ function Isolation() {
   )
 }
 
+/** 版本检查与更新通知。 */
+function Updates() {
+  return (
+    <Card title="版本更新" className="setting-section">
+      <ConfigField label="自动检查" path={["update", "check"]} type="switch" />
+      <ConfigField label="通知主人" path={["update", "notify"]} type="switch" />
+      <ConfigField
+        label="检查间隔"
+        path={["update", "intervalMs"]}
+        type="number"
+        min={60000}
+        max={86400000}
+        step={60000}
+        unit="毫秒"
+      />
+    </Card>
+  )
+}
+
 /** 运行设置页面。 */
 export default function Runtime() {
   return (
@@ -281,8 +352,21 @@ export default function Runtime() {
         className="settings-tabs"
         items={[
           { key: "monitoring", label: "业务监控", children: <Monitoring /> },
+          { key: "update", label: "版本更新", children: <Updates /> },
+          { key: "alerts", label: "告警通知", children: <AlertSettings /> },
+          { key: "baseline", label: "行为画像", children: <BaselineSettings /> },
+          { key: "sources", label: "插件来源", children: <SourceSettings /> },
           { key: "recovery", label: "进程恢复", children: <Recovery /> },
-          { key: "audit", label: "审计存储", children: <AuditStorage /> },
+          {
+            key: "audit",
+            label: "日志与存储",
+            children: (
+              <>
+                <AuditStorage />
+                <HostLog />
+              </>
+            ),
+          },
           { key: "isolation", label: "运行隔离", children: <Isolation /> },
         ]}
       />

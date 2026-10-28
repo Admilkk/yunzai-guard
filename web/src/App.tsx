@@ -16,6 +16,8 @@ import {
 import {
   ApiOutlined,
   AuditOutlined,
+  BellOutlined,
+  RadarChartOutlined,
   CodeOutlined,
   ControlOutlined,
   DashboardOutlined,
@@ -55,6 +57,18 @@ const pages: Array<{
     title: "全局规则",
     icon: <ControlOutlined />,
     component: lazy(() => import("./pages/Policies")),
+  },
+  {
+    id: "profiles",
+    title: "行为画像",
+    icon: <RadarChartOutlined />,
+    component: lazy(() => import("./pages/Profiles")),
+  },
+  {
+    id: "alerts",
+    title: "告警中心",
+    icon: <BellOutlined />,
+    component: lazy(() => import("./pages/Alerts")),
   },
   {
     id: "audit",
@@ -160,8 +174,8 @@ export default function ConsoleApp() {
   }
 
   const groups = [
-    { label: "管理", ids: ["overview", "plugins", "policies"] },
-    { label: "记录与系统", ids: ["audit", "logs", "settings"] },
+    { label: "管理", ids: ["overview", "plugins", "policies", "profiles"] },
+    { label: "记录与系统", ids: ["audit", "alerts", "logs", "settings"] },
   ]
   const items = groups.map(group => ({
     type: "group" as const,

@@ -123,7 +123,7 @@ setTimeout(() => process.exit(99), 2000)
     true,
   )
   assert.match(result.stdout, /STOPPED_WITHOUT_HANDOFF/)
-  assert.doesNotMatch(result.stderr, /自动接管失败|冷接管失败/)
+  assert.doesNotMatch(result.stderr, /接管失败/)
 })
 
 test("PM2 registration shares the startup deadline and cannot be cut short by handshake time", async () => {

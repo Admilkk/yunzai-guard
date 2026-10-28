@@ -107,7 +107,7 @@ test("a PM2_HOME pid file alone never authorizes opening a parent's Inspector", 
   )
   assert.throws(
     () =>
-      assertParentProof({ ...proof, commandLine: "PM2 v5.99.0: God Daemon (/tmp/truncated" }, root),
+      assertParentProof({ ...proof, commandLine: "PM2 v4.5.0: God Daemon (/tmp/truncated" }, root),
     /直接父进程不是受支持版本的 PM2 守护进程/,
   )
   assert.throws(

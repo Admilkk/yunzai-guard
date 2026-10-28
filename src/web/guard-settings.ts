@@ -113,15 +113,66 @@ export function readSettingsDocument(stateDir: string, active: GuardSettings): S
   }
 }
 
-/** 备份当前配置文件，返回备份路径。 */
+const historyKeep = 30
+
+/** 历史备份目录。 */
+function historyDirectory(file: string): string {
+  return path.join(path.dirname(file), "settings-history")
+}
+
+/** 备份当前配置文件：覆盖最近一份 .bak，并在历史目录保留最近 30 份，返回备份路径。 */
 function backupFile(file: string): string | null {
   try {
     if (!fs.existsSync(file)) return null
     const target = `${file}.bak`
     fs.copyFileSync(file, target)
+    const directory = historyDirectory(file)
+    fs.mkdirSync(directory, { recursive: true })
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+    fs.copyFileSync(file, path.join(directory, `settings-${stamp}.json`))
+    const names = fs
+      .readdirSync(directory)
+      .filter(name => /^settings-[\w-]+\.json$/.test(name))
+      .sort()
+    for (const name of names.slice(0, Math.max(0, names.length - historyKeep)))
+      fs.rmSync(path.join(directory, name), { force: true })
     return target
   } catch {
     return null
+  }
+}
+
+export interface SettingsBackup {
+  id: string
+  time: number
+  size: number
+}
+
+/** 列出历史配置备份，新的在前。 */
+export function listSettingsBackups(stateDir: string): SettingsBackup[] {
+  const directory = historyDirectory(guardSettingsPath(stateDir))
+  try {
+    return fs
+      .readdirSync(directory)
+      .filter(name => /^settings-[\w-]+\.json$/.test(name))
+      .sort()
+      .reverse()
+      .map(id => {
+        const info = fs.statSync(path.join(directory, id))
+        return { id, time: info.mtimeMs, size: info.size }
+      })
+  } catch {
+    return []
+  }
+}
+
+/** 读取一份历史备份的文本；编号只接受备份文件名。 */
+export function readSettingsBackup(stateDir: string, id: string): string | undefined {
+  if (!/^settings-[\w-]+\.json$/.test(id)) return undefined
+  try {
+    return fs.readFileSync(path.join(historyDirectory(guardSettingsPath(stateDir)), id), "utf8")
+  } catch {
+    return undefined
   }
 }
 

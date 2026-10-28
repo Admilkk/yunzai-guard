@@ -12,9 +12,15 @@ import {
   Table,
   Tag,
   Tooltip,
+  Dropdown,
 } from "antd"
 import type { InputRef, TableColumnsType } from "antd"
-import { InfoCircleOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons"
+import {
+  InfoCircleOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+  DownloadOutlined,
+} from "@ant-design/icons"
 import { api } from "../api"
 import type { AuditEntry } from "../types"
 import { ActionTag, formatTime, PanelCard } from "../components"
@@ -164,6 +170,27 @@ export default function Audit() {
     const timer = setInterval(() => setTick(value => value + 1), 10000)
     return () => clearInterval(timer)
   }, [live])
+
+  /** 按当前筛选导出，最多 20000 条。 */
+  async function exportAudit(format: "csv" | "json") {
+    const params = new URLSearchParams({ format, limit: "20000" })
+    for (const key of ["plugin", "kind", "action", "q"] as const)
+      if (filters[key]) params.set(key, filters[key])
+    if (filters.range) params.set("from", String(Date.now() - Number(filters.range)))
+    if (!filters.system) params.set("scope", "behavior")
+    try {
+      const response = await fetch("/api/audit/export?" + params, { credentials: "same-origin" })
+      if (!response.ok) throw new Error(`导出失败（${response.status}）`)
+      const name =
+        /filename="([^"]+)"/.exec(response.headers.get("content-disposition") ?? "")?.[1] ??
+        `guard-audit.${format}`
+      const url = URL.createObjectURL(await response.blob())
+      Object.assign(document.createElement("a"), { href: url, download: name }).click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : "导出失败")
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -316,6 +343,19 @@ export default function Audit() {
           onChange={range => change({ range: String(range) })}
         />
         <div className="audit-toolbar-end">
+          <Dropdown
+            menu={{
+              items: [
+                { key: "csv", label: "导出 CSV（表格软件可直接打开）" },
+                { key: "json", label: "导出 JSON" },
+              ],
+              onClick: ({ key }) => void exportAudit(key as "csv" | "json"),
+            }}
+          >
+            <Button size="small" icon={<DownloadOutlined />}>
+              导出
+            </Button>
+          </Dropdown>
           <Tooltip title="包含面板登录、进程启动等宿主系统记录">
             <label className="inline-switch">
               <Switch

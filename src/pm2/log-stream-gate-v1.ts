@@ -26,7 +26,7 @@ interface CaptureOptions {
 }
 
 const gates = new WeakMap<object, Pm2LogGate>()
-// 精确匹配固定版本 PM2 6.0.14 / 7.0.3 ForkMode 的 Function#toString 函数体。
+// 精确匹配 PM2 5.0.0 至 7.x ForkMode 的 Function#toString 函数体。
 // 仅统一检出文件的换行符；名称相同或外观相似不能作为证据。
 const forkCloseHash = "f2d09af5b2eea323c5010888ae295d00f6a664e659c9feb9ce8ae7bf0590575c"
 const toString = Function.prototype.toString

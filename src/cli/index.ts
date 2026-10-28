@@ -28,12 +28,22 @@ if (command === "log") {
     process.exitCode = 1
   }
 } else {
-  if (!["status", "restart", "stop", "resume"].includes(command)) {
+  if (
+    !["status", "restart", "stop", "resume", "check-update", "update", "rollback"].includes(command)
+  ) {
     console.error(M.cli.usage)
     process.exit(2)
   }
   try {
-    console.log(JSON.stringify(await request(command), null, 2))
+    console.log(
+      JSON.stringify(
+        await request(
+          command === "update" && process.argv.includes("--force") ? "force-update" : command,
+        ),
+        null,
+        2,
+      ),
+    )
   } catch (error) {
     console.error(M.cli.failed((error as Error).message))
     process.exitCode = 1

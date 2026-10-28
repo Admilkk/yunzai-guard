@@ -40,7 +40,7 @@ export function writePath(source: Draft, path: string[], value: any) {
 interface FieldProps {
   label: string
   path: string[]
-  type?: "text" | "list" | "number" | "switch" | "select"
+  type?: "text" | "secret" | "list" | "multi" | "number" | "switch" | "select"
   options?: Array<{ value: string; label: string }>
   min?: number
   max?: number
@@ -96,6 +96,31 @@ export function ConfigField({
         className="setting-input setting-number"
         placeholder={placeholder}
         onChange={next => change(next ?? undefined)}
+      />
+    )
+  else if (type === "multi")
+    control = (
+      <Select
+        id={id}
+        mode="multiple"
+        className="setting-input setting-list"
+        value={value ?? []}
+        options={options}
+        disabled={locked}
+        placeholder={placeholder}
+        onChange={change}
+      />
+    )
+  else if (type === "secret")
+    control = (
+      <Input.Password
+        id={id}
+        value={value ?? ""}
+        disabled={locked}
+        className="setting-input setting-path"
+        placeholder={placeholder}
+        autoComplete="new-password"
+        onChange={event => change(event.target.value || undefined)}
       />
     )
   else if (type === "list")

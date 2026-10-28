@@ -75,7 +75,7 @@ test("审计读取真实宿主信封与轮转，过滤分页并保留覆盖不�
     result.summary.timeline.reduce((sum, bucket) => sum + bucket.total, 0),
     5,
   )
-  assert.ok(result.summary.timeline.length <= 12)
+  assert.ok(result.summary.timeline.length <= 24)
   assert.equal(result.coverage.invalidLines, 1)
   assert.equal(result.coverage.complete, false)
   assert.equal(result.coverage.lossReported, true)

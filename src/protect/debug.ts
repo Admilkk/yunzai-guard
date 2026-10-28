@@ -6,7 +6,8 @@ import { M } from "../shared/messages.js"
 
 const debuggerUrl = inspector.url
 const signalProcess = process.kill
-const debugSignal = process.platform === "linux" ? 10 : undefined
+const debugSignal =
+  process.platform === "linux" ? 10 : process.platform === "darwin" ? 30 : undefined
 
 /** 调试器可读取闭包与控制密钥，不能与受保护宿主共用。 */
 export function assertNoDebugger(): void {
