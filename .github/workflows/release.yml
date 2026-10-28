@@ -86,3 +86,24 @@ jobs:
           gh release upload "$TAG" --clobber \
             release/*.zip release/*.tar.gz release/*.exe release/SHA256SUMS.txt
           case "$TAG" in *-*) gh release edit "$TAG" --prerelease ;; esac
+      # release 分支只放编译好的发布文件，插件库可直接 git clone -b release 安装，之后 git pull 即可更新。
+      - name: 更新 release 分支
+        if: ${{ !contains(env.TAG, '-') }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          work="$RUNNER_TEMP/release-branch"
+          if git ls-remote --exit-code origin release >/dev/null; then
+            git clone --quiet --branch release "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$work"
+          else
+            git init --quiet -b release "$work"
+            git -C "$work" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          fi
+          find "$work" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          tar -xzf "release/yunzai-guard-${TAG}-linux-x64.tar.gz" -C "$RUNNER_TEMP"
+          cp -a "$RUNNER_TEMP/yunzai-guard/." "$work/"
+          git -C "$work" config user.name "github-actions[bot]"
+          git -C "$work" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$work" add -A
+          git -C "$work" commit --quiet -m "release: ${TAG}" || echo "release 分支没有变化"
+          git -C "$work" push --quiet origin release

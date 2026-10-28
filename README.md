@@ -35,7 +35,15 @@ Yunzai Guard 以独立插件形式运行，**不修改 Yunzai 核心与业务插
 | `node-v24.22.1-win-x64.exe`        | 与 Windows 包一致的独立 Node 运行时                        |
 | `SHA256SUMS.txt`                   | 全部资产的 SHA-256 校验和                                  |
 
-<details><summary>Git 安装（不推荐）</summary>
+或者用 Git 安装编译好的 `release` 分支，之后在插件目录 `git pull` 即可更新：
+
+```sh
+git clone --depth=1 -b release https://github.com/Admilkk/yunzai-guard.git ./plugins/yunzai-guard
+```
+
+Windows 用这种方式时，首次启动会下载并校验固定版本的 Node 运行时。
+
+<details><summary>从源码安装（开发用）</summary>
 
 需要自行编译与更新；控制台和 `#guard更新` 只会提示新版本，不会替换 Git 工作区，请自行 `git pull` 后重新安装依赖。
 
@@ -124,7 +132,7 @@ TRSS 官方 Docker 脚本（`node . start`）与 `node . daemon` 守护模式会
 - 主人发送 `#guard更新` 更新到最新版，`#guard回滚` 还原上一版本；`#guard强制更新` 重新安装最新版，并允许跨主版本。控制台「总览」页同样可以检查、更新和强制更新，CLI 为 `update [--force]`。
 - 下载发布包后先核对 `SHA256SUMS.txt`，业务进程停止后再替换文件；新版本无法上线时自动还原，上一版本保留在 `.update/previous`。
 - 冷启动（`node app.js`）的宿主会自动用新文件重新启动自己；launcher、PM2、systemd 托管的宿主需由管理器或你重启后才完全生效。
-- Git 安装只提示，不自动替换。检查间隔与通知可在「运行设置 → 版本更新」调整。
+- 用 release 分支 Git 安装的同样可以自动更新与还原；main 分支源码安装只提示新版本。检查间隔与通知可在「运行设置 → 版本更新」调整。
 
 </details>
 

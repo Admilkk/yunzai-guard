@@ -163,7 +163,13 @@ const messages = {
     downloadFailed: (detail: unknown) => `下载失败：${detail}`,
     extractFailed: (detail: unknown) => `解压失败：${detail}`,
     packageInvalid: (detail: unknown) => `发布包内容不符：${detail}`,
-    gitInstall: "检测到 Git 安装，请在插件目录执行 git pull 与 npm ci --include=dev 手动更新",
+    gitDirty: "插件目录有未提交的改动，普通更新不会覆盖；确认放弃改动后请使用强制更新",
+    gitVersion: (expected: unknown, actual: unknown) =>
+      `release 分支的版本 ${actual} 与最新发布 ${expected} 不一致，稍后再试`,
+    gitSource:
+      "当前是 main 源码安装，更新需要重新编译。请改用 release 分支，或在插件目录执行 git pull 与 npm ci --include=dev",
+    gitInstall:
+      "检测到 Git 安装，请在插件目录执行 git pull 更新（main 分支还需 npm ci --include=dev 重新编译，release 分支不需要）",
     majorBlocked: (from: unknown, to: unknown) =>
       `跨主版本更新（${from} → ${to}）可能含不兼容变更，请先阅读更新日志，确认后使用「强制更新」`,
     busy: "更新正在进行，请稍候",
