@@ -7,7 +7,6 @@
 
 ### ✨ 新功能
 
-* 1.1.0 更新、告警、行为画像、来源校验与外部托管接管 ([4b666a1](https://github.com/Admilkk/yunzai-guard/commit/4b666a18dad467ab294171370b6088b0202901c8))
 * **alerts:** 告警出口：拦截、重启、熔断、函数被改动、画像异常、插件来源变化与更新结果推给主人或 Webhook，按窗口限流合并，可选 HMAC 签名 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
 * **audit:** 审计按当前筛选导出 CSV 或 JSON ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
 * **entry:** 兼容 TRSS 官方 Docker 脚本（node . start）与 node . daemon，原地切换为 Guard 宿主 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
