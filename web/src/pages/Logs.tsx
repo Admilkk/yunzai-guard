@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties, ReactNode } from "react"
 import { App, Button, Card, Checkbox, Input, Space, Tag } from "antd"
 import { ClearOutlined, PauseOutlined, CaretRightOutlined, SearchOutlined } from "@ant-design/icons"
@@ -123,18 +123,21 @@ export default function Logs() {
       clearInterval(timer)
     }
   }, [message])
+  // 日志持续写入时，过滤与着色放到低优先级渲染，避免大缓冲区阻塞输入。
+  const deferredText = useDeferredValue(text)
+  const deferredQuery = useDeferredValue(query)
   useEffect(() => {
     if (follow && view.current) view.current.scrollTop = view.current.scrollHeight
-  }, [text, follow])
+  }, [deferredText, follow])
   const visibleText = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    if (!needle) return text
-    const matches = text
+    const needle = deferredQuery.trim().toLowerCase()
+    if (!needle) return deferredText
+    const matches = deferredText
       .split("\n")
       .filter(line => line.toLowerCase().includes(needle))
       .join("\n")
     return matches || "没有匹配的日志"
-  }, [text, query])
+  }, [deferredText, deferredQuery])
   const content = useMemo(() => ansi(visibleText), [visibleText])
   return (
     <Card

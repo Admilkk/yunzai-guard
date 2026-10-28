@@ -10,6 +10,7 @@ import {
   Flex,
   Form,
   Input,
+  Pagination,
   Popover,
   Select,
   Skeleton,
@@ -230,6 +231,13 @@ export default function Plugins() {
         return true
       }),
     [ctx.plugins, search, mode],
+  )
+  const [mobilePage, setMobilePage] = useState(1)
+  const mobilePageSize = 12
+  useEffect(() => setMobilePage(1), [search, mode])
+  const mobileVisible = visible.slice(
+    (mobilePage - 1) * mobilePageSize,
+    mobilePage * mobilePageSize,
   )
 
   useEffect(() => {
@@ -490,7 +498,7 @@ export default function Plugins() {
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的插件" />
         ) : compact ? (
           <div className="mobile-plugin-list">
-            {visible.map(plugin => {
+            {mobileVisible.map(plugin => {
               const risk = risks[plugin.id]
               return (
                 <article className="mobile-plugin-card" key={plugin.id}>
@@ -530,6 +538,17 @@ export default function Plugins() {
                 </article>
               )
             })}
+            {visible.length > mobilePageSize && (
+              <Pagination
+                className="mobile-plugin-pagination"
+                size="small"
+                simple
+                current={mobilePage}
+                pageSize={mobilePageSize}
+                total={visible.length}
+                onChange={page => setMobilePage(page)}
+              />
+            )}
           </div>
         ) : (
           <Table

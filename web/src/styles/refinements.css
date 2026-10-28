@@ -403,6 +403,11 @@ body {
   font-size: 12px;
 }
 
+.mobile-plugin-pagination {
+  justify-self: center;
+  padding-top: 4px;
+}
+
 .mobile-plugin-meta {
   display: flex;
   flex-wrap: wrap;
