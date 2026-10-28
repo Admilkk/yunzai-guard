@@ -45,7 +45,7 @@ export function writeWorkerControlFrame(socket, connected, message, counters, ca
     }
     let line;
     try {
-        line = JSON.stringify(message) + "\n";
+        line = `${JSON.stringify(message)}\n`;
     }
     catch (error) {
         return refuse(error instanceof Error ? error : new Error(String(error)));

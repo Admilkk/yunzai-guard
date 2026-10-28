@@ -53,6 +53,7 @@ export function workPaths(pluginDir) {
         download: path.join(base, "download"),
         staged: path.join(base, "staged"),
         previous: path.join(base, "previous"),
+        hot: path.join(base, "hot"),
     };
 }
 /** 下载文件并边写边计算 SHA-256，超过上限立即中止。 */
@@ -90,11 +91,11 @@ async function download(url, file, version, limit) {
     return hash.digest("hex");
 }
 /** 调用系统 tar 解压；Windows 使用系统目录下的 bsdtar，避免依赖 PATH。 */
-function extract(archive, destination) {
+export function extract(archive, destination) {
     const executable = process.platform === "win32"
         ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
         : "tar";
-    const flags = archive.endsWith(".zip") ? "-xf" : "-xzf";
+    const flags = archive.endsWith(".zip") || archive.endsWith(".tar") ? "-xf" : "-xzf";
     return new Promise((resolve, reject) => {
         const child = spawn(executable, [flags, archive, "-C", destination], {
             stdio: ["ignore", "ignore", "pipe"],
@@ -143,6 +144,20 @@ function assertPackage(directory, version) {
     for (const required of ["index.js", "dist/launcher.js", "dist/entry/plugin.js", "dist/cli.js"])
         if (!fs.existsSync(path.join(directory, required)))
             throw new Error(M.update.packageInvalid(required));
+}
+/** 把 Git 提交导出到暂存目录，用于比较组件与热替换；不改动工作区。 */
+export async function stageCommit(pluginDir, commit, version, exportCommit) {
+    const paths = workPaths(pluginDir);
+    clearWork(pluginDir);
+    fs.mkdirSync(paths.download, { recursive: true });
+    const directory = path.join(paths.staged, packageName);
+    fs.mkdirSync(directory, { recursive: true });
+    const archive = path.join(paths.download, "commit.tar");
+    await exportCommit(commit, archive);
+    await extract(archive, directory);
+    assertContained(paths.staged);
+    assertPackage(directory, version);
+    return { version, directory, commit };
 }
 /** 下载、校验并解压发布包到暂存目录；不触碰正在运行的文件。 */
 export async function stageRelease(release, pluginDir, currentVersion) {
@@ -237,13 +252,31 @@ export function swapPackage(staged, pluginDir) {
         },
     };
 }
+/**
+ * 热更新前把当前发布文件完整复制到 previous 目录，供之后整体还原。
+ * 热更新只改动变化的文件，不能像整体替换那样把旧目录直接移过去。
+ */
+export function snapshotPrevious(pluginDir) {
+    const paths = workPaths(pluginDir);
+    fs.rmSync(paths.previous, { recursive: true, force: true });
+    fs.mkdirSync(paths.previous, { recursive: true });
+    for (const name of managedItems) {
+        const current = path.join(pluginDir, name);
+        if (fs.existsSync(current))
+            fs.cpSync(current, path.join(paths.previous, name), {
+                recursive: true,
+                verbatimSymlinks: true,
+            });
+    }
+}
 /** 清理更新工作目录。 */
 export function clearWork(pluginDir) {
     const paths = workPaths(pluginDir);
     fs.rmSync(paths.staged, { recursive: true, force: true });
     fs.rmSync(paths.download, { recursive: true, force: true });
+    fs.rmSync(paths.hot, { recursive: true, force: true });
 }
 //# sourceMappingURL=install.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "../protect/objects.js"
-__guardRegisterExports("update/install.ts", { assetName, checksumFor, workPaths, stageRelease, swapPackage, clearWork })
+__guardRegisterExports("update/install.ts", { assetName, checksumFor, workPaths, extract, stageCommit, stageRelease, swapPackage, snapshotPrevious, clearWork })

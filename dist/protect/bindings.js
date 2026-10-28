@@ -14,7 +14,7 @@ export function assertNoInternals() {
 export function installBindingGuard(seal, deny) {
     assertNoInternals();
     // 原始句柄与内部绑定绕过公开模块；仅保留常见查询入口。
-    seal(owner, "binding", function (input) {
+    seal(owner, "binding", (input) => {
         const name = string(input);
         if (!arrayIncludes(queries, name))
             return deny("binding-access", name);

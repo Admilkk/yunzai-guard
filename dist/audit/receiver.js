@@ -30,8 +30,7 @@ class Prefix {
         }
         else
             this.completed.splice(at, 0, { first: sequence, last: sequence });
-        while (this.completed[at + 1] &&
-            this.completed[at].last >= this.completed[at + 1].first - 1) {
+        while (this.completed[at + 1] && this.completed[at].last >= this.completed[at + 1].first - 1) {
             this.completed[at].last = Math.max(this.completed[at].last, this.completed[at + 1].last);
             this.completed.splice(at + 1, 1);
         }

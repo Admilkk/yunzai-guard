@@ -118,7 +118,7 @@ function queryStatus(identity) {
         };
         socket.setTimeout(timeoutMs, () => finish(new Error(M.host.previousTimeout)));
         socket.on("error", error => finish(error));
-        socket.on("connect", () => socket.write(JSON.stringify({ token: identity.token, command: "status" }) + "\n"));
+        socket.on("connect", () => socket.write(`${JSON.stringify({ token: identity.token, command: "status" })}\n`));
         socket.on("data", bytes => {
             input += bytes.toString("utf8");
             if (Buffer.byteLength(input) > 65536)

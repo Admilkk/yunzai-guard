@@ -2,8 +2,12 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { execFile } from "node:child_process";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { powershell } from "./platform.js";
 const maxProcesses = 512;
+/** Linux 的 /proc 时钟频率与页大小；USER_HZ 固定为 100，常见页大小为 4KB。 */
+const clockTicks = 100;
+const pageSize = 4096;
 const maxRemote = 256;
 /** 判断地址是否为回环地址。 */
 export function isLoopback(address) {
@@ -95,6 +99,8 @@ function sampleLinux(root) {
         writeBytes: 0,
         remote: [],
         loopback: 0,
+        rssBytes: 0,
+        cpuSeconds: 0,
     };
     const sockets = new Set();
     const namespaces = new Map();
@@ -103,6 +109,13 @@ function sampleLinux(root) {
         if (io === undefined && !fs.existsSync(`/proc/${pid}`))
             continue;
         usage.processes++;
+        const stat = readText(`/proc/${pid}/stat`);
+        const close = stat?.lastIndexOf(")") ?? -1;
+        if (stat && close >= 0) {
+            const fields = stat.slice(close + 2).split(" ");
+            usage.cpuSeconds += ((Number(fields[11]) || 0) + (Number(fields[12]) || 0)) / clockTicks;
+            usage.rssBytes += (Number(fields[21]) || 0) * pageSize;
+        }
         usage.readBytes += Number(/^rchar:\s*(\d+)/m.exec(io ?? "")?.[1] ?? 0);
         usage.writeBytes += Number(/^wchar:\s*(\d+)/m.exec(io ?? "")?.[1] ?? 0);
         let owned = false;
@@ -153,13 +166,13 @@ async function sampleWindows(root) {
     const script = [
         "$ErrorActionPreference='Stop'",
         `$root=${root}`,
-        "$all=@(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,ReadTransferCount,WriteTransferCount)",
+        "$all=@(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,ReadTransferCount,WriteTransferCount,WorkingSetSize,KernelModeTime,UserModeTime)",
         "if(-not ($all|Where-Object {$_.ProcessId -eq $root})){'null';exit 0}",
         "$set=@{};$set[[int]$root]=$true",
         "do{$added=$false;foreach($p in $all){if($set.Count -ge 512){break};if($set.ContainsKey([int]$p.ParentProcessId) -and -not $set.ContainsKey([int]$p.ProcessId) -and $p.ProcessId -ne $p.ParentProcessId){$set[[int]$p.ProcessId]=$true;$added=$true}}}while($added)",
         "$tree=@($all|Where-Object {$set.ContainsKey([int]$_.ProcessId)})",
         "$conn=@(Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue|Where-Object {$set.ContainsKey([int]$_.OwningProcess)}|ForEach-Object {[string]$_.RemoteAddress+'|'+[string]$_.RemotePort})",
-        "[pscustomobject]@{processes=$tree.Count;read=[double](($tree|Measure-Object ReadTransferCount -Sum).Sum);write=[double](($tree|Measure-Object WriteTransferCount -Sum).Sum);connections=$conn}|ConvertTo-Json -Compress",
+        "[pscustomobject]@{processes=$tree.Count;read=[double](($tree|Measure-Object ReadTransferCount -Sum).Sum);write=[double](($tree|Measure-Object WriteTransferCount -Sum).Sum);rss=[double](($tree|Measure-Object WorkingSetSize -Sum).Sum);cpu=[double](($tree|Measure-Object KernelModeTime -Sum).Sum)+[double](($tree|Measure-Object UserModeTime -Sum).Sum);connections=$conn}|ConvertTo-Json -Compress",
     ].join(";");
     const output = await powershell(script, 20000);
     const value = JSON.parse(output);
@@ -172,6 +185,9 @@ async function sampleWindows(root) {
         writeBytes: Number(value.write) || 0,
         remote: [],
         loopback: 0,
+        rssBytes: Number(value.rss) || 0,
+        // Win32_Process 的 CPU 时间单位为 100 纳秒。
+        cpuSeconds: (Number(value.cpu) || 0) / 1e7,
     };
     const list = Array.isArray(value.connections)
         ? value.connections
@@ -195,6 +211,16 @@ async function sampleWindows(root) {
 function run(file, args) {
     return new Promise(resolve => execFile(file, args, { timeout: 10000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => resolve(error && !stdout ? "" : String(stdout))));
 }
+/** 解析 ps 的累计 CPU 时间，形如 `1:02.50` 或 `1-02:03:04`。 */
+export function cpuTime(value) {
+    if (!value)
+        return 0;
+    const [days, rest] = value.includes("-") ? value.split("-") : ["0", value];
+    const parts = (rest ?? "").split(":").map(Number);
+    if (parts.some(Number.isNaN))
+        return 0;
+    return parts.reduce((total, part) => total * 60 + part, 0) + (Number(days) || 0) * 86400;
+}
 /** 拆分 lsof 输出中的“地址:端口”，IPv6 带方括号。 */
 function splitEndpoint(value) {
     const at = value.lastIndexOf(":");
@@ -210,16 +236,20 @@ function splitEndpoint(value) {
  */
 async function sampleDarwin(root) {
     const children = new Map();
+    const meters = new Map();
     let found = false;
-    for (const line of (await run("/bin/ps", ["-A", "-o", "pid=,ppid="])).split("\n")) {
-        const [pid, parent] = line.trim().split(/\s+/).map(Number);
-        if (!pid || parent === undefined || Number.isNaN(parent))
+    for (const line of (await run("/bin/ps", ["-A", "-o", "pid=,ppid=,rss=,time="])).split("\n")) {
+        const [pid, parent, rss, time] = line.trim().split(/\s+/);
+        const id = Number(pid);
+        const parentId = Number(parent);
+        if (!id || Number.isNaN(parentId))
             continue;
-        if (pid === root)
+        meters.set(id, { rss: (Number(rss) || 0) * 1024, cpu: cpuTime(time) });
+        if (id === root)
             found = true;
-        const list = children.get(parent) ?? [];
-        list.push(pid);
-        children.set(parent, list);
+        const list = children.get(parentId) ?? [];
+        list.push(id);
+        children.set(parentId, list);
     }
     if (!found)
         return undefined;
@@ -233,6 +263,8 @@ async function sampleDarwin(root) {
         writeBytes: 0,
         remote: [],
         loopback: 0,
+        rssBytes: tree.reduce((sum, pid) => sum + (meters.get(pid)?.rss ?? 0), 0),
+        cpuSeconds: tree.reduce((sum, pid) => sum + (meters.get(pid)?.cpu ?? 0), 0),
     };
     const output = await run("/usr/sbin/lsof", [
         "-nP",
@@ -274,14 +306,16 @@ export async function sampleUsage(root) {
 export class UsageWatch {
     #root;
     #onConnection;
+    #onSample;
     #seen = new Set();
     #timer;
     #running = false;
     #latest;
     /** 创建采样器；回调异常不影响后续采样。 */
-    constructor(root, onConnection) {
+    constructor(root, onConnection, onSample) {
         this.#root = root;
         this.#onConnection = onConnection;
+        this.#onSample = onSample;
     }
     /** 最近一次成功的采样。 */
     get latest() {
@@ -305,6 +339,12 @@ export class UsageWatch {
             if (!usage)
                 return this.#latest;
             this.#latest = usage;
+            try {
+                this.#onSample?.(usage);
+            }
+            catch {
+                // 历史记录失败不影响采样。
+            }
             for (const remote of usage.remote) {
                 if (this.#seen.has(remote) || this.#seen.size >= maxRemote)
                     continue;
@@ -332,7 +372,48 @@ export class UsageWatch {
         this.#timer = undefined;
     }
 }
+const maxPoints = 360;
+/** 业务进程树的资源历史：由累计计数换算出速率，保留最近一段时间的曲线。 */
+export class ResourceHistory {
+    #points = [];
+    #previous;
+    #hostLag = monitorEventLoopDelay({ resolution: 20 });
+    /** 开始统计宿主事件循环延迟。 */
+    constructor() {
+        this.#hostLag.enable();
+    }
+    /** 记录一次采样；业务进程重启后累计值回退时，速率记为 0。 */
+    push(usage) {
+        const previous = this.#previous;
+        this.#previous = usage;
+        const seconds = previous ? (usage.sampledAt - previous.sampledAt) / 1000 : 0;
+        const rate = (now, before) => seconds > 0 && before !== undefined && now >= before ? (now - before) / seconds : 0;
+        const lag = this.#hostLag.percentile(99) / 1e6;
+        this.#hostLag.reset();
+        this.#points.push({
+            time: usage.sampledAt,
+            processes: usage.processes,
+            rssBytes: usage.rssBytes,
+            cpu: Math.round(rate(usage.cpuSeconds, previous?.cpuSeconds) * 1000) / 1000,
+            readBytesPerSecond: Math.round(rate(usage.readBytes, previous?.readBytes)),
+            writeBytesPerSecond: Math.round(rate(usage.writeBytes, previous?.writeBytes)),
+            connections: usage.remote.length + usage.loopback,
+            hostRssBytes: process.memoryUsage().rss,
+            hostLagMs: Number.isFinite(lag) ? Math.round(lag * 10) / 10 : 0,
+        });
+        if (this.#points.length > maxPoints)
+            this.#points.shift();
+    }
+    /** 业务进程重建后断开速率计算。 */
+    restart() {
+        this.#previous = undefined;
+    }
+    /** 历史采样点，旧的在前。 */
+    points() {
+        return [...this.#points];
+    }
+}
 //# sourceMappingURL=usage.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "../protect/objects.js"
-__guardRegisterExports("host/usage.ts", { isLoopback, endpoint, decodeProcAddress, parseProcTcp, sampleUsage, UsageWatch })
+__guardRegisterExports("host/usage.ts", { isLoopback, endpoint, decodeProcAddress, parseProcTcp, cpuTime, sampleUsage, UsageWatch, ResourceHistory })

@@ -30,6 +30,7 @@ import { M } from "../shared/messages.js";
 // 仅 Yunzai 主线程执行宿主握手及核心生命周期桥接。
 if (isMainThread) {
     let outputClosed = false;
+    // eslint-disable-next-line prefer-const -- 先被回调引用，之后才赋值
     let requestOutputStop;
     for (const stream of [process.stdout, process.stderr])
         stream.on("error", (error) => {
@@ -138,6 +139,7 @@ if (isMainThread) {
         run: (name, callback) => storage.run(name, callback),
         sandboxDispatch: (event) => sandboxDispatcher.dispatch(event),
         requestRollback: () => bus.command({ type: "rollback-request" }),
+        requestLoginLink: () => bus.command({ type: "login-link-request" }),
         requestUpdate: (force) => bus.command({ type: force ? "update-force-request" : "update-request" }),
     });
     registerModule("runtime-context", {

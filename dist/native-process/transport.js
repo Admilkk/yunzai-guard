@@ -141,7 +141,7 @@ export class Transport {
                 command,
                 ...extra,
             };
-            const bytes = Buffer.from(JSON.stringify(frame) + "\n");
+            const bytes = Buffer.from(`${JSON.stringify(frame)}\n`);
             if (bytes.length > nativeIdentityLimits.frameBytes)
                 fail("FRAME_OR_SCOPE_LIMIT");
             return new Promise((resolve, reject) => {

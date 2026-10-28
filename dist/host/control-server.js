@@ -57,7 +57,7 @@ export function createControlServer({ token, handle, after }) {
                 const command = message.command;
                 if (typeof command !== "string" || !controlCommands.includes(command))
                     throw new Error(M.host.commandUnknown);
-                socket.end(JSON.stringify(handle(command)) + "\n");
+                socket.end(`${JSON.stringify(handle(command))}\n`);
                 after?.(command);
             }
             catch {

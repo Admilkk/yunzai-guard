@@ -36,7 +36,7 @@ export class NativeMediaSourceHost {
         if (requestId === undefined)
             return undefined;
         const id = mediaRequestId(requestId);
-        if (this.options.isActiveRequest(id) !== true) {
+        if (!this.options.isActiveRequest(id)) {
             this.releaseRequest(id);
             return mediaFail("MEDIA_SOURCE_REQUEST", "Adapter request is missing or expired");
         }
@@ -64,7 +64,7 @@ export class NativeMediaSourceHost {
         for (const id of this.requests) {
             let active = false;
             try {
-                active = this.options.isActiveRequest(id) === true;
+                active = this.options.isActiveRequest(id);
             }
             catch {
                 /* 查询失败时撤销能力。 */
@@ -142,7 +142,7 @@ export class NativeMediaSourceHost {
     }
     /** 调用方须先登记待处理的适配器调用，再绑定并发送。 */
     bindRequest(requestId, args) {
-        const id = this.active(requestId);
+        const id = this.active(mediaRequestId(requestId));
         if (this.requests.has(id))
             return mediaFail("MEDIA_SOURCE_REPLAY", "Adapter request already has source bindings");
         const tags = this.tags(args);
@@ -171,9 +171,9 @@ export class NativeMediaSourceHost {
         }
         this.requests.add(id);
     }
-    /** 响应沙箱的分块读取请求。 */
+    /** 响应已绑定适配器请求的分块读取，缺少请求标识时拒绝访问未绑定令牌。 */
     receive(requestId, method, args) {
-        const id = this.active(requestId);
+        const id = this.active(mediaRequestId(requestId));
         if (method !== "read")
             return mediaFail("MEDIA_SOURCE_METHOD", "Unknown media source service");
         const input = mediaObject(mediaArgument(args), ["handle", "offset"]);

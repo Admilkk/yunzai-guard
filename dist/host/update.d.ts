@@ -1,7 +1,10 @@
 import type { GuardSettings } from "../shared/types.js";
 import { swapPackage, type StagedRelease } from "../update/install.js";
+import { type UpdateLevel } from "../update/plan.js";
 type UpdateSettings = GuardSettings["update"];
-type Phase = "idle" | "downloading" | "installing" | "restarting" | "failed";
+type Phase = "idle" | "downloading" | "installing" | "restarting" | "pending" | "failed";
+/** 更新完成的方式：热替换、重启业务进程、宿主重新启动，或宿主仍需手动重启。 */
+export type FinishMode = "hot" | "worker" | "relaunch" | "host-pending";
 export interface UpdateSummary {
     version: string;
     name: string;
@@ -26,9 +29,20 @@ export interface UpdateState {
     phase: Phase;
     message?: string;
     hostRestartPending: boolean;
-    /** 上一版本仍保留在 .update/previous 时可以还原。 */
+    /** 上一版本的发布文件或 Git 提交仍保留时可以还原。 */
     rollback?: {
         version: string;
+    };
+    /** 最近一次更新的级别与改动文件数。 */
+    plan?: {
+        level: UpdateLevel;
+        changed: number;
+    };
+    /** 控制台已更新、等待重启业务进程生效的更新。 */
+    pending?: {
+        version: string;
+        since: number;
+        rollback: boolean;
     };
     lastResult?: {
         ok: boolean;
@@ -45,19 +59,31 @@ interface UpdateOptions {
     settings: () => UpdateSettings;
     /** 立即送达主人；业务进程未上线时返回 false，消息留待上线后补发。 */
     send: (text: string) => boolean;
-    /** 把已暂存的发布包交给生命周期队列。 */
-    install: (staged: StagedRelease, from: string, rollback?: boolean) => void;
+    /** 把已暂存的发布包交给生命周期队列；immediate 为真时业务侧更新不等待空闲。 */
+    install: (staged: StagedRelease, from: string, rollback: boolean, immediate: boolean) => void;
+    /** 取消等待中的更新：控制台回到当前文件。 */
+    cancelPending: () => Promise<void>;
     record: (type: string, details?: Record<string, unknown>) => void;
 }
+/**
+ * 判断等待中的业务侧更新是否到了执行时机：
+ * now 立即；window 只在维护时段；idle 等业务连续空闲，超过最长等待后直接执行。
+ */
+export declare function pendingDue(input: {
+    since: number;
+    settings: UpdateSettings;
+    lastActivityAt: number;
+    now: number;
+}): boolean;
 /**
  * 版本检查与更新编排：周期查询公开发布、通知主人、暂存发布包。
  * 文件替换由宿主生命周期队列在业务进程停止后执行。
  */
 export declare class UpdateService {
     #private;
-    /** 载入上次保存的检查结果和待发通知。 */
+    /** 载入持久化检查结果、待发通知与回滚目标，并解析上一版本。 */
     constructor(options: UpdateOptions);
-    /** 当前状态快照，供面板、命令与 CLI 展示。 */
+    /** 读取轻量元数据与已解析的回滚版本，供面板、命令与 CLI 展示；不启动子进程。 */
     state(): UpdateState;
     /** 开始周期检查；首次检查稍后进行，避免与启动抢占资源。 */
     start(): void;
@@ -70,16 +96,18 @@ export declare class UpdateService {
     /** 检查最新版本；并发调用共用同一次请求。manual 为真时忽略 ETag 并无视关闭开关。 */
     check(manual?: boolean): Promise<UpdateState>;
     /**
-     * 暂存最新发布并交给生命周期队列。force 允许重装当前版本、跨主版本更新，
-     * 并跳过版本比较。返回给调用方的文本即用户可见的结果。
+     * 暂存最新发布、比较组件得出更新级别，再交给生命周期队列。force 允许重装当前版本或跨主版本升级，
+     * 低于当前版本的发布仍拒绝；必须成功检查发布信息，不以旧缓存替代失败响应。
+     * immediate 为真时，需要重启业务进程的更新马上执行，不等待空闲。
+     * 已有等待生效的更新时，再次请求更新即视为要求马上生效。
      */
-    apply(force: boolean): Promise<{
+    apply(force: boolean, immediate?: boolean): Promise<{
         ok: boolean;
         message: string;
     }>;
     /**
-     * 还原到上一版本：把保留的文件当作暂存包交给生命周期队列。
-     * 还原后宿主与业务进程都必须用旧代码重新启动，所以不会在旧宿主里直接拉起业务进程。
+     * 还原到上一版本：同样按组件比较，能热替换时不重启。
+     * 有等待生效的更新时，还原即取消这次更新，控制台回到当前文件。
      */
     rollback(): Promise<{
         ok: boolean;
@@ -87,13 +115,44 @@ export declare class UpdateService {
     }>;
     /** 由生命周期队列在业务进程停止后调用，执行文件替换。 */
     swap(staged: StagedRelease): ReturnType<typeof swapPackage>;
-    /** 更新结束：记录结果并通知主人；defer 为真时留待新宿主上线后发送。 */
+    /** 业务侧更新改为等待：控制台已换成新版本，业务进程择时重启。 */
+    defer(staged: StagedRelease, from: string, rollback: boolean): void;
+    /** 等待中的更新；用于判断是否到了执行时机。 */
+    get pending(): {
+        version: string;
+        since: number;
+    } | undefined;
+    /** 立即执行等待中的更新：重启业务进程使其生效。 */
+    applyPending(): Promise<{
+        ok: boolean;
+        message: string;
+    }>;
+    /** 宿主重新启动前记录待确认的更新，新宿主上线后据此确认成功或还原。 */
+    markVerify(value: {
+        from: string;
+        to: string;
+        rollback: boolean;
+        revert?: boolean;
+    }): void;
+    /** 读取待确认的更新并累加启动次数；没有时返回 undefined。 */
+    takeVerify(): {
+        from: string;
+        to: string;
+        rollback: boolean;
+        revert: boolean;
+        attempts: number;
+    } | undefined;
+    /** 清除待确认记录。 */
+    clearVerify(): void;
+    /** 新宿主上的更新未能上线：把保留的上一版本暂存起来用于还原。 */
+    stageRevert(version: string): Promise<StagedRelease>;
+    /** 更新结束：记录结果并通知主人。 */
     finish(result: {
         ok: boolean;
         from: string;
         to: string;
         message?: string;
-        relaunch: boolean;
+        mode: FinishMode;
         rollback?: boolean;
     }): void;
 }

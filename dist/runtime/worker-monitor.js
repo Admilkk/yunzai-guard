@@ -4,14 +4,45 @@ import { syncBuiltinESMExports } from "node:module";
 import { monitoredExecArgv } from "./launch.js";
 import { evaluatePolicy, GuardDeniedError } from "../config/policy.js";
 import { runtimeEventDecision, runtimeFailureDecision } from "./policy.js";
-import { arrayIsArray, arrayMap, arrayEvery, arrayPush, objectDefine, stringSlice, } from "../protect/intrinsics.js";
+import { arrayIsArray, arrayEach, arrayPush, objectDefine, objectHasOwn, reflectGet, stringSlice, } from "../protect/intrinsics.js";
 import { auditProtocol, parseAuditFrame, } from "../audit/protocol.js";
 export const workerMetadataKey = "yunzai.guard.runtime.bootstrap.v1";
 export const runtimeKey = Symbol.for("yunzai.guard.runtime.v1");
 const construct = Reflect.construct;
+const toObject = Object;
 const Channel = MessageChannel;
 const getData = getEnvironmentData;
 const setData = setEnvironmentData;
+const workerOptionKeys = [
+    "argv",
+    "env",
+    "eval",
+    "execArgv",
+    "name",
+    "resourceLimits",
+    "stdin",
+    "stdout",
+    "stderr",
+    "trackUnmanagedFds",
+    "transferList",
+    "workerData",
+];
+/** 固定 Worker 使用的选项值，保留继承与不可枚举属性，避免检查后再次触发 getter。 */
+function snapshotWorkerOptions(input) {
+    const source = input === undefined ? undefined : toObject(input);
+    const result = { __proto__: null, ...source };
+    if (source)
+        arrayEach(workerOptionKeys, key => {
+            if (!objectHasOwn(result, key))
+                objectDefine(result, key, {
+                    value: reflectGet(source, key),
+                    enumerable: true,
+                    writable: true,
+                    configurable: true,
+                });
+        });
+    return result;
+}
 /** 通过 environmentData 传递专用端口，不修改业务 workerData/parentPort。 */
 export function installWorkerMonitor(options) {
     const deliver = (event) => {
@@ -41,19 +72,18 @@ export function installWorkerMonitor(options) {
         /** 构造 Worker 前注入运行时元数据与审计端口。 */
         construct(target, args, newTarget) {
             const current = args[1];
-            if (current !== undefined &&
-                (current === null || typeof current !== "object" || arrayIsArray(current)))
+            if (current === null)
                 return construct(target, args, newTarget);
-            const userOptions = {
-                __proto__: null,
-                ...current,
-            };
-            const supplied = userOptions.execArgv === undefined ? process.execArgv : userOptions.execArgv;
+            const userOptions = snapshotWorkerOptions(current);
+            // Node 将所有假值视为继承参数；这些有效输入也必须经过策略与预加载注入。
+            const supplied = userOptions.execArgv || process.execArgv;
             if (!arrayIsArray(supplied))
-                return construct(target, [args[0], { ...userOptions, execArgv: supplied }], newTarget);
-            const argv = arrayMap(supplied, value => value);
-            if (!arrayEvery(argv, value => typeof value === "string"))
-                return construct(target, [args[0], { ...userOptions, execArgv: argv }], newTarget);
+                return construct(target, [args[0], { __proto__: null, ...userOptions, execArgv: supplied }], newTarget);
+            // 原生 Worker 也接受可转成字符串的参数，固定转换结果后再注入监控。
+            const argv = [];
+            const length = supplied.length;
+            for (let index = 0; index < length; index++)
+                arrayPush(argv, `${supplied[index]}`);
             const originPlugin = options.originPlugin() ?? options.identity.originPlugin;
             const runtime = {
                 id: randomUUID(),
@@ -87,7 +117,12 @@ export function installWorkerMonitor(options) {
             try {
                 const transferList = [...(userOptions.transferList ?? [])];
                 arrayPush(transferList, channel.port2);
-                const workerOptions = { ...userOptions, execArgv: monitoredExecArgv(argv), transferList };
+                const workerOptions = {
+                    __proto__: null,
+                    ...userOptions,
+                    execArgv: monitoredExecArgv(argv),
+                    transferList,
+                };
                 setData(workerMetadataKey, {
                     version: 1,
                     identity: runtime,

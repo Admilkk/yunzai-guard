@@ -164,7 +164,7 @@ export function attachNativeTransport(child, stream, failure) {
     };
     const decoder = new BoundedJsonLines(value => child.emit("message", value), abort);
     Object.defineProperty(child, "connected", { configurable: true, get: () => connected });
-    child.send = ((message, ...extra) => {
+    child.send = (message, ...extra) => {
         const callback = extra.find(value => typeof value === "function");
         try {
             if (extra.length > 1 || (extra[0] !== undefined && typeof extra[0] !== "function"))
@@ -189,7 +189,7 @@ export function attachNativeTransport(child, stream, failure) {
             abort(value);
             return false;
         }
-    });
+    };
     child.disconnect = () => stream.destroy();
     stream.on("data", (chunk) => decoder.write(chunk));
     stream.once("end", () => {

@@ -40,12 +40,12 @@ export function installDebugGuard(seal, deny) {
     block(process, "_debugProcess");
     const rawKill = objectDescriptor(process, "_kill")?.value;
     if (typeof rawKill === "function")
-        seal(process, "_kill", function (pid, signal) {
+        seal(process, "_kill", (pid, signal) => {
             if (debugSignal !== undefined && signal === debugSignal)
                 return deny("debug-access", "SIGUSR1");
             return apply(rawKill, process, [pid, signal]);
         }, "process._kill.guard");
-    seal(process, "kill", function (pid, signal) {
+    seal(process, "kill", (pid, signal) => {
         if (signal === "SIGUSR1" || (debugSignal !== undefined && signal === debugSignal))
             return deny("debug-access", "SIGUSR1");
         return apply(signalProcess, process, [pid, signal]);

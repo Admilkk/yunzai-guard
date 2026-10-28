@@ -32,6 +32,7 @@ export class YunzaiGuard extends plugin {
             rule: [
                 { reg: "^#?guard(强制)?更新$", fnc: "update", permission: "master" },
                 { reg: "^#?guard(回滚|还原)$", fnc: "rollback", permission: "master" },
+                { reg: "^#?guard(登录|登陆|登入|面板)$", fnc: "login", permission: "master" },
             ],
         });
     }
@@ -40,7 +41,10 @@ export class YunzaiGuard extends plugin {
         const context = globalThis[contextKey];
         return (await context?.sandboxDispatch?.(event)) ? "return" : false;
     }
-    /** 主人的 #guard更新 / #guard强制更新：转交宿主执行，结果由宿主通知主人。 */
+    /**
+     * 主人的 #guard更新 / #guard强制更新：转交宿主执行，结果由宿主通知主人。
+     * 需要重启业务进程的更新默认等空闲时生效；有等待生效的更新时再次发送即马上执行。
+     */
     async update() {
         const context = globalThis[contextKey];
         if (!context?.requestUpdate) {
@@ -61,6 +65,17 @@ export class YunzaiGuard extends plugin {
         }
         context.requestRollback();
         await this.reply(M.entry.rollbackRequested);
+        return true;
+    }
+    /** 主人的 #guard登录：宿主生成一次性链接并私聊主人，群聊里只提示已发送。 */
+    async login() {
+        const context = globalThis[contextKey];
+        if (!context?.requestLoginLink) {
+            await this.reply(M.entry.loginUnavailable);
+            return true;
+        }
+        context.requestLoginLink();
+        await this.reply(M.entry.loginSent);
         return true;
     }
     /** 插件初始化：检查平台与配置，并在核心就绪后交接给受管宿主。 */

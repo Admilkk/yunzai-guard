@@ -52,7 +52,7 @@ export function createCanonicalObserver(capabilityRequested) {
                 Number(value.acceptedRoot) > 1 ||
                 Number(value.acceptedRoot) > Number(value.offered) ||
                 (!capabilityRequested &&
-                    (value.disabled !== true || canonicalCounterNames.some(key => value[key] !== 0))) ||
+                    (!value.disabled || canonicalCounterNames.some(key => value[key] !== 0))) ||
                 (stage === "cleanup" && typeof cleanupConfirmed !== "boolean") ||
                 (stage !== "cleanup" && cleanupConfirmed !== undefined) ||
                 state.reports[stage])

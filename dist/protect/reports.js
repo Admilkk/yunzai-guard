@@ -57,7 +57,7 @@ export function installReportGuard(options) {
             set,
         });
     }
-    options.seal(report, "writeReport", function (...args) {
+    options.seal(report, "writeReport", (...args) => {
         const first = args[0];
         if (first !== undefined && typeof first !== "string" && (!first || typeof first !== "object"))
             return apply(write, report, args);

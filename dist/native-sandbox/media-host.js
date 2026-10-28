@@ -29,7 +29,7 @@ export class NativeMediaHost {
         if (this.closed)
             return mediaFail("MEDIA_CLOSED", "Media session is closed");
         const id = mediaRequestId(requestId);
-        if (this.options.isActiveRequest(id) !== true) {
+        if (!this.options.isActiveRequest(id)) {
             this.releaseRequest(id);
             return mediaFail("MEDIA_EXPIRED_REQUEST", "Reply capability is missing or expired");
         }
@@ -64,7 +64,7 @@ export class NativeMediaHost {
         for (const id of this.counts.keys()) {
             let active = false;
             try {
-                active = this.options.isActiveRequest(id) === true;
+                active = this.options.isActiveRequest(id);
             }
             catch {
                 /* 查询失败时撤销能力。 */

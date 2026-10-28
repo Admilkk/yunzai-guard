@@ -53,7 +53,7 @@ function invoke(...args) {
         return fail();
     actions.push({
         capability: capability,
-        text: text,
+        text,
         ...(file === undefined ? {} : { file }),
     });
     return true;

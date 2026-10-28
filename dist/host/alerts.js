@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 const kindLabels = {
     network: "网络访问",
     filesystem: "文件写入",
@@ -11,12 +11,16 @@ const kindLabels = {
     plugin: "插件调用",
     "self-protection": "改动 Guard 自身文件",
 };
+const maxStateIds = 500;
+const maxMutes = 50;
 const maxPending = 20;
 const maxHistoryBytes = 400 * 1024;
 const keepHistoryLines = 300;
 const batchSize = 100;
 const batchDelayMs = 5000;
 const maxQueued = 1000;
+/** 生成告警编号：时间加随机后缀，保证同一毫秒内也不重复。 */
+const newId = (time) => `${time.toString(36)}${randomBytes(3).toString("hex")}`;
 /** 截断过长文本。 */
 const clip = (value, length = 200) => String(value ?? "").slice(0, length);
 /**
@@ -26,6 +30,8 @@ const clip = (value, length = 200) => String(value ?? "").slice(0, length);
 export class AlertService {
     #options;
     #file;
+    #stateFile;
+    #state;
     #pending = [];
     #queued = [];
     #throttle = { windowStart: 0, sent: 0, suppressed: new Map() };
@@ -36,6 +42,83 @@ export class AlertService {
     constructor(options) {
         this.#options = options;
         this.#file = path.join(options.stateDir, "alerts.jsonl");
+        this.#stateFile = path.join(options.stateDir, "alert-state.json");
+        this.#state = this.#loadState();
+    }
+    /** 已读标记与静默条件；顺带清掉已过期的静默。 */
+    state() {
+        const now = Date.now();
+        if (this.#state.mutes.some(item => item.until <= now)) {
+            this.#state = { ...this.#state, mutes: this.#state.mutes.filter(item => item.until > now) };
+            this.#saveState();
+        }
+        return { ...this.#state, read: [...this.#state.read], mutes: [...this.#state.mutes] };
+    }
+    /** 标记已读：不带编号时全部标为已读。 */
+    acknowledge(ids) {
+        this.#state =
+            ids === undefined
+                ? { ...this.#state, readBefore: Date.now(), read: [] }
+                : { ...this.#state, read: [...new Set([...this.#state.read, ...ids])].slice(-maxStateIds) };
+        this.#saveState();
+    }
+    /** 静默某个插件或某类告警一段时间；同一条件重复设置只刷新到期时间。 */
+    mute(target, minutes) {
+        const key = target.plugin ? `plugin:${target.plugin}` : `category:${target.category}`;
+        const item = {
+            key,
+            ...(target.plugin ? { plugin: target.plugin } : { category: target.category }),
+            until: Date.now() + minutes * 60_000,
+        };
+        this.#state = {
+            ...this.#state,
+            mutes: [...this.#state.mutes.filter(old => old.key !== key), item].slice(-maxMutes),
+        };
+        this.#saveState();
+        return item;
+    }
+    /** 取消静默。 */
+    unmute(key) {
+        this.#state = { ...this.#state, mutes: this.#state.mutes.filter(item => item.key !== key) };
+        this.#saveState();
+    }
+    /** 当前是否被静默。 */
+    #muted(category, plugin) {
+        const now = Date.now();
+        return this.#state.mutes.some(item => item.until > now &&
+            ((item.plugin !== undefined && item.plugin === plugin) || item.category === category));
+    }
+    #loadState() {
+        const empty = { readBefore: 0, read: [], mutes: [] };
+        try {
+            const value = JSON.parse(fs.readFileSync(this.#stateFile, "utf8"));
+            return {
+                readBefore: Number.isFinite(value.readBefore) ? Number(value.readBefore) : 0,
+                read: Array.isArray(value.read)
+                    ? value.read.filter((id) => typeof id === "string").slice(-maxStateIds)
+                    : [],
+                mutes: Array.isArray(value.mutes)
+                    ? value.mutes
+                        .filter(item => item &&
+                        typeof item.key === "string" &&
+                        Number.isFinite(item.until) &&
+                        (typeof item.plugin === "string" || typeof item.category === "string"))
+                        .slice(-maxMutes)
+                    : [],
+            };
+        }
+        catch {
+            return empty;
+        }
+    }
+    #saveState() {
+        try {
+            fs.mkdirSync(this.#options.stateDir, { recursive: true });
+            fs.writeFileSync(this.#stateFile, JSON.stringify(this.#state), { mode: 0o600 });
+        }
+        catch {
+            // 状态写入失败只影响重启后的已读与静默。
+        }
     }
     /** 当前告警配置。 */
     get #config() {
@@ -62,9 +145,13 @@ export class AlertService {
             this.#digest.unref();
             return;
         }
+        if (this.#muted(category, meta.plugin)) {
+            this.#append({ id: newId(now), time: now, category, title, text, ...meta, muted: true });
+            return;
+        }
         this.#keys.set(key, now);
         this.#throttle.sent++;
-        this.#deliver({ time: now, category, title, text, ...meta });
+        this.#deliver({ id: newId(now), time: now, category, title, text, ...meta });
     }
     /** 发出被合并的摘要。 */
     #flushDigest() {
@@ -80,6 +167,7 @@ export class AlertService {
             .map(([key, count]) => `${key.split(":").slice(1).join(":")} ×${count}`)
             .join("；");
         this.#deliver({
+            id: newId(Date.now()),
             time: Date.now(),
             category: "digest",
             title: "告警合并",
@@ -127,7 +215,7 @@ export class AlertService {
         while (this.#pending.length && this.#options.send(this.#pending[0]))
             this.#pending.shift();
     }
-    /** 最近的告警历史，新的在前。 */
+    /** 最近的告警历史，新的在前；跳过损坏或缺少展示字段的记录。 */
     history(limit = 100) {
         try {
             return fs
@@ -137,7 +225,20 @@ export class AlertService {
                 .slice(-limit)
                 .flatMap(line => {
                 try {
-                    return [JSON.parse(line)];
+                    const value = JSON.parse(line);
+                    if (!value ||
+                        typeof value !== "object" ||
+                        Array.isArray(value) ||
+                        typeof value.time !== "number" ||
+                        !Number.isFinite(value.time) ||
+                        typeof value.category !== "string" ||
+                        typeof value.title !== "string" ||
+                        typeof value.text !== "string" ||
+                        (value.plugin !== undefined && typeof value.plugin !== "string") ||
+                        (value.severity !== undefined && typeof value.severity !== "string") ||
+                        (value.id !== undefined && typeof value.id !== "string"))
+                        return [];
+                    return [{ ...value, id: value.id ?? `t${value.time}` }];
                 }
                 catch {
                     return [];

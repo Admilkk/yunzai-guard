@@ -10,6 +10,8 @@ export interface ExtraContext {
     controllers?: PanelControllers;
     audit?: (type: string, details?: Record<string, unknown>) => void;
     readBody: (request: http.IncomingMessage) => Promise<unknown>;
+    /** 写入前核对浏览器读取配置时的版本。 */
+    checkSettingsRevision: (body: unknown) => void;
     sendJson: (response: http.ServerResponse, status: number, body: unknown) => void;
     fail: (status: number, message: string) => Error;
 }

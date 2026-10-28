@@ -34,7 +34,7 @@ export function readSettingsDocument(stateDir, active) {
         if (error.code !== "ENOENT")
             throw error;
     }
-    if (text === undefined || !text.trim())
+    if (!text?.trim())
         return {
             path: file,
             document: fallback,

@@ -10,7 +10,7 @@ import { M } from "../shared/messages.js";
 export function writeBrokerSocketFrame(socket, message, callback) {
     if (socket.destroyed)
         throw new Error(M.runtime.auditPeerGone);
-    const line = JSON.stringify(copyAuditData(message)) + "\n";
+    const line = `${JSON.stringify(copyAuditData(message))}\n`;
     const bytes = Buffer.byteLength(line);
     if (bytes > 65536)
         throw new Error(M.runtime.auditReplyFrame);

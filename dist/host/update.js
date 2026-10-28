@@ -1,10 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
 import { M } from "../shared/messages.js";
+import { inWindow } from "../shared/update-window.js";
 import { compareVersions } from "../shared/version.js";
 import { fetchRelease, gitBranch, gitSync, releaseBranch, versionAt } from "../update/git.js";
 import { crossesMajor, fetchLatestRelease, isNewer } from "../update/release.js";
-import { clearWork, stageRelease, swapPackage, workPaths, } from "../update/install.js";
+import { clearWork, stageCommit, stageRelease, swapPackage, workPaths, } from "../update/install.js";
+import { exportCommit } from "../update/git.js";
+import { planUpdate, readManifest } from "../update/plan.js";
+/**
+ * 判断等待中的业务侧更新是否到了执行时机：
+ * now 立即；window 只在维护时段；idle 等业务连续空闲，超过最长等待后直接执行。
+ */
+export function pendingDue(input) {
+    const { since, settings, lastActivityAt, now } = input;
+    if (settings.workerRestart === "now")
+        return true;
+    if (settings.workerRestart === "window")
+        return inWindow(settings.window, new Date(now));
+    if (now - since >= settings.maxWaitHours * 3600_000)
+        return true;
+    return now - lastActivityAt >= settings.idleSeconds * 1000;
+}
 const firstCheckDelayMs = 15000;
 const maxPending = 5;
 const maxNoticeChars = 1500;
@@ -43,10 +60,16 @@ export class UpdateService {
     #message;
     #error;
     #hostRestartPending = false;
-    /** 载入上次保存的检查结果和待发通知。 */
+    /** 启动或提交更新时解析，避免状态查询反复执行 git show。 */
+    #previousVersion;
+    #plan;
+    #pending;
+    #verifyFile;
+    /** 载入持久化检查结果、待发通知与回滚目标，并解析上一版本。 */
     constructor(options) {
         this.#options = options;
         this.#file = path.join(options.stateDir, "update.json");
+        this.#verifyFile = path.join(options.stateDir, "update-verify.json");
         try {
             const value = JSON.parse(fs.readFileSync(this.#file, "utf8"));
             this.#stored = {
@@ -60,13 +83,19 @@ export class UpdateService {
                         .slice(-maxPending)
                     : [],
                 lastResult: value.lastResult,
+                previousCommit: typeof value.previousCommit === "string" &&
+                    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value.previousCommit)
+                    ? value.previousCommit
+                    : undefined,
             };
         }
         catch {
             // 首次运行或文件损坏时从空状态开始。
         }
+        if (this.#stored.previousCommit)
+            this.#previousVersion = versionAt(options.pluginDir, this.#stored.previousCommit);
     }
-    /** 当前状态快照，供面板、命令与 CLI 展示。 */
+    /** 读取轻量元数据与已解析的回滚版本，供面板、命令与 CLI 展示；不启动子进程。 */
     state() {
         const git = fs.existsSync(path.join(this.#options.pluginDir, ".git"));
         const branch = git ? gitBranch(this.#options.pluginDir) : undefined;
@@ -96,6 +125,12 @@ export class UpdateService {
             hostRestartPending: this.#hostRestartPending,
             rollback: this.#previous(),
             lastResult: this.#stored.lastResult,
+            plan: this.#plan && { level: this.#plan.level, changed: this.#plan.changed.length },
+            pending: this.#pending && {
+                version: this.#pending.staged.version,
+                since: this.#pending.since,
+                rollback: this.#pending.rollback,
+            },
         };
     }
     /** 开始周期检查；首次检查稍后进行，避免与启动抢占资源。 */
@@ -133,10 +168,14 @@ export class UpdateService {
         return this.#checking.then(() => this.state());
     }
     /**
-     * 暂存最新发布并交给生命周期队列。force 允许重装当前版本、跨主版本更新，
-     * 并跳过版本比较。返回给调用方的文本即用户可见的结果。
+     * 暂存最新发布、比较组件得出更新级别，再交给生命周期队列。force 允许重装当前版本或跨主版本升级，
+     * 低于当前版本的发布仍拒绝；必须成功检查发布信息，不以旧缓存替代失败响应。
+     * immediate 为真时，需要重启业务进程的更新马上执行，不等待空闲。
+     * 已有等待生效的更新时，再次请求更新即视为要求马上生效。
      */
-    async apply(force) {
+    async apply(force, immediate = false) {
+        if (this.#pending)
+            return this.applyPending();
         if (this.#busy)
             return { ok: false, message: M.update.busy };
         const state = this.state();
@@ -147,6 +186,8 @@ export class UpdateService {
             this.#phase = "downloading";
             this.#message = undefined;
             await this.check(true);
+            if (this.#error)
+                throw new Error(this.#error);
             const release = this.#stored.release;
             if (!release)
                 throw new Error(this.#error ?? M.update.fetchFailed("无发布信息"));
@@ -158,36 +199,56 @@ export class UpdateService {
                 this.#busy = false;
                 return {
                     ok: false,
-                    message: `已是最新版本 ${current}（强制更新可重新安装 ${release.version}）`,
+                    message: `已是最新版本 ${current}，如需重新安装请使用强制更新`,
                 };
             }
             if (!force && crossesMajor(release.version, current))
                 throw new Error(M.update.majorBlocked(current, release.version));
             this.#message = `正在下载 ${release.version}`;
+            const pluginDir = this.#options.pluginDir;
             const staged = state.installMode === "git"
-                ? {
-                    version: release.version,
-                    directory: this.#options.pluginDir,
-                    commit: (await fetchRelease(this.#options.pluginDir, release.version, force)).commit,
-                }
-                : await stageRelease(release, this.#options.pluginDir, current);
-            this.#phase = "installing";
-            this.#message = `正在安装 ${release.version}`;
-            this.#options.record("update-staged", { from: current, to: release.version, force });
-            this.notify(`【Yunzai Guard】开始更新：${current} → ${release.version}，业务进程将重建`);
-            this.#options.install(staged, current);
-            return { ok: true, message: `开始更新：${current} → ${release.version}，业务进程将重建` };
+                ? await stageCommit(pluginDir, (await fetchRelease(pluginDir, release.version, force)).commit, release.version, (commit, file) => exportCommit(pluginDir, commit, file))
+                : await stageRelease(release, pluginDir, current);
+            return this.#install(staged, current, false, immediate, force);
         }
         catch (error) {
             this.#fail(error.message);
             return { ok: false, message: error.message };
         }
     }
+    /** 比较组件、通知开始并排入生命周期队列。 */
+    #install(staged, current, rollback, immediate, force = false) {
+        const plan = planUpdate(readManifest(this.#options.pluginDir), readManifest(staged.directory));
+        this.#plan = plan;
+        const deferred = plan.level === "worker" && !immediate && this.#options.settings().workerRestart !== "now";
+        const effect = {
+            static: "控制台将直接更新，业务不中断",
+            core: "控制台将热替换，业务不中断",
+            worker: deferred
+                ? "控制台先行更新，业务侧更新将在空闲时生效，再次发送 #guard更新 可马上生效"
+                : "业务进程将重启一次",
+            host: "宿主将重新启动",
+        }[plan.level];
+        const verb = rollback ? "还原" : "更新";
+        this.#phase = "installing";
+        this.#message = `正在${verb}到 ${staged.version}`;
+        this.#options.record(rollback ? "update-rollback-staged" : "update-staged", {
+            from: current,
+            to: staged.version,
+            force,
+            level: plan.level,
+            changed: plan.changed.length,
+            reason: plan.reason,
+        });
+        const text = `开始${verb}：${current} → ${staged.version}，${effect}`;
+        this.notify(`【Yunzai Guard】${text}`);
+        this.#options.install({ ...staged, plan }, current, rollback, immediate);
+        return { ok: true, message: text };
+    }
     /** 读取保留的上一版本号；没有或不完整时返回 undefined。 */
     #previous() {
-        const commit = this.#stored.previousCommit;
         if (fs.existsSync(path.join(this.#options.pluginDir, ".git"))) {
-            const version = commit ? versionAt(this.#options.pluginDir, commit) : undefined;
+            const version = this.#previousVersion;
             return version ? { version } : undefined;
         }
         try {
@@ -198,11 +259,39 @@ export class UpdateService {
             return undefined;
         }
     }
+    /** 把保留的上一版本复制为暂存包；Git 安装导出原提交。 */
+    async #stagePrevious(version) {
+        const pluginDir = this.#options.pluginDir;
+        if (fs.existsSync(path.join(pluginDir, ".git"))) {
+            const commit = this.#stored.previousCommit;
+            if (!commit)
+                throw new Error(M.update.noPrevious);
+            return stageCommit(pluginDir, commit, version, (target, file) => exportCommit(pluginDir, target, file));
+        }
+        const paths = workPaths(pluginDir);
+        clearWork(pluginDir);
+        fs.mkdirSync(paths.staged, { recursive: true });
+        const directory = path.join(paths.staged, "yunzai-guard");
+        // 调度失败会清理暂存目录，原备份须保留到真正替换文件时。
+        fs.cpSync(paths.previous, directory, { recursive: true });
+        return { version, directory };
+    }
     /**
-     * 还原到上一版本：把保留的文件当作暂存包交给生命周期队列。
-     * 还原后宿主与业务进程都必须用旧代码重新启动，所以不会在旧宿主里直接拉起业务进程。
+     * 还原到上一版本：同样按组件比较，能热替换时不重启。
+     * 有等待生效的更新时，还原即取消这次更新，控制台回到当前文件。
      */
     async rollback() {
+        const pending = this.#pending;
+        if (pending) {
+            this.#pending = undefined;
+            await this.#options.cancelPending();
+            clearWork(this.#options.pluginDir);
+            this.#busy = false;
+            this.#phase = "idle";
+            this.#message = undefined;
+            this.#options.record("update-pending-cancelled", { version: pending.staged.version });
+            return { ok: true, message: M.update.pendingCancelled(pending.staged.version) };
+        }
         if (this.#busy)
             return { ok: false, message: M.update.busy };
         const state = this.state();
@@ -212,30 +301,10 @@ export class UpdateService {
         if (!previous)
             return { ok: false, message: M.update.noPrevious };
         this.#busy = true;
-        if (state.installMode === "git") {
-            const current = readVersion(this.#options.pluginDir);
-            this.#phase = "installing";
-            this.#message = `正在还原到 ${previous.version}`;
-            this.notify(`【Yunzai Guard】开始还原：${current} → ${previous.version}，宿主将重新启动`);
-            this.#options.install({
-                version: previous.version,
-                directory: this.#options.pluginDir,
-                commit: this.#stored.previousCommit,
-            }, current, true);
-            return { ok: true, message: `开始还原：${current} → ${previous.version}` };
-        }
         try {
-            const paths = workPaths(this.#options.pluginDir);
-            clearWork(this.#options.pluginDir);
-            fs.mkdirSync(paths.staged, { recursive: true });
-            const directory = path.join(paths.staged, "yunzai-guard");
-            fs.renameSync(paths.previous, directory);
             const current = readVersion(this.#options.pluginDir);
-            this.#phase = "installing";
-            this.#message = `正在还原到 ${previous.version}`;
-            this.notify(`【Yunzai Guard】开始还原：${current} → ${previous.version}，宿主将重新启动`);
-            this.#options.install({ version: previous.version, directory }, current, true);
-            return { ok: true, message: `开始还原：${current} → ${previous.version}` };
+            const staged = await this.#stagePrevious(previous.version);
+            return this.#install(staged, current, true, true);
         }
         catch (error) {
             this.#fail(error.message);
@@ -249,8 +318,10 @@ export class UpdateService {
         if (!staged.commit)
             return swapPackage(staged, this.#options.pluginDir);
         // Git 安装：切换到目标提交；还原时切回原提交，完成后记录原提交供之后还原。
+        // reset --hard 只改写内容变化的文件，热更新时同样可用。
         const directory = this.#options.pluginDir;
         const before = gitSync(directory, ["rev-parse", "HEAD"]);
+        const previousVersion = versionAt(directory, before);
         gitSync(directory, ["reset", "--hard", "--quiet", staged.commit]);
         return {
             rollback: () => {
@@ -258,21 +329,96 @@ export class UpdateService {
             },
             commit: () => {
                 this.#stored.previousCommit = before;
+                this.#previousVersion = previousVersion;
                 this.#save();
             },
         };
     }
-    /** 更新结束：记录结果并通知主人；defer 为真时留待新宿主上线后发送。 */
+    /** 业务侧更新改为等待：控制台已换成新版本，业务进程择时重启。 */
+    defer(staged, from, rollback) {
+        this.#pending = { staged, from, since: Date.now(), rollback };
+        this.#phase = "pending";
+        this.#message = undefined;
+        this.#options.record("update-deferred", { from, to: staged.version });
+        this.notify(`【Yunzai Guard】控制台已${rollback ? "还原" : "更新"}至 ${staged.version}，业务侧更新将在空闲时生效，再次发送 #guard更新 可马上生效`);
+    }
+    /** 等待中的更新；用于判断是否到了执行时机。 */
+    get pending() {
+        return this.#pending && { version: this.#pending.staged.version, since: this.#pending.since };
+    }
+    /** 立即执行等待中的更新：重启业务进程使其生效。 */
+    applyPending() {
+        const pending = this.#pending;
+        if (!pending)
+            return Promise.resolve({ ok: false, message: M.update.noPending });
+        this.#pending = undefined;
+        this.#phase = "installing";
+        this.#options.record("update-pending-apply", { to: pending.staged.version });
+        try {
+            this.#options.install(pending.staged, pending.from, pending.rollback, true);
+        }
+        catch (error) {
+            this.#pending = pending;
+            this.#phase = "pending";
+            return Promise.resolve({ ok: false, message: error.message });
+        }
+        return Promise.resolve({ ok: true, message: M.update.pendingStarted });
+    }
+    /** 宿主重新启动前记录待确认的更新，新宿主上线后据此确认成功或还原。 */
+    markVerify(value) {
+        fs.mkdirSync(this.#options.stateDir, { recursive: true });
+        fs.writeFileSync(this.#verifyFile, JSON.stringify({ ...value, attempts: 0, at: Date.now() }), {
+            mode: 0o600,
+        });
+    }
+    /** 读取待确认的更新并累加启动次数；没有时返回 undefined。 */
+    takeVerify() {
+        try {
+            const value = JSON.parse(fs.readFileSync(this.#verifyFile, "utf8"));
+            if (typeof value.from !== "string" || typeof value.to !== "string")
+                return undefined;
+            const attempts = (Number.isSafeInteger(value.attempts) ? Number(value.attempts) : 0) + 1;
+            fs.writeFileSync(this.#verifyFile, JSON.stringify({ ...value, attempts }), { mode: 0o600 });
+            return {
+                from: value.from,
+                to: value.to,
+                rollback: value.rollback === true,
+                revert: value.revert === true,
+                attempts,
+            };
+        }
+        catch {
+            return undefined;
+        }
+    }
+    /** 清除待确认记录。 */
+    clearVerify() {
+        fs.rmSync(this.#verifyFile, { force: true });
+    }
+    /** 新宿主上的更新未能上线：把保留的上一版本暂存起来用于还原。 */
+    async stageRevert(version) {
+        this.#busy = true;
+        const staged = await this.#stagePrevious(version);
+        return { ...staged, plan: { level: "host", changed: [] } };
+    }
+    /** 更新结束：记录结果并通知主人。 */
     finish(result) {
         const at = Date.now();
         this.#busy = false;
+        this.#pending = undefined;
         clearWork(this.#options.pluginDir);
         this.#phase = result.ok ? "idle" : "failed";
-        this.#hostRestartPending = result.ok && !result.relaunch;
+        this.#hostRestartPending = result.ok && result.mode === "host-pending";
         this.#message = result.ok ? undefined : result.message;
         const verb = result.rollback ? "还原" : "更新";
+        const effect = {
+            hot: "，业务未中断",
+            worker: "，业务进程已重启",
+            relaunch: "，宿主已重新启动",
+            "host-pending": "，宿主重启后完全生效",
+        }[result.mode];
         const text = result.ok
-            ? `【Yunzai Guard】已${result.rollback ? "还原到" : "更新到"} ${result.to}（原 ${result.from}）${result.relaunch ? "，宿主已重新启动" : "；宿主进程需重启后完全生效，重启前面板仍为旧版本"}`
+            ? `【Yunzai Guard】已${verb}至 ${result.to}（原 ${result.from}）${effect}`
             : `【Yunzai Guard】${verb}失败：${result.message ?? "未知原因"}`;
         this.#stored.lastResult = {
             ok: result.ok,
@@ -284,9 +430,10 @@ export class UpdateService {
         this.#options.record(result.ok ? "update-complete" : "update-failed", {
             from: result.from,
             to: result.to,
+            mode: result.mode,
             message: result.message,
         });
-        this.notify(text, result.ok && result.relaunch);
+        this.notify(text);
     }
     /** 记录暂存阶段的失败；结果文本由调用方回复给发起人。 */
     #fail(message) {
@@ -332,7 +479,7 @@ export class UpdateService {
             this.notify([
                 `【Yunzai Guard】发现新版本 ${release.version}（当前 ${current}）`,
                 brief(release.notes),
-                "发送 #guard更新 立即更新，或在控制台「总览」页操作。",
+                "发送 #guard更新 进行更新",
                 release.url,
             ]
                 .filter(Boolean)
@@ -354,4 +501,4 @@ export class UpdateService {
 //# sourceMappingURL=update.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "../protect/objects.js"
-__guardRegisterExports("host/update.ts", { UpdateService })
+__guardRegisterExports("host/update.ts", { pendingDue, UpdateService })

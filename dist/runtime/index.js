@@ -73,6 +73,7 @@ export function installRuntime(options) {
         ...[options.manifestPath, options.resolutionManifestPath].filter((file) => Boolean(file)),
     ];
     // fs 收口先于行为监控安装，业务文件观察在监控就绪后再接入。
+    // eslint-disable-next-line prefer-const -- 先被回调引用，之后才赋值
     let observeFile;
     installFileGuard({
         roots,

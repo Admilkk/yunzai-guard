@@ -50,7 +50,7 @@ export class SandboxDispatcher {
         if (!this.sources.length)
             return false;
         const event = sandboxEvent(original);
-        const plugin = this.sources.find(item => item.enabled !== false && matchGlob(item.match, event.message));
+        const plugin = this.sources.find(item => item.enabled && matchGlob(item.match, event.message));
         if (!plugin)
             return false;
         if (this.#closed || this.#busy.has(plugin.id)) {

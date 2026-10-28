@@ -282,6 +282,25 @@ function summarize(entries) {
 const cacheTtlMs = 2000;
 const cacheEntries = 16;
 const pageCache = new Map();
+let cacheTimer;
+/** 在最早的缓存到期时释放结果，页面关闭后也不会长期持有审计窗口。 */
+function scheduleCacheExpiry() {
+    if (cacheTimer)
+        clearTimeout(cacheTimer);
+    cacheTimer = undefined;
+    if (!pageCache.size)
+        return;
+    const expiresAt = Math.min(...[...pageCache.values()].map(value => value.at)) + cacheTtlMs;
+    cacheTimer = setTimeout(() => {
+        cacheTimer = undefined;
+        const now = Date.now();
+        for (const [key, value] of pageCache)
+            if (now - value.at >= cacheTtlMs)
+                pageCache.delete(key);
+        scheduleCacheExpiry();
+    }, Math.max(1, expiresAt - Date.now()));
+    cacheTimer.unref();
+}
 /** 审计文件的大小与修改时间，任何写入都会改变它。 */
 function auditStamp(stateDir) {
     return ["events.sqlite", "events.sqlite-wal", "events.jsonl"]
@@ -298,23 +317,35 @@ function auditStamp(stateDir) {
 }
 /**
  * 分页读取审计事件。面板多个卡片会在同一时刻发出相同查询，
- * 文件未变化时 2 秒内直接复用结果，避免重复扫描与汇总。
+ * 文件未变化时 2 秒内复用结果；不同分页共享旧 JSONL 窗口，文件变化或到期即释放。
  */
 export function readAudit(stateDir, input = {}) {
     const key = `${stateDir}\0${JSON.stringify(input instanceof URLSearchParams ? [...input] : input)}`;
     const stamp = auditStamp(stateDir);
+    const now = Date.now();
+    let snapshot;
+    for (const [key, value] of pageCache) {
+        if (now - value.at >= cacheTtlMs || (value.stateDir === stateDir && value.stamp !== stamp))
+            pageCache.delete(key);
+        else if (value.stateDir === stateDir) {
+            const entries = windows.get(value.page);
+            if (entries)
+                snapshot = { entries, coverage: value.page.coverage };
+        }
+    }
     const cached = pageCache.get(key);
-    if (cached && cached.stamp === stamp && Date.now() - cached.at < cacheTtlMs)
+    if (cached)
         return cached.page;
-    const page = readAuditUncached(stateDir, input);
+    const page = readAuditUncached(stateDir, input, snapshot);
     pageCache.delete(key);
-    pageCache.set(key, { at: Date.now(), stamp, page });
+    pageCache.set(key, { stateDir, at: now, stamp, page });
     while (pageCache.size > cacheEntries)
         pageCache.delete(pageCache.keys().next().value);
+    scheduleCacheExpiry();
     return page;
 }
 /** 分页读取审计事件，优先使用 SQLite。 */
-function readAuditUncached(stateDir, input = {}) {
+function readAuditUncached(stateDir, input = {}, snapshot) {
     const query = queryOf(input);
     const file = auditDatabasePath(stateDir);
     const persisted = ["", "-wal", "-shm", "-journal"].some(suffix => {
@@ -332,7 +363,7 @@ function readAuditUncached(stateDir, input = {}) {
             databases.set(page, file);
         return page;
     }
-    const { entries, coverage } = windowOf(stateDir);
+    const { entries, coverage } = snapshot ?? windowOf(stateDir);
     const filtered = entries.filter(entry => (!query.plugin || entry.plugin === query.plugin) &&
         (!query.kind || entry.kind === query.kind) &&
         (!query.action || entry.action === query.action) &&

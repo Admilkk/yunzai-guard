@@ -74,7 +74,7 @@ export function installSqliteGuard(options) {
             name = decode(name);
             if (!name || name === ":memory:")
                 return snapshot;
-            if (windows && name[0] === "/" && name[2] === ":")
+            if (windows && name.startsWith("/") && name[2] === ":")
                 name = stringSlice(name, 1);
         }
         const absolute = resolve(name);
@@ -154,7 +154,7 @@ export function installSqliteGuard(options) {
                 throw error;
             }
         }, "sqlite.DatabaseSync.setAuthorizer");
-    options.seal(sqlite, "backup", function (...args) {
+    options.seal(sqlite, "backup", (...args) => {
         args[1] = filename(args[1], "sqlite.backup", false);
         return apply(nativeBackup, sqlite, args);
     }, "sqlite.backup");

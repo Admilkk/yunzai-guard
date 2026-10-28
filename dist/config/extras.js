@@ -9,6 +9,7 @@ const alertCategories = [
     "anomaly",
     "source",
     "update",
+    "security",
 ];
 /** 读取字符串数组配置：元素非空、无控制字符，数量与长度有上限。 */
 export function stringList(value, fallback, location, maxItems = 100, maxLength = 256) {

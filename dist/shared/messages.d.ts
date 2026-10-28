@@ -34,6 +34,8 @@ declare const messages: {
         targetPath: (i: unknown) => string;
         targetsDuplicate: string;
         monitorFiles: string;
+        workerRestart: string;
+        updateWindow: string;
         rules: string;
         rulesDuplicate: string;
         recoveryDelay: string;
@@ -171,6 +173,13 @@ declare const messages: {
         swapFailed: (detail: unknown) => string;
         unhealthy: string;
         restarting: (version: unknown) => string;
+        noPending: string;
+        coreFailed: string;
+        revertFailed: string;
+        revertedAfterFailure: (version: unknown) => string;
+        revertedTripped: (version: unknown) => string;
+        pendingStarted: string;
+        pendingCancelled: (version: unknown) => string;
     };
     host: {
         deadline: string;
@@ -272,6 +281,8 @@ declare const messages: {
     };
     entry: {
         updateUnavailable: string;
+        loginSent: string;
+        loginUnavailable: string;
         rollbackRequested: string;
         updateRequested: string;
         updateForced: string;
@@ -322,6 +333,11 @@ declare const messages: {
         codeRequired: string;
         codeExpired: string;
         codeWrong: string;
+        linkInvalid: string;
+        linkCooldown: string;
+        linkDisabled: string;
+        linkPanelOff: string;
+        publicUrl: string;
         tooManyAttempts: (seconds: unknown) => string;
         sessionsCorrupt: string;
         settingsObject: string;
@@ -337,6 +353,7 @@ declare const messages: {
         tokenTtl: string;
         deviceTtl: string;
         crossSite: string;
+        externalDenied: string;
         originMismatch: string;
         bodyTooLarge: string;
         bodyJson: string;
@@ -882,6 +899,8 @@ export declare const M: {
         targetPath: (i: unknown) => string;
         targetsDuplicate: string;
         monitorFiles: string;
+        workerRestart: string;
+        updateWindow: string;
         rules: string;
         rulesDuplicate: string;
         recoveryDelay: string;
@@ -1019,6 +1038,13 @@ export declare const M: {
         swapFailed: (detail: unknown) => string;
         unhealthy: string;
         restarting: (version: unknown) => string;
+        noPending: string;
+        coreFailed: string;
+        revertFailed: string;
+        revertedAfterFailure: (version: unknown) => string;
+        revertedTripped: (version: unknown) => string;
+        pendingStarted: string;
+        pendingCancelled: (version: unknown) => string;
     };
     host: {
         deadline: string;
@@ -1120,6 +1146,8 @@ export declare const M: {
     };
     entry: {
         updateUnavailable: string;
+        loginSent: string;
+        loginUnavailable: string;
         rollbackRequested: string;
         updateRequested: string;
         updateForced: string;
@@ -1170,6 +1198,11 @@ export declare const M: {
         codeRequired: string;
         codeExpired: string;
         codeWrong: string;
+        linkInvalid: string;
+        linkCooldown: string;
+        linkDisabled: string;
+        linkPanelOff: string;
+        publicUrl: string;
         tooManyAttempts: (seconds: unknown) => string;
         sessionsCorrupt: string;
         settingsObject: string;
@@ -1185,6 +1218,7 @@ export declare const M: {
         tokenTtl: string;
         deviceTtl: string;
         crossSite: string;
+        externalDenied: string;
         originMismatch: string;
         bodyTooLarge: string;
         bodyJson: string;

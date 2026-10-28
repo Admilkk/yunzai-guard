@@ -1,12 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { hashFile } from "../shared/hash.js";
 import { fail, object, keys, integer, parseNativeIdentityJson } from "./validation.js";
-/** 计算文件的 SHA-256 摘要。 */
-export function hashFile(file) {
-    return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-}
+export { hashFile } from "../shared/hash.js";
 /** 定位并校验当前平台的原生身份辅助程序。 */
 export function resolveBundle(options) {
     if (!["win32", "linux"].includes(process.platform) || process.arch !== "x64")
@@ -73,4 +70,4 @@ export function resolveBundle(options) {
 //# sourceMappingURL=bundle.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "../protect/objects.js"
-__guardRegisterExports("native-process/bundle.ts", { hashFile, resolveBundle })
+__guardRegisterExports("native-process/bundle.ts", { resolveBundle })

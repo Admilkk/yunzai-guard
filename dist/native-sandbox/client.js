@@ -468,7 +468,7 @@ export class NativePluginClient {
             else if (frame.service === "core" && frame.method === "restart") {
                 const pending = typeof frame.requestId === "string" ? this.pending.get(frame.requestId) : undefined;
                 const event = typeof frame.requestId === "string" ? this.events.get(frame.requestId) : undefined;
-                requireNativeRestartCapability(args, pending?.type, event, pending?.coreRestartRequested === true, this.#config.allowCoreRestart === true);
+                requireNativeRestartCapability(args, pending?.type, event, pending?.coreRestartRequested === true, this.#config.allowCoreRestart);
                 if (!this.onCoreRestart)
                     throw new Error(M.nativeSandbox.restartUnavailable);
                 pending.coreRestartRequested = true;
@@ -635,7 +635,7 @@ export class NativePluginClient {
                 pluginRoot: this.pluginRoot,
                 entry,
                 hookAction: this.#config.hookAction,
-                adapters: this.#config.adapters === true,
+                adapters: this.#config.adapters,
                 ...(this.botEventsHost ? { botEventsSessionId: this.botEventsHost.sessionId } : {}),
             });
             if (this.errorLogs !== errors)

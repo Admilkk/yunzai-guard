@@ -2,6 +2,41 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0](https://github.com/Admilkk/yunzai-guard/compare/v1.1.1...v1.2.0) (2026-10-28)
+
+
+### ✨ 新功能
+
+* #guard登录 聊天登录链接 ([c96a40d](https://github.com/Admilkk/yunzai-guard/commit/c96a40daa2537e0b5f1de18ab74bd9c60e02222f))
+* **panel:** 控制台视觉改版、动画与文案精简 ([1dba9c2](https://github.com/Admilkk/yunzai-guard/commit/1dba9c2d828382ef96873895d65a322d68ed43fb))
+* **panel:** 登录页改为单一任务的居中登录卡 ([9f087ec](https://github.com/Admilkk/yunzai-guard/commit/9f087ec851ff695870cc33a7e5feae229e1daddc))
+* **web:** 内存与资源面板、规则回放、审计对比、告警处理、登录安全与深色模式 ([56e8224](https://github.com/Admilkk/yunzai-guard/commit/56e8224c83b5940f2254ea02c067a58d1bbae268))
+* **web:** 控制台交互与移动端体验优化 ([76822fe](https://github.com/Admilkk/yunzai-guard/commit/76822fea05b937d6116cd8fe7548f650f43f0833))
+* 按改动范围热更新，业务进程最多重启一次 ([bafa48d](https://github.com/Admilkk/yunzai-guard/commit/bafa48df27ccfabc9747866c83ef9c6c99931d9e))
+
+
+### 🐛 问题修复
+
+* 修复更新流程的内存占用问题 ([669811a](https://github.com/Admilkk/yunzai-guard/commit/669811ab3b70358a73e8cd62c5f04317679673fb))
+
+
+### ⚡️ 性能优化
+
+* **web:** 移动端插件列表分页，日志过滤延后渲染，拆分依赖包 ([4f14031](https://github.com/Admilkk/yunzai-guard/commit/4f14031d5b8850a4f411f2e290d2e6f2406a46dd))
+* 控制台改回宿主主线程运行，宿主内存回到改动前水平 ([71d4f08](https://github.com/Admilkk/yunzai-guard/commit/71d4f085310cd39c43950b1da1094f12ac4aa8bf))
+
+
+### ♻️ 重构
+
+* 接入 ESLint 并统一语法糖风格 ([d0a1f79](https://github.com/Admilkk/yunzai-guard/commit/d0a1f796ce73638fa66a44172ef517b06c15f69f))
+
+
+### 📝 文档
+
+* QQ 交流群加上加群链接 ([1e2c24c](https://github.com/Admilkk/yunzai-guard/commit/1e2c24c67799ff1efa2f67b204fde7882f4d39d2))
+* README 添加 QQ 交流群 ([bbdd82f](https://github.com/Admilkk/yunzai-guard/commit/bbdd82fa3157e95e48fbad0c32480c82fde08f70))
+* 推荐用 release 分支 Git 安装 ([3effb23](https://github.com/Admilkk/yunzai-guard/commit/3effb23f3594cb3071931c79d3846c25e6e0c70d))
+
 ## [1.1.1](https://github.com/Admilkk/yunzai-guard/compare/v1.1.0...v1.1.1) (2026-10-28)
 
 

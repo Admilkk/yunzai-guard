@@ -1,3 +1,4 @@
+import os from "node:os";
 import { parseSettings } from "../config/index.js";
 import { M } from "../shared/messages.js";
 import { isPlainObject, listSettingsBackups, readSettingsBackup, readSettingsDocument, validateSettingsDocument, writeSettingsDocument, } from "./guard-settings.js";
@@ -6,7 +7,7 @@ const maxExportRows = 20000;
 /** 转成 CSV 字段，处理引号、换行，并防止被表格软件当作公式。 */
 function csvField(value) {
     let text = value === undefined || value === null ? "" : String(value);
-    if (/^[=+\-@\t\r]/.test(text))
+    if (/^[\s\uFEFF]*[=+\-@]|^[\t\r\n]/.test(text))
         text = `'${text}`;
     return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
@@ -43,6 +44,76 @@ export async function handleExtra(context, route, url, request, response) {
             throw fail(404, M.web.notFound);
         const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 100));
         sendJson(response, 200, { history: controllers.alerts.history(limit) });
+        return true;
+    }
+    if (route === "GET /api/alerts/state") {
+        if (!controllers)
+            throw fail(404, M.web.notFound);
+        sendJson(response, 200, controllers.alerts.state());
+        return true;
+    }
+    if (route === "POST /api/alerts/ack") {
+        if (!controllers)
+            throw fail(404, M.web.notFound);
+        const body = await context.readBody(request);
+        const ids = isPlainObject(body) && Array.isArray(body.ids)
+            ? body.ids.filter((id) => typeof id === "string").slice(0, 200)
+            : undefined;
+        controllers.alerts.acknowledge(ids);
+        sendJson(response, 200, { ok: true, state: controllers.alerts.state() });
+        return true;
+    }
+    if (route === "POST /api/alerts/mute") {
+        if (!controllers)
+            throw fail(404, M.web.notFound);
+        const body = await context.readBody(request);
+        const input = isPlainObject(body) ? body : {};
+        const plugin = typeof input.plugin === "string" ? input.plugin.slice(0, 128) : "";
+        const category = typeof input.category === "string" ? input.category : "";
+        const minutes = Number(input.minutes);
+        if ((!plugin && !category) ||
+            !Number.isInteger(minutes) ||
+            minutes < 1 ||
+            minutes > 30 * 24 * 60)
+            throw fail(400, M.web.bodyObject);
+        controllers.alerts.mute(plugin
+            ? { plugin }
+            : { category: category }, minutes);
+        context.audit?.("panel-alert-muted", { plugin, category, minutes });
+        sendJson(response, 200, { ok: true, state: controllers.alerts.state() });
+        return true;
+    }
+    if (route === "POST /api/alerts/unmute") {
+        if (!controllers)
+            throw fail(404, M.web.notFound);
+        const body = await context.readBody(request);
+        controllers.alerts.unmute(isPlainObject(body) ? String(body.key).slice(0, 200) : "");
+        sendJson(response, 200, { ok: true, state: controllers.alerts.state() });
+        return true;
+    }
+    if (route === "GET /api/resources") {
+        if (!controllers)
+            throw fail(404, M.web.notFound);
+        const memory = process.memoryUsage();
+        sendJson(response, 200, {
+            points: controllers.resources.points(),
+            system: {
+                platform: process.platform,
+                totalMemory: os.totalmem(),
+                freeMemory: os.freemem(),
+                cpus: os.cpus().length,
+                load: os.loadavg(),
+                uptime: os.uptime(),
+            },
+            host: {
+                pid: process.pid,
+                rss: memory.rss,
+                heapUsed: memory.heapUsed,
+                heapTotal: memory.heapTotal,
+                external: memory.external,
+                uptime: process.uptime(),
+            },
+        });
         return true;
     }
     if (route === "POST /api/alerts/test") {
@@ -116,6 +187,7 @@ export async function handleExtra(context, route, url, request, response) {
     }
     if (route === "POST /api/settings/restore") {
         const body = await context.readBody(request);
+        context.checkSettingsRevision(body);
         const text = readSettingsBackup(stateDir, isPlainObject(body) ? String(body.id) : "");
         if (text === undefined)
             throw fail(404, M.web.notFound);
@@ -144,7 +216,10 @@ export async function handleExtra(context, route, url, request, response) {
     }
     if (route === "POST /api/settings/import-rules") {
         const body = await context.readBody(request);
-        if (!isPlainObject(body) || !Array.isArray(body.rules))
+        context.checkSettingsRevision(body);
+        if (!isPlainObject(body) ||
+            !Array.isArray(body.rules) ||
+            body.rules.some(rule => !isPlainObject(rule)))
             throw fail(400, M.web.bodyObject);
         const current = readSettingsDocument(stateDir, active()).document;
         const existing = Array.isArray(current.rules)

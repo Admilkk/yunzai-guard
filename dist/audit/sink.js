@@ -74,13 +74,13 @@ export class AuditSink {
                 const time = frame.time ?? this.#options.wallNow?.() ?? Date.now();
                 if (!Number.isFinite(time))
                     throw new TypeError(M.audit.recordClock);
-                const text = JSON.stringify({
+                const text = `${JSON.stringify({
                     ...details,
                     sequence,
                     time,
                     hostPid: this.#options.hostPid ?? process.pid,
                     type: frame.type,
-                }) + "\n";
+                })}\n`;
                 const bytes = Buffer.byteLength(text);
                 if (bytes > this.#options.maxBytes) {
                     receipts[index] = { result: "rejected", reason: "oversize" };

@@ -1,7 +1,7 @@
 import type { MonitorReport } from "../monitor/report.js";
 import type { GuardContext, GuardEvent } from "../shared/types.js";
 export type Command = {
-    type: "restart-request" | "stop-request" | "update-request" | "update-force-request" | "rollback-request";
+    type: "restart-request" | "stop-request" | "update-request" | "update-force-request" | "rollback-request" | "login-link-request";
     reason?: string;
 };
 export type Notice = {

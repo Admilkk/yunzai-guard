@@ -12,6 +12,8 @@ import { loadPanelSettings, panelSettingsPath, savePanelSettings, } from "./pane
 import { listPlugins } from "./plugins.js";
 import { readAudit, pluginMonitor, nativeExtensions } from "./monitor.js";
 import { handleExtra } from "./extra-api.js";
+import { isLocalAddress } from "./network.js";
+import { compareAudit } from "./compare.js";
 import { M } from "../shared/messages.js";
 const maxBodyBytes = 1024 * 1024;
 const staticDir = fileURLToPath(new URL("../panel/", import.meta.url));
@@ -45,24 +47,24 @@ function clientAddress(request, trustProxy) {
 }
 /** 根据 User-Agent 生成可读的设备名称。 */
 function deviceName(agent) {
-    const browser = /Edg\//.test(agent)
+    const browser = agent.includes("Edg/")
         ? "Edge"
-        : /Firefox\//.test(agent)
+        : agent.includes("Firefox/")
             ? "Firefox"
             : /(?:Chrome|Chromium)\//.test(agent)
                 ? "Chrome"
-                : /Safari\//.test(agent)
+                : agent.includes("Safari/")
                     ? "Safari"
                     : "浏览器";
-    const system = /Windows/.test(agent)
+    const system = agent.includes("Windows")
         ? "Windows"
-        : /Android/.test(agent)
+        : agent.includes("Android")
             ? "Android"
             : /iPhone|iPad/.test(agent)
                 ? "iOS"
-                : /Macintosh/.test(agent)
+                : agent.includes("Macintosh")
                     ? "macOS"
-                    : /Linux/.test(agent)
+                    : agent.includes("Linux")
                         ? "Linux"
                         : "";
     return system ? `${browser} · ${system}` : `${browser}设备`;
@@ -141,16 +143,22 @@ function readBody(request) {
             return reject(new PanelError(413, M.web.bodyTooLarge));
         const chunks = [];
         let size = 0;
+        let oversized = false;
         request.on("data", chunk => {
+            if (oversized)
+                return;
             size += chunk.length;
             if (size > maxBodyBytes) {
-                request.destroy();
+                oversized = true;
+                chunks.length = 0;
                 reject(new PanelError(413, M.web.bodyTooLarge));
                 return;
             }
             chunks.push(chunk);
         });
         request.on("end", () => {
+            if (oversized)
+                return;
             const text = Buffer.concat(chunks).toString("utf8").trim();
             if (!text)
                 return resolve({});
@@ -179,7 +187,15 @@ export class GuardPanel {
         this.root = options.root;
         this.#options = options;
         this.#settings = loadPanelSettings(options.stateDir);
-        this.#auth = new PanelAuth(() => this.#settings, options.stateDir);
+        this.#auth = new PanelAuth(() => this.#settings, options.stateDir, {
+            failed: address => this.#options.audit?.("panel-login-failed", { address }),
+            blocked: (address, seconds) => this.#notify("面板登录被锁定", `【Yunzai Guard】控制台登录连续失败，已暂时锁定来源 ${address}（${Math.round(seconds / 60)} 分钟）`, `login-blocked:${address}`),
+        });
+        this.#auth.importVolatile(options.handover);
+    }
+    /** 交给下一个控制台的内存会话。 */
+    handover() {
+        return this.#auth.exportVolatile();
     }
     /** 当前面板配置。 */
     get settings() {
@@ -206,6 +222,27 @@ export class GuardPanel {
                 if (item.family === "IPv4" && !item.internal)
                     result.push(`http://${item.address}${suffix}`);
         return result;
+    }
+    /**
+     * 生成一次性登录链接。令牌放在地址片段里，不会出现在请求行与代理日志中；
+     * 设置了外部访问地址时只给该地址，否则给出全部监听地址。
+     */
+    loginLink() {
+        if (!this.#server)
+            throw new PanelError(503, M.web.linkPanelOff);
+        if (!this.#settings.chatLogin)
+            throw new PanelError(403, M.web.linkDisabled);
+        const { token, ttlSeconds } = this.#auth.issueLink();
+        const bases = this.#settings.publicUrl
+            ? [this.#settings.publicUrl.replace(/\/*$/, "/")]
+            : this.urls;
+        this.#options.audit?.("panel-login-link", {});
+        return { urls: bases.map(base => `${base}#login=${token}`), ttlSeconds };
+    }
+    /** 登录安全事件：写入审计，并通过告警通知主人。 */
+    #notify(title, text, key) {
+        this.#options.audit?.("panel-security", { title });
+        this.#options.controllers?.alerts.raise("security", title, text, { key });
     }
     /** 启动面板服务并打印访问地址。 */
     async start() {
@@ -242,7 +279,12 @@ export class GuardPanel {
         for (const response of this.#streams.keys())
             response.end();
         this.#streams.clear();
-        await new Promise(resolve => server.close(() => resolve()));
+        // 热替换控制台时不能等浏览器的长连接自然断开：先关空闲连接，1 秒后强制关闭其余连接。
+        await new Promise(resolve => {
+            server.close(() => resolve());
+            server.closeIdleConnections();
+            setTimeout(() => server.closeAllConnections(), 1000).unref();
+        });
     }
     /** 监听端口，被占用时按次数重试。 */
     #listen(server, host, port, retries) {
@@ -307,6 +349,11 @@ export class GuardPanel {
         try {
             const url = new URL(request.url ?? "/", "http://localhost");
             const method = request.method ?? "GET";
+            const address = clientAddress(request, this.#settings.trustProxy);
+            if (!this.#settings.allowExternal && !isLocalAddress(address)) {
+                this.#notify("外网访问被拒绝", `【Yunzai Guard】已拒绝来自 ${address} 的控制台访问（默认只开放本机和局域网）`, `external-denied:${address}`);
+                throw new PanelError(403, M.web.externalDenied);
+            }
             if (method === "GET" || method === "HEAD") {
                 if (await this.#serveStatic(url.pathname, request, response, method === "HEAD"))
                     return;
@@ -319,6 +366,8 @@ export class GuardPanel {
             if (response.headersSent)
                 return;
             if (error instanceof PanelError) {
+                if (error.status === 413)
+                    response.setHeader("Connection", "close");
                 if (error.retryAfter)
                     response.setHeader("Retry-After", String(error.retryAfter));
                 return sendJson(response, error.status, { error: error.message });
@@ -328,6 +377,15 @@ export class GuardPanel {
             this.#log(M.web.requestFailed(error.message));
             return sendJson(response, 500, { error: M.web.internal });
         }
+    }
+    /** 在写入配置前核对读取版本，供保存、备份恢复与规则导入共用。 */
+    #checkSettingsRevision(body) {
+        if (!isPlainObject(body) || body.revision === undefined)
+            return;
+        const active = this.#options.getSettings?.() ?? this.#options.settings;
+        const current = readSettingsDocument(this.#options.stateDir, active);
+        if (typeof body.revision !== "string" || body.revision !== revision(current.text))
+            throw new PanelError(409, M.web.revision);
     }
     /** 提供面板静态资源，禁止越出面板目录。 */
     async #serveStatic(pathname, request, response, head) {
@@ -383,6 +441,24 @@ export class GuardPanel {
             this.#printCode(code);
             return sendJson(response, 200, { ok: true });
         }
+        if (route === "POST /api/login/link") {
+            const body = await readBody(request);
+            const address = clientAddress(request, this.#settings.trustProxy);
+            const token = this.#auth.checkLink(isPlainObject(body) ? body.token : undefined, address, {
+                userAgent: request.headers["user-agent"],
+            });
+            const payload = this.#auth.verify(token);
+            const expiresAt = Number(payload.exp) * 1000;
+            setSessionCookie(request, response, token, false, expiresAt);
+            this.#options.audit?.("panel-login", { method: "chat-link" });
+            this.#notify("面板登录", `【Yunzai Guard】控制台已通过聊天链接登录：${deviceName(String(request.headers["user-agent"] ?? ""))}，来源 ${address}`, `login:${address}`);
+            return sendJson(response, 200, {
+                ok: true,
+                expiresAt,
+                remembered: false,
+                csrfToken: this.#auth.csrf(token),
+            });
+        }
         if (route === "POST /api/login/code/check") {
             const body = await readBody(request);
             const code = isPlainObject(body) ? body.code : undefined;
@@ -394,7 +470,9 @@ export class GuardPanel {
             const expiresAt = Number(payload.exp) * 1000;
             setSessionCookie(request, response, token, payload.remember === true, expiresAt);
             this.#clearCodeFile();
+            const address = clientAddress(request, this.#settings.trustProxy);
             this.#options.audit?.("panel-login", { remembered: payload.remember === true });
+            this.#notify("面板登录", `【Yunzai Guard】控制台已登录：${deviceName(String(request.headers["user-agent"] ?? ""))}，来源 ${address}`, `login:${address}`);
             return sendJson(response, 200, {
                 ok: true,
                 expiresAt,
@@ -447,6 +525,22 @@ export class GuardPanel {
             this.#options.audit?.("panel-session-revoked", { current: id === payload.jti });
             return sendJson(response, 200, { ok: true, revoked, current: id === payload.jti });
         }
+        if (route === "GET /api/audit/compare") {
+            const bound = (name) => {
+                const value = Number(url.searchParams.get(name));
+                if (!Number.isSafeInteger(value) || value <= 0)
+                    throw new PanelError(400, M.web.filterRange);
+                return value;
+            };
+            const windows = {
+                a: { from: bound("aFrom"), to: bound("aTo") },
+                b: { from: bound("bFrom"), to: bound("bTo") },
+            };
+            if (windows.a.from > windows.a.to || windows.b.from > windows.b.to)
+                throw new PanelError(400, M.web.filterRange);
+            const plugin = url.searchParams.get("plugin")?.slice(0, 128) || undefined;
+            return sendJson(response, 200, compareAudit(params => readAudit(this.#options.stateDir, params), windows, plugin));
+        }
         if (route === "GET /api/audit") {
             return sendJson(response, 200, readAudit(this.#options.stateDir, url.searchParams));
         }
@@ -490,6 +584,7 @@ export class GuardPanel {
             const document = readSettingsDocument(this.#options.stateDir, active);
             const snapshot = readAudit(this.#options.stateDir);
             return sendJson(response, 200, {
+                version: this.#options.version,
                 panel: {
                     host: this.#settings.host,
                     port: this.#settings.port,
@@ -497,6 +592,9 @@ export class GuardPanel {
                     restartRequired: this.#panelRestartRequired(),
                     tokenTtlHours: this.#settings.tokenTtlHours,
                     trustedDeviceTtlDays: this.#settings.trustedDeviceTtlDays,
+                    allowExternal: this.#settings.allowExternal,
+                    chatLogin: this.#settings.chatLogin,
+                    publicUrl: this.#settings.publicUrl,
                     path: panelSettingsPath(this.#options.stateDir),
                     startedAt: this.#startedAt,
                 },
@@ -546,11 +644,7 @@ export class GuardPanel {
         if (route === "PUT /api/settings" || route === "POST /api/settings") {
             const body = await readBody(request);
             const active = this.#options.getSettings?.() ?? this.#options.settings;
-            if (isPlainObject(body) && body.revision !== undefined) {
-                const current = readSettingsDocument(this.#options.stateDir, active);
-                if (typeof body.revision !== "string" || body.revision !== revision(current.text))
-                    throw new PanelError(409, M.web.revision);
-            }
+            this.#checkSettingsRevision(body);
             let value = isPlainObject(body) ? body.document : undefined;
             if (isPlainObject(body) && typeof body.raw === "string") {
                 try {
@@ -591,6 +685,12 @@ export class GuardPanel {
             const result = await this.#options.update.apply(isPlainObject(body) && body.force === true);
             return sendJson(response, 200, { ...result, update: this.#options.update.state() });
         }
+        if (route === "POST /api/update/apply-pending") {
+            if (!this.#options.update)
+                throw new PanelError(404, M.web.notFound);
+            const result = await this.#options.update.applyPending();
+            return sendJson(response, 200, { ...result, update: this.#options.update.state() });
+        }
         if (route === "POST /api/update/rollback") {
             if (!this.#options.update)
                 throw new PanelError(404, M.web.notFound);
@@ -605,6 +705,7 @@ export class GuardPanel {
             controllers: this.#options.controllers,
             audit: this.#options.audit,
             readBody,
+            checkSettingsRevision: body => this.#checkSettingsRevision(body),
             sendJson,
             fail: (status, message) => new PanelError(status, message),
         }, route, url, request, response))
@@ -629,9 +730,14 @@ export class GuardPanel {
                     ...(body.tokenTtlHours !== undefined
                         ? { tokenTtlHours: Number(body.tokenTtlHours) }
                         : {}),
+                    ...(body.allowExternal !== undefined
+                        ? { allowExternal: body.allowExternal === true }
+                        : {}),
                     ...(body.trustedDeviceTtlDays !== undefined
                         ? { trustedDeviceTtlDays: Number(body.trustedDeviceTtlDays) }
                         : {}),
+                    ...(body.chatLogin !== undefined ? { chatLogin: body.chatLogin === true } : {}),
+                    ...(body.publicUrl !== undefined ? { publicUrl: String(body.publicUrl) } : {}),
                 });
             }
             catch (error) {
@@ -682,7 +788,9 @@ export class GuardPanel {
         let identity;
         let closed = false;
         let waitingDrain = false;
+        // eslint-disable-next-line prefer-const -- 先被回调引用，之后才赋值
         let timer;
+        // eslint-disable-next-line prefer-const -- 先被回调引用，之后才赋值
         let heartbeat;
         let drainTimer;
         const cleanup = () => {

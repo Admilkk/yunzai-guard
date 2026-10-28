@@ -9,7 +9,10 @@
 [![License](https://img.shields.io/github/license/Admilkk/yunzai-guard?style=flat&logo=gnu)](LICENSE)
 ![Node.js](https://img.shields.io/badge/Node.js-%3E%3D23.11-3C873A?style=flat&logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue?style=flat)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat)
+[![QQ 群](https://img.shields.io/badge/QQ%20群-833016696-12B7F5?style=flat&logo=qq&logoColor=white)](https://qun.qq.com/universal-share/share?ac=1&authKey=EcUQyFcyHxJ43n%2BIQ32YofDTWJF4Xcy9zLmsWWy2sMmBAezWtiQfrH%2FV6TqGRcdm&busi_data=eyJncm91cENvZGUiOiI4MzMwMTY2OTYiLCJ0b2tlbiI6InNsT1NRTkVWb1UyMWRRbDdBMnFVaS93YU5mMENjVEJldmg1QmVvRVVaWUpWVU11Z2ZSWC8vWFZ0R01kcDZyZ2EiLCJ1aW4iOiIyMTczMzAyMTQ0In0%3D&data=Mey29tuFq8ImC1yGNKOZHwKJHLVEr2eCx2Vnm0VvLr1AnusAaT_pDx4kDq73WWsCK2BYs9oUbf4juF7cRTLbnw&svctype=4&tempid=h5_group_info)
+
+💬 交流与反馈 QQ 群：[**833016696**](https://qun.qq.com/universal-share/share?ac=1&authKey=EcUQyFcyHxJ43n%2BIQ32YofDTWJF4Xcy9zLmsWWy2sMmBAezWtiQfrH%2FV6TqGRcdm&busi_data=eyJncm91cENvZGUiOiI4MzMwMTY2OTYiLCJ0b2tlbiI6InNsT1NRTkVWb1UyMWRRbDdBMnFVaS93YU5mMENjVEJldmg1QmVvRVVaWUpWVU11Z2ZSWC8vWFZ0R01kcDZyZ2EiLCJ1aW4iOiIyMTczMzAyMTQ0In0%3D&data=Mey29tuFq8ImC1yGNKOZHwKJHLVEr2eCx2Vnm0VvLr1AnusAaT_pDx4kDq73WWsCK2BYs9oUbf4juF7cRTLbnw&svctype=4&tempid=h5_group_info)
 
 </div>
 
@@ -24,28 +27,31 @@ Yunzai Guard 以独立插件形式运行，**不修改 Yunzai 核心与业务插
 
 **环境要求**：Windows x64、Linux x64 或 macOS（实验）、Node.js `>=23.11.0`，以及能正常启动的 [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai) 或 [玖璃（JiuLi）](https://github.com/HL-z7/JiuLi)。PM2 可选（`>=5.0.0`，fork 单实例）。
 
-在 Yunzai 根目录安装。推荐使用发布包，免编译，也是控制台与 `#guard更新` 支持的更新方式。
-
-从 [Releases](https://github.com/Admilkk/yunzai-guard/releases) 下载对应平台的包，解压为 `plugins/yunzai-guard`：
-
-| 资产                               | 说明                                                       |
-| ---------------------------------- | ---------------------------------------------------------- |
-| `yunzai-guard-v*-win-x64.zip`      | Windows 包，**内置固定版本 Node 运行时**，首次启动无需下载 |
-| `yunzai-guard-v*-linux-x64.tar.gz` | Linux 包                                                   |
-| `node-v24.22.1-win-x64.exe`        | 与 Windows 包一致的独立 Node 运行时                        |
-| `SHA256SUMS.txt`                   | 全部资产的 SHA-256 校验和                                  |
-
-或者用 Git 安装编译好的 `release` 分支，之后在插件目录 `git pull` 即可更新：
+在 Yunzai 根目录执行（推荐）：
 
 ```sh
 git clone --depth=1 -b release https://github.com/Admilkk/yunzai-guard.git ./plugins/yunzai-guard
 ```
 
-Windows 用这种方式时，首次启动会下载并校验固定版本的 Node 运行时。
+`release` 分支是编译好的发布版，免编译即可使用。之后直接发送 `#guard更新`、在控制台点“立即更新”，或在插件目录 `git pull` 都能更新。Windows 首次启动会下载并校验固定版本的 Node 运行时。
+
+<details><summary>也可以下载发布包</summary>
+
+从 [Releases](https://github.com/Admilkk/yunzai-guard/releases) 下载对应平台的包，解压为 `plugins/yunzai-guard`，同样支持 `#guard更新` 与控制台更新：
+
+| 资产                               | 说明                                                       |
+| ---------------------------------- | ---------------------------------------------------------- |
+| `yunzai-guard-v*-win-x64.zip`      | Windows 包，**内置固定版本 Node 运行时**，首次启动无需下载 |
+| `yunzai-guard-v*-linux-x64.tar.gz` | Linux 包                                                   |
+| `yunzai-guard-v*-macos.tar.gz`     | macOS 包                                                   |
+| `node-v24.22.1-win-x64.exe`        | 与 Windows 包一致的独立 Node 运行时                        |
+| `SHA256SUMS.txt`                   | 全部资产的 SHA-256 校验和                                  |
+
+</details>
 
 <details><summary>从源码安装（开发用）</summary>
 
-需要自行编译与更新；控制台和 `#guard更新` 只会提示新版本，不会替换 Git 工作区，请自行 `git pull` 后重新安装依赖。
+main 分支是源码，需要自行编译；控制台和 `#guard更新` 只提示新版本，请自行 `git pull` 后重新安装依赖。
 
 ```sh
 git clone --depth=1 --branch main https://github.com/Admilkk/yunzai-guard.git ./plugins/yunzai-guard
@@ -107,7 +113,7 @@ TRSS 官方 Docker 脚本（`node . start`）与 `node . daemon` 守护模式会
 
 <details><summary>Web 控制台</summary>
 
-宿主启动后在终端打印地址（本机通常为 `http://127.0.0.1:21733/`），首次登录用终端中的一次性验证码。
+宿主启动后在终端打印地址（本机通常为 `http://127.0.0.1:21733/`），首次登录用终端中的一次性验证码。也可以由主人发送 `#guard登录`（`#guard登陆`、`#guard面板` 同样可用），宿主会私聊发送一次性登录链接：5 分钟内有效，仅可使用一次。使用反向代理或端口映射时，请在「系统设置 → 会话与面板」中填写外部访问地址；不需要此功能时可在同一处关闭聊天登录。
 
 - 插件权限：单独或批量配置。
 - 事件审计：按插件、类型、动作、时间筛选，可从事件直接生成规则。
@@ -130,6 +136,7 @@ TRSS 官方 Docker 脚本（`node . start`）与 `node . daemon` 守护模式会
 
 - 宿主每 5 分钟读取一次公开 Release（ETag 条件请求，未变化不占用 GitHub 限额），发现新版本后给主人发一条消息，同一版本只通知一次。
 - 主人发送 `#guard更新` 更新到最新版，`#guard回滚` 还原上一版本；`#guard强制更新` 重新安装最新版，并允许跨主版本。控制台「总览」页同样可以检查、更新和强制更新，CLI 为 `update [--force]`。
+- 更新按改动范围热替换：只改控制台时业务不中断；需要重启业务进程的更新默认在空闲时执行，等待期间再次发送 `#guard更新` 即马上生效。详见[升级、停用和回退](https://github.com/Admilkk/yunzai-guard/blob/main/docs/LIFECYCLE.md)。
 - 下载发布包后先核对 `SHA256SUMS.txt`，业务进程停止后再替换文件；新版本无法上线时自动还原，上一版本保留在 `.update/previous`。
 - 冷启动（`node app.js`）的宿主会自动用新文件重新启动自己；launcher、PM2、systemd 托管的宿主需由管理器或你重启后才完全生效。
 - 用 release 分支 Git 安装的同样可以自动更新与还原；main 分支源码安装只提示新版本。检查间隔与通知可在「运行设置 → 版本更新」调整。
@@ -188,6 +195,7 @@ npm run package       # 生成发布资产到 release/
 
 ## 反馈与贡献 🤝
 
+- 交流群：QQ [**833016696**](https://qun.qq.com/universal-share/share?ac=1&authKey=EcUQyFcyHxJ43n%2BIQ32YofDTWJF4Xcy9zLmsWWy2sMmBAezWtiQfrH%2FV6TqGRcdm&busi_data=eyJncm91cENvZGUiOiI4MzMwMTY2OTYiLCJ0b2tlbiI6InNsT1NRTkVWb1UyMWRRbDdBMnFVaS93YU5mMENjVEJldmg1QmVvRVVaWUpWVU11Z2ZSWC8vWFZ0R01kcDZyZ2EiLCJ1aW4iOiIyMTczMzAyMTQ0In0%3D&data=Mey29tuFq8ImC1yGNKOZHwKJHLVEr2eCx2Vnm0VvLr1AnusAaT_pDx4kDq73WWsCK2BYs9oUbf4juF7cRTLbnw&svctype=4&tempid=h5_group_info)
 - 缺陷与建议：[Issues](https://github.com/Admilkk/yunzai-guard/issues)
 - 安全问题：请走[私密漏洞报告](https://github.com/Admilkk/yunzai-guard/security/advisories/new)，见 [SECURITY.md](SECURITY.md)
 - 提交 PR 前请运行上面的检查命令。

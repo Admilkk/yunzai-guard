@@ -86,7 +86,7 @@ export interface AuditPage {
 }
 /**
  * 分页读取审计事件。面板多个卡片会在同一时刻发出相同查询，
- * 文件未变化时 2 秒内直接复用结果，避免重复扫描与汇总。
+ * 文件未变化时 2 秒内复用结果；不同分页共享旧 JSONL 窗口，文件变化或到期即释放。
  */
 export declare function readAudit(stateDir: string, input?: AuditQuery | URLSearchParams): AuditPage;
 /** 已记录的原生扩展加载，按插件与路径去重，最新在前。 */

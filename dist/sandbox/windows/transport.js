@@ -18,7 +18,7 @@ export function writeControl(stream, connected, message, counters, callback) {
     }
     let text;
     try {
-        text = JSON.stringify(message) + "\n";
+        text = `${JSON.stringify(message)}\n`;
     }
     catch (error) {
         return reject(error instanceof Error ? error : new Error(String(error)));

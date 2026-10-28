@@ -171,7 +171,7 @@ export class SqliteAuditSink {
                             : line;
                         records.push({
                             value,
-                            origin: "legacy:" + createHash("sha256").update(identity).digest("hex"),
+                            origin: `legacy:${createHash("sha256").update(identity).digest("hex")}`,
                         });
                     }
                     catch {

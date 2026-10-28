@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { M } from "../shared/messages.js";
+import { hashFile } from "../shared/hash.js";
 /** 依赖只接受普通文件和真实目录，避免链接改变核验目标。 */
-export function readFile(file, maximum = 256 * 1024 * 1024) {
+function checkedFile(file, maximum) {
     const absolute = path.resolve(file);
     for (let cursor = path.dirname(absolute);; cursor = path.dirname(cursor)) {
         const stat = fs.lstatSync(cursor);
@@ -15,15 +16,20 @@ export function readFile(file, maximum = 256 * 1024 * 1024) {
     const stat = fs.lstatSync(absolute);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > maximum)
         throw new Error(M.dependencies.ordinaryFile);
-    return fs.readFileSync(absolute);
+    return absolute;
+}
+/** 校验依赖路径与大小后读取文件，供小型清单解析使用。 */
+export function readFile(file, maximum = 256 * 1024 * 1024) {
+    return fs.readFileSync(checkedFile(file, maximum));
 }
 /** 计算 SHA-256 十六进制摘要。 */
 export function hash(bytes) {
     return createHash("sha256").update(bytes).digest("hex");
 }
-/** 校验文件摘要，不符时抛错；通过时返回文件路径。 */
+/** 分块校验依赖摘要，保留路径与大小限制；通过时返回原文件路径。 */
 export function verifyFile(file, expected) {
-    if (!/^[a-f0-9]{64}$/.test(expected) || hash(readFile(file)) !== expected)
+    if (!/^[a-f0-9]{64}$/.test(expected) ||
+        hashFile(checkedFile(file, 256 * 1024 * 1024)) !== expected)
         throw new Error(M.dependencies.hashMismatch(path.basename(file)));
     return file;
 }

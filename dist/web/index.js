@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import { GuardPanel } from "./server.js";
+import { M } from "../shared/messages.js";
+import { coreProtocolVersion } from "./core-protocol.js";
+/** 控制台实现的宿主接口版本，宿主加载控制台时核对。 */
+export const coreProtocol = coreProtocolVersion;
 let panel;
 /** 写入面板日志，失败时忽略。 */
 function logLine(message) {
@@ -22,10 +26,14 @@ function readVersion() {
         return "unknown";
     }
 }
-/** 面板与宿主同生命周期：宿主退出后端口随之释放，不会留下孤儿服务。 */
+/** 当前控制台代码的版本，热替换后即为新版本。 */
+export function panelVersion() {
+    return readVersion();
+}
+/** 面板与宿主同生命周期：宿主退出后端口随之释放，不会留下孤儿服务。返回是否已在监听。 */
 export async function startPanel(options) {
     if (panel)
-        return;
+        return true;
     let instance;
     try {
         instance = new GuardPanel({ ...options, version: readVersion(), log: logLine });
@@ -33,16 +41,28 @@ export async function startPanel(options) {
     catch (error) {
         // 面板配置损坏不能影响宿主接管业务进程。
         logLine(`[Yunzai Guard] 控制台初始化失败：${error.message}`);
-        return;
+        return false;
     }
     panel = instance;
     try {
-        await instance.start();
+        if (await instance.start())
+            return true;
     }
     catch (error) {
-        panel = undefined;
         logLine(`[Yunzai Guard] 控制台启动失败：${error.message}`);
     }
+    panel = undefined;
+    return false;
+}
+/** 生成一次性登录链接；面板未启动或聊天登录关闭时抛出可读的错误。 */
+export function panelLoginLink() {
+    if (!panel)
+        throw new Error(M.web.linkPanelOff);
+    return panel.loginLink();
+}
+/** 取出内存会话，热替换时交给下一个控制台。 */
+export function panelHandover() {
+    return panel?.handover();
 }
 /** 停止面板服务。 */
 export async function stopPanel() {
@@ -53,4 +73,4 @@ export async function stopPanel() {
 //# sourceMappingURL=index.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "../protect/objects.js"
-__guardRegisterExports("web/index.ts", { startPanel, stopPanel })
+__guardRegisterExports("web/index.ts", { coreProtocol, panelVersion, startPanel, panelLoginLink, panelHandover, stopPanel })

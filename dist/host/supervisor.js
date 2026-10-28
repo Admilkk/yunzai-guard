@@ -27,16 +27,18 @@ import { monitorStatus, parseMonitorReport } from "../monitor/report.js";
 import { buildLinuxSandbox } from "../sandbox/linux.js";
 import { spawnWindowsSandbox, } from "../sandbox/windows.js";
 import { acquireProjectLock, legacyProjectPort } from "./lock.js";
-import { startPanel, stopPanel } from "../web/index.js";
+import { CoreHost } from "./core.js";
 import { SettingsController } from "./settings.js";
 import { root, settings as initialSettings, projectId, controlPort as requestedControlPort, controlPath, stateDir, until, sleep, } from "./context.js";
 import { assertPlatform, capabilities, captureDescendants, prepareDescendantCapture, retireDescendantCapture, hasExited, terminateWorkerTree, } from "./platform.js";
-import { UsageWatch } from "./usage.js";
-import { UpdateService } from "./update.js";
+import { ResourceHistory, UsageWatch } from "./usage.js";
+import { pendingDue, UpdateService } from "./update.js";
 import { AlertService } from "./alerts.js";
 import { SourceWatch } from "./sources.js";
 import { atLeast, BehaviorProfile } from "./profile.js";
 import { parseSettings } from "../config/index.js";
+import { snapshotPrevious, workPaths } from "../update/install.js";
+import { syncFiles } from "../update/plan.js";
 import { M } from "../shared/messages.js";
 let settings = initialSettings;
 installHostLog(stateDir, { maxBytes: settings.log.maxBytes });
@@ -228,14 +230,26 @@ if (recovery.tripped)
 function saveRecovery() {
     saveRecoveryState(recoveryPath, recovery);
 }
+const pluginDir = fileURLToPath(new URL("../../", import.meta.url));
+const hotDir = workPaths(pluginDir).hot;
+const maxVerifyAttempts = 2;
+/** 上一宿主留下、等待本宿主确认的更新。 */
+let verifying;
+/** 最近一次观察到插件处理消息的时间，业务侧更新据此等待空闲。 */
+let lastActivityAt = Date.now();
 const updates = new UpdateService({
-    pluginDir: fileURLToPath(new URL("../../", import.meta.url)),
+    pluginDir,
     stateDir,
     settings: () => configuration.active.update,
     send: noticeToMasters,
     /** 暂存完成后排入生命周期队列。 */
-    install(staged, from, rollback) {
-        enqueue({ type: "update", staged, from, rollback });
+    install(staged, from, rollback, immediate) {
+        if (!enqueue({ type: "update", staged, from, rollback, immediate }))
+            throw new Error(M.update.busy);
+    },
+    /** 取消等待中的更新：控制台回到当前文件。 */
+    async cancelPending() {
+        await core.swap(pluginDir);
     },
     record,
 });
@@ -257,6 +271,7 @@ const profiles = new BehaviorProfile({
     file: path.join(stateDir, "profiles.json"),
     settings: () => configuration.active.baseline,
 });
+const resources = new ResourceHistory();
 const sourceWatch = new SourceWatch({
     pluginsDir: path.join(root, "plugins"),
     stateDir,
@@ -269,6 +284,47 @@ const sourceWatch = new SourceWatch({
         });
     },
 });
+/** 控制台使用的宿主能力。 */
+function panelOptions() {
+    return {
+        root: process.cwd(),
+        stateDir,
+        settings: configuration.active,
+        getSettings: () => configuration.active,
+        configuration: () => configuration.state,
+        applySettings: (next) => {
+            const state = configuration.request(next);
+            enqueue({ type: "configure" });
+            return state;
+        },
+        status,
+        controllers: {
+            alerts: {
+                history: (limit) => alerts.history(limit),
+                testWebhook: () => alerts.testWebhook(),
+                state: () => alerts.state(),
+                acknowledge: (ids) => alerts.acknowledge(ids),
+                mute: (target, minutes) => alerts.mute(target, minutes),
+                unmute: (key) => alerts.unmute(key),
+                raise: (...args) => alerts.raise(...args),
+            },
+            profiles,
+            sources: sourceWatch,
+            resources: { points: () => resources.points() },
+        },
+        update: {
+            state: () => updates.state(),
+            check: () => updates.check(true),
+            apply: (force) => updates.apply(force, force),
+            rollback: () => updates.rollback(),
+            applyPending: () => updates.applyPending(),
+        },
+        restart: () => void enqueue({ type: "restart" }),
+        resume: () => void enqueue({ type: "resume" }),
+        audit: record,
+    };
+}
+const core = new CoreHost({ panel: panelOptions, record });
 const anomalyLabels = {
     "new-target": "出现新行为",
     "rate-spike": "频率突增",
@@ -375,6 +431,7 @@ function watchUsage(session) {
     const pid = session.child.pid;
     if (!session.settings.monitor.process || !pid || session.usage)
         return;
+    resources.restart();
     session.usage = new UsageWatch(pid, (remote, usage) => {
         if (session !== worker)
             return;
@@ -399,6 +456,9 @@ function watchUsage(session) {
             },
             time: usage.sampledAt,
         });
+    }, usage => {
+        if (session === worker)
+            resources.push(usage);
     });
     session.usage.start();
 }
@@ -498,12 +558,15 @@ function onMessage(session, raw) {
             return;
         }
         switch (message.type) {
-            case "monitor-report":
-                session.monitor = {
-                    report: parseMonitorReport(message.report, settings.protect.targets.length),
-                    receivedAt: Date.now(),
-                };
+            case "monitor-report": {
+                const report = parseMonitorReport(message.report, settings.protect.targets.length);
+                session.monitor = { report, receivedAt: Date.now() };
+                const calls = report.plugins.entries.reduce((sum, entry) => sum + entry.calls, 0);
+                if (session.calls !== undefined && calls !== session.calls)
+                    lastActivityAt = Date.now();
+                session.calls = calls;
                 return;
+            }
             case "preload-ready":
                 if (!session.preloaded)
                     record("preload-ready", { generation: session.generation });
@@ -531,6 +594,9 @@ function onMessage(session, raw) {
                 return;
             case "rollback-request":
                 void requestRollback();
+                return;
+            case "login-link-request":
+                void sendLoginLink();
                 return;
             case "update-request":
             case "update-force-request":
@@ -978,11 +1044,28 @@ function pruneLogs() {
         record("log-prune-failed", { message: error.message });
     }
 }
-/** 处理主人命令触发的更新，拒绝原因回复给主人。 */
+/** 处理主人命令触发的更新，拒绝原因回复给主人；强制更新不等待空闲。 */
 async function requestUpdate(force) {
-    const result = await updates.apply(force);
+    const result = await updates.apply(force, force);
     if (!result.ok)
         updates.notify(`【Yunzai Guard】${result.message}`);
+}
+/** 处理主人的 #guard登录：链接只经宿主私聊主人，不回传给工作进程里的调用方。 */
+async function sendLoginLink() {
+    let text;
+    try {
+        const { urls, ttlSeconds } = await core.loginLink();
+        text = [
+            "【Yunzai Guard】控制台登录链接",
+            ...urls,
+            `${Math.round(ttlSeconds / 60)} 分钟内有效，仅可使用一次，请勿转发。`,
+        ].join("\n");
+        record("panel-login-link", { urls: urls.length });
+    }
+    catch (error) {
+        text = `【Yunzai Guard】${error.message}`;
+    }
+    noticeToMasters(text);
 }
 /** 处理主人命令触发的还原，拒绝原因回复给主人。 */
 async function requestRollback() {
@@ -990,33 +1073,104 @@ async function requestRollback() {
     if (!result.ok)
         updates.notify(`【Yunzai Guard】${result.message}`);
 }
-/** 停止业务进程、替换文件并重新上线；新版本无法上线时还原。 */
-async function applyUpdate(staged, from, rollback = false) {
+/** 宿主能否用新文件重新启动自己：冷启动可自行拉起，外部管理器会在宿主退出后重新执行。 */
+function canRelaunch() {
+    return Boolean(bootstrapPid) || process.env.YUNZAI_GUARD_COLD === "1" || external;
+}
+/**
+ * 按组件比较结果执行更新：
+ * - static / core：只替换变化的文件并重新加载控制台，业务进程不受影响
+ * - worker：立即或择时重启业务进程一次；择时期间控制台先从暂存目录运行新版本
+ * - host：停止业务、替换文件后宿主重新启动，新宿主确认业务上线后才算成功，否则自动还原
+ */
+async function applyUpdate(staged, from, rollback = false, immediate = false) {
+    const plan = staged.plan ?? { level: "host", changed: [] };
+    record("update-begin", { from, to: staged.version, level: plan.level });
+    if (plan.level === "static" || plan.level === "core")
+        return hotUpdate(staged, from, rollback, plan.level === "core");
+    if (plan.level === "worker" && !immediate && configuration.active.update.workerRestart !== "now")
+        return deferUpdate(staged, from, rollback);
+    if (plan.level === "host" && canRelaunch())
+        return relaunchUpdate(staged, from, rollback);
+    return restartUpdate(staged, from, rollback, plan.level === "host");
+}
+/** 热更新：只替换变化的文件，必要时重新加载控制台；任何一步失败都还原文件与控制台。 */
+async function hotUpdate(staged, from, rollback, reloadCore) {
+    const to = staged.version;
+    let undo;
+    let commit = () => { };
+    try {
+        if (staged.commit) {
+            const handle = updates.swap(staged);
+            undo = () => handle.rollback();
+            commit = () => handle.commit();
+        }
+        else {
+            snapshotPrevious(pluginDir);
+            const sync = syncFiles(staged.directory, pluginDir, staged.plan?.changed ?? [], hotDir);
+            undo = () => sync.rollback();
+        }
+    }
+    catch (error) {
+        updates.finish({
+            ok: false,
+            from,
+            to,
+            message: error.message,
+            mode: "hot",
+            rollback,
+        });
+        return;
+    }
+    if (reloadCore && !(await core.swap(pluginDir))) {
+        await core.stop();
+        undo();
+        await core.start(pluginDir);
+        updates.finish({ ok: false, from, to, message: M.update.coreFailed, mode: "hot", rollback });
+        return;
+    }
+    commit();
+    updates.finish({ ok: true, from, to, mode: "hot", rollback });
+}
+/** 业务侧更新择时生效：控制台先换成暂存目录中的新版本，业务进程等空闲时再重启。 */
+async function deferUpdate(staged, from, rollback) {
+    if (!(await core.swap(staged.directory)))
+        record("update-core-preview-failed", { to: staged.version });
+    updates.defer(staged, from, rollback);
+}
+/**
+ * 重启业务进程完成更新：停止业务、替换文件、拉起新业务并确认上线，失败则还原。
+ * hostPending 为真时宿主外壳也有改动但无法自行重启，新代码在宿主下次启动时完全生效。
+ */
+async function restartUpdate(staged, from, rollback, hostPending) {
     const to = staged.version;
     phase = "restarting";
-    record("update-begin", { from, to });
     await sleep(1500);
     await stopWorker();
+    // 控制台可能正从暂存目录运行，替换会移走这些文件，先停下再换。
+    await core.stop();
     let handle;
     try {
         handle = updates.swap(staged);
     }
     catch (error) {
+        await core.start(pluginDir);
         if (!stopping)
             await startWorker();
-        updates.finish({ ok: false, from, to, message: error.message, relaunch: false });
+        updates.finish({
+            ok: false,
+            from,
+            to,
+            message: error.message,
+            mode: "worker",
+            rollback,
+        });
         return;
     }
-    if (stopping)
-        return handle.commit();
-    if (rollback) {
-        // 旧版本的业务进程不能由新宿主拉起，宿主带着旧文件重新启动。
+    // 新控制台与当前宿主的调用协议不兼容时线程拒绝启动，控制台在宿主重启后恢复。
+    await core.start(pluginDir);
+    if (stopping) {
         handle.commit();
-        relaunch = Boolean(bootstrapPid) || process.env.YUNZAI_GUARD_COLD === "1";
-        if (external)
-            exitCode = 0;
-        updates.finish({ ok: true, from, to, relaunch: relaunch || external, rollback: true });
-        enqueue({ type: "stop" });
         return;
     }
     try {
@@ -1031,8 +1185,11 @@ async function applyUpdate(staged, from, rollback = false) {
         }
         catch (error) {
             record("update-stop-failed", { message: error.message });
+            throw error;
         }
+        await core.stop();
         handle.rollback();
+        await core.start(pluginDir);
         try {
             if (!stopping)
                 await startWorker();
@@ -1040,19 +1197,148 @@ async function applyUpdate(staged, from, rollback = false) {
         catch (error) {
             record("update-restore-failed", { message: error.message });
         }
-        updates.finish({ ok: false, from, to, message: M.update.unhealthy, relaunch: false });
+        updates.finish({ ok: false, from, to, message: M.update.unhealthy, mode: "worker", rollback });
         return;
     }
     handle.commit();
-    relaunch = !stopping && (Boolean(bootstrapPid) || process.env.YUNZAI_GUARD_COLD === "1");
-    // 外部管理器会在宿主以 0 退出后重新执行 node . start，届时由新文件接管。
-    if (external && !stopping)
-        exitCode = 0;
-    updates.finish({ ok: true, from, to, relaunch: relaunch || (external && !stopping) });
-    if (relaunch || (external && !stopping))
-        enqueue({ type: "stop" });
+    updates.finish({ ok: true, from, to, mode: hostPending ? "host-pending" : "worker", rollback });
 }
-/** 加入生命周期动作队列，停止动作优先。 */
+/**
+ * 宿主级更新：停止业务、替换文件后直接重新启动宿主，业务只重启一次。
+ * 结果由新宿主在业务上线后确认；新宿主无法让业务上线时会还原到原版本。
+ */
+async function relaunchUpdate(staged, from, rollback, revert = false) {
+    const to = staged.version;
+    phase = "restarting";
+    await sleep(1500);
+    await stopWorker();
+    await core.stop();
+    let handle;
+    try {
+        handle = updates.swap(staged);
+    }
+    catch (error) {
+        await core.start(pluginDir);
+        if (!stopping)
+            await startWorker();
+        updates.finish({
+            ok: false,
+            from,
+            to,
+            message: error.message,
+            mode: "relaunch",
+            rollback,
+        });
+        return;
+    }
+    handle.commit();
+    updates.markVerify({ from, to, rollback, revert });
+    record("update-relaunch", { from, to });
+    relaunch = !external;
+    if (external)
+        exitCode = 0;
+    enqueue({ type: "stop" });
+}
+/**
+ * 新宿主确认上一宿主留下的更新：业务上线即成功；未能上线或反复启动失败时还原并再次重启。
+ * 还原本身也失败时停止自动处理，保留现状并通知主人。
+ */
+async function verifyUpdate() {
+    const pendingVerify = verifying;
+    if (!pendingVerify)
+        return;
+    verifying = undefined;
+    const online = Boolean(worker?.online && !worker.failure);
+    if (online && pendingVerify.attempts <= maxVerifyAttempts) {
+        updates.clearVerify();
+        if (pendingVerify.revert)
+            updates.finish({
+                ok: false,
+                from: pendingVerify.to,
+                to: pendingVerify.from,
+                message: M.update.revertedAfterFailure(pendingVerify.from),
+                mode: "relaunch",
+            });
+        else
+            updates.finish({
+                ok: true,
+                from: pendingVerify.from,
+                to: pendingVerify.to,
+                mode: "relaunch",
+                rollback: pendingVerify.rollback,
+            });
+        return;
+    }
+    record("update-verify-failed", { ...pendingVerify, online });
+    if (pendingVerify.revert || !canRelaunch()) {
+        updates.clearVerify();
+        updates.finish({
+            ok: false,
+            from: pendingVerify.from,
+            to: pendingVerify.to,
+            message: M.update.revertFailed,
+            mode: "relaunch",
+        });
+        return;
+    }
+    try {
+        const staged = await updates.stageRevert(pendingVerify.from);
+        try {
+            await stopWorker();
+        }
+        catch (error) {
+            // 业务进程清理未确认时不能释放项目锁或拉起新进程：只还原文件，宿主保持熔断，
+            // 主人确认没有残留进程后重启宿主即运行原版本。
+            record("update-revert-cleanup-unconfirmed", { message: error.message });
+            await core.stop();
+            updates.swap(staged).commit();
+            await core.start(pluginDir);
+            if (!recovery.tripped)
+                trip(`update-revert-cleanup-unconfirmed:${error.message}`);
+            updates.clearVerify();
+            updates.finish({
+                ok: false,
+                from: pendingVerify.from,
+                to: pendingVerify.to,
+                message: M.update.revertedTripped(pendingVerify.from),
+                mode: "relaunch",
+            });
+            return;
+        }
+        await relaunchUpdate(staged, pendingVerify.to, true, true);
+    }
+    catch (error) {
+        record("update-revert-failed", {
+            message: error.message,
+            causes: error instanceof AggregateError
+                ? error.errors.map(item => (item instanceof Error ? item.message : String(item)))
+                : undefined,
+        });
+        updates.clearVerify();
+        updates.finish({
+            ok: false,
+            from: pendingVerify.from,
+            to: pendingVerify.to,
+            message: `${M.update.revertFailed}：${error.message}`,
+            mode: "relaunch",
+        });
+    }
+}
+/** 等待中的业务侧更新是否该执行：业务在线、队列空闲，且满足配置的时机。 */
+function pendingReady() {
+    const pendingUpdate = updates.pending;
+    if (!pendingUpdate || !worker?.online || worker.failure || stopping)
+        return false;
+    if (phase !== "online" || active || pending)
+        return false;
+    return pendingDue({
+        since: pendingUpdate.since,
+        settings: configuration.active.update,
+        lastActivityAt,
+        now: Date.now(),
+    });
+}
+/** 加入生命周期动作队列，停止动作优先；返回是否接收或合并，避免更新被静默丢弃。 */
 function enqueue(action) {
     if (action.type === "stop") {
         bootstrapAbort.abort();
@@ -1061,21 +1347,23 @@ function enqueue(action) {
     }
     else if (bootstrapPending) {
         record("bootstrap-action-rejected", { action: action.type });
-        return;
+        return false;
     }
     else if (stopping ||
         (recovery.tripped && action.type !== "resume" && action.type !== "configure"))
-        return;
+        return false;
     if (action.type === "restart" && (active?.type === "restart" || pending?.type === "restart")) {
         record("restart-coalesced", { generation });
-        return;
+        return true;
     }
     if (action.type === "resume" && (active?.type === "resume" || pending?.type === "resume"))
-        return;
-    if (!pending || priority[action.type] > priority[pending.type])
+        return true;
+    const accepted = !pending || priority[action.type] > priority[pending.type];
+    if (accepted)
         pending = action;
     if (!pumping)
         void pump();
+    return accepted;
 }
 /** 关闭宿主：停止业务进程、面板与控制端点。 */
 async function closeHost() {
@@ -1128,7 +1416,7 @@ async function closeHost() {
         // 不删除无法识别的控制文件。
     }
     await new Promise(resolve => server.close(() => resolve()));
-    await stopPanel();
+    await core.stop();
     await projectLock?.close();
     process.exit(exitCode);
 }
@@ -1146,8 +1434,18 @@ async function pump() {
                 case "start":
                     if (recovery.tripped)
                         phase = "tripped";
-                    else if (!worker)
-                        await startWorker();
+                    else if (!worker) {
+                        try {
+                            await startWorker();
+                        }
+                        catch (error) {
+                            // 待确认的更新在此失败时交给确认流程还原，不按普通故障处理。
+                            if (!verifying)
+                                throw error;
+                            record("update-verify-start-failed", { message: error.message });
+                        }
+                    }
+                    await verifyUpdate();
                     break;
                 case "restart":
                     phase = "restarting";
@@ -1170,7 +1468,7 @@ async function pump() {
                     await recover(active.reason || "unknown-worker-failure");
                     break;
                 case "update":
-                    await applyUpdate(active.staged, active.from ?? "unknown", active.rollback);
+                    await applyUpdate(active.staged, active.from ?? "unknown", active.rollback, active.immediate);
                     break;
                 case "configure":
                     await configuration.applyPending();
@@ -1182,6 +1480,15 @@ async function pump() {
         }
         catch (error) {
             record("lifecycle-error", { action: active.type, message: error.message });
+            if (active.type === "update")
+                updates.finish({
+                    ok: false,
+                    from: active.from ?? "unknown",
+                    to: active.staged?.version ?? "unknown",
+                    message: error.message,
+                    mode: "worker",
+                    rollback: active.rollback,
+                });
             if (active.type === "stop") {
                 stopping = false;
                 trip("stop-cleanup-failed");
@@ -1331,41 +1638,22 @@ try {
         record("bootstrap-exit-confirmed", { bootstrapPid });
     }
     bootstrapPending = false;
+    // 上一宿主替换文件后重新启动了本宿主：反复启动失败时直接还原，否则等业务上线后确认。
+    verifying = updates.takeVerify();
+    if (verifying)
+        record("update-verify-begin", { ...verifying });
     // 接管确认后再启动控制台：面板故障不会影响交接，此刻宿主已经是唯一权威。
-    await startPanel({
-        root: process.cwd(),
-        stateDir,
-        settings,
-        getSettings: () => configuration.active,
-        configuration: () => configuration.state,
-        applySettings: next => {
-            const state = configuration.request(next);
-            enqueue({ type: "configure" });
-            return state;
-        },
-        status,
-        controllers: {
-            alerts: {
-                history: limit => alerts.history(limit),
-                testWebhook: () => alerts.testWebhook(),
-            },
-            profiles,
-            sources: sourceWatch,
-        },
-        update: {
-            state: () => updates.state(),
-            check: () => updates.check(true),
-            apply: force => updates.apply(force),
-            rollback: () => updates.rollback(),
-        },
-        restart: () => enqueue({ type: "restart" }),
-        resume: () => enqueue({ type: "resume" }),
-        audit: record,
-    });
+    await core.start(pluginDir);
+    if (verifying && verifying.attempts > maxVerifyAttempts)
+        await verifyUpdate();
     if (!stopping)
         enqueue({ type: "start" });
     if (!stopping)
         updates.start();
+    setInterval(() => {
+        if (pendingReady())
+            void updates.applyPending();
+    }, 5000).unref();
     if (!stopping)
         sourceWatch.start();
     pruneLogs();

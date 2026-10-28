@@ -31,7 +31,7 @@ export function connectSocket(manifest, identity, lifecycle) {
         isConnected: () => !degraded && !socket.destroyed,
         /** 按行写入审计帧。 */
         write(frame, callback) {
-            return socket.write(stringifyAuditData(frame) + "\n", callback);
+            return socket.write(`${stringifyAuditData(frame)}\n`, callback);
         },
     });
     const nestedCoverage = createReporter(sender, identity, lifecycle.coverage);
@@ -62,7 +62,7 @@ export function connectSocket(manifest, identity, lifecycle) {
     socket.on("error", () => fail("runtime-broker-error"));
     socket.on("close", () => fail("runtime-broker-disconnected"));
     socket.on("drain", () => sender.resume());
-    socket.on("connect", () => socket.write(stringifyAuditData({
+    socket.on("connect", () => socket.write(`${stringifyAuditData({
         type: "runtime-hello",
         version: 1,
         token: manifest.token,
@@ -71,7 +71,7 @@ export function connectSocket(manifest, identity, lifecycle) {
         originPlugin: identity.originPlugin,
         pid: process.pid,
         kind: identity.kind,
-    }) + "\n"));
+    })}\n`));
     const prepare = (frame) => {
         if (prepared)
             return prepared.nonce === frame.closeNonce;
@@ -93,7 +93,7 @@ export function connectSocket(manifest, identity, lifecycle) {
             });
             seal = addInvalidReplies(seal, invalidReplies);
             if (!degraded)
-                socket.write(stringifyAuditData(seal) + "\n");
+                socket.write(`${stringifyAuditData(seal)}\n`);
             while (!receivedResult && !degraded && prepared.deadline.remainingMs() > 0)
                 await new AsyncPromise(resolve => schedule(resolve, mathMin(5, prepared.deadline.remainingMs())));
         }
@@ -206,7 +206,7 @@ export function connectSocket(manifest, identity, lifecycle) {
                     nestedCoverage: nestedCoverage(),
                 });
                 seal = addInvalidReplies(seal, invalidReplies);
-                socket.write(stringifyAuditData(seal) + "\n");
+                socket.write(`${stringifyAuditData(seal)}\n`);
             }
             catch {
                 // 同步 process.exit 无法证明最后一次 socket 写入已到达宿主。

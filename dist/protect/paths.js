@@ -29,7 +29,7 @@ const normalize = (value) => {
         return value;
     const lower = stringLower(value);
     if (stringStartsWith(lower, "\\\\?\\unc\\"))
-        value = "\\\\" + stringSlice(value, 8);
+        value = `\\\\${stringSlice(value, 8)}`;
     else if (stringStartsWith(value, "\\\\?\\") || stringStartsWith(value, "\\\\.\\"))
         value = stringSlice(value, 4);
     return stringLower(value);

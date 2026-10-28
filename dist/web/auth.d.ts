@@ -22,10 +22,16 @@ export interface SessionOptions {
 export interface SessionSummary extends Session {
     current: boolean;
 }
+export interface AuthEvents {
+    /** 一次验证码校验失败。 */
+    failed?: (address: string) => void;
+    /** 来源因失败过多被暂时封禁。 */
+    blocked?: (address: string, seconds: number) => void;
+}
 export declare class PanelAuth {
     #private;
     /** 创建会话管理器，可选持久化到状态目录。 */
-    constructor(settings: () => PanelSettings, stateDir?: string);
+    constructor(settings: () => PanelSettings, stateDir?: string, events?: AuthEvents);
     /** 当前有效会话数。 */
     get tokenCount(): number;
     /** 签发新会话令牌。 */
@@ -42,8 +48,28 @@ export declare class PanelAuth {
     revoke(id: unknown): boolean;
     /** 注销当前会话。 */
     logout(token: unknown): void;
+    /**
+     * 导出仅保存在内存中的会话（未勾选信任设备），只含令牌摘要。
+     * 热替换控制台时交给新控制台，避免更新后需要重新登录；这类会话仍不落盘。
+     */
+    exportVolatile(): Array<{
+        hash: string;
+        session: Session;
+    }>;
+    /** 接收上一个控制台交来的内存会话，格式不符的条目直接忽略。 */
+    importVolatile(entries: unknown): void;
     /** 生成一次性登录验证码，已有有效验证码时拒绝。 */
     requestCode(): string;
+    /**
+     * 生成一次性登录链接令牌：5 分钟有效、仅能使用一次；新链接会使旧链接失效，
+     * 冷却期内重复请求直接拒绝，避免被反复触发刷屏。
+     */
+    issueLink(): {
+        token: string;
+        ttlSeconds: number;
+    };
+    /** 校验登录链接令牌并签发会话；成功后立即作废。 */
+    checkLink(input: unknown, address: string, options?: SessionOptions): string;
     /** 校验登录验证码并签发会话，失败次数超限时暂时封禁来源。 */
     checkCode(input: unknown, address: string, options?: SessionOptions): string;
 }

@@ -6,6 +6,12 @@ export interface PanelSettings {
     tokenTtlHours: number;
     trustedDeviceTtlDays: number;
     trustProxy: boolean;
+    /** 允许局域网以外的来源访问；默认只开放本机与局域网。 */
+    allowExternal: boolean;
+    /** 允许主人发送 #guard登录 获取一次性登录链接。 */
+    chatLogin: boolean;
+    /** 登录链接使用的外部访问地址，例如反向代理后的域名；为空时使用监听地址。 */
+    publicUrl: string;
     jwtSecret: string;
 }
 /** 返回面板配置文件路径。 */
@@ -22,6 +28,9 @@ export interface PanelSettingsPatch {
     tokenTtlHours?: number;
     trustedDeviceTtlDays?: number;
     enabled?: boolean;
+    allowExternal?: boolean;
+    chatLogin?: boolean;
+    publicUrl?: string;
 }
 /** 保留 secret，只覆盖面板可调项；非法值直接拒绝。 */
 export declare function savePanelSettings(stateDir: string, patch: PanelSettingsPatch): PanelSettings;

@@ -12,15 +12,33 @@ export function requestHeaders(version) {
         "X-GitHub-Api-Version": "2022-11-28",
     };
 }
-/** 读取响应正文并限制大小。 */
+/** 分块读取发布元数据，达到字节上限时立即取消响应，避免先缓冲完整正文。 */
 async function limitedText(response, limit) {
     const length = Number(response.headers.get("content-length"));
-    if (Number.isFinite(length) && length > limit)
+    if (Number.isFinite(length) && length > limit) {
+        await response.body?.cancel().catch(() => { });
         throw new Error(M.update.tooLarge);
-    const text = await response.text();
-    if (Buffer.byteLength(text) > limit)
-        throw new Error(M.update.tooLarge);
-    return text;
+    }
+    if (!response.body)
+        return "";
+    const reader = response.body.getReader();
+    try {
+        const chunks = [];
+        let size = 0;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done)
+                return Buffer.concat(chunks, size).toString("utf8");
+            size += value.byteLength;
+            if (size > limit)
+                throw new Error(M.update.tooLarge);
+            chunks.push(value);
+        }
+    }
+    finally {
+        await reader.cancel().catch(() => { });
+        reader.releaseLock();
+    }
 }
 /** 校验并规整 GitHub 发布信息，只接受本仓库的下载地址。 */
 export function parseRelease(value) {

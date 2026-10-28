@@ -37,6 +37,18 @@ function integer(value, fallback, min, max) {
         ? value
         : fallback;
 }
+/** 外部访问地址只接受不带查询与片段的 http(s) 地址。 */
+function validPublicUrl(value) {
+    if (typeof value !== "string" || !value || value.length > 300)
+        return false;
+    try {
+        const url = new URL(value);
+        return (url.protocol === "http:" || url.protocol === "https:") && !url.search && !url.hash;
+    }
+    catch {
+        return false;
+    }
+}
 /** 规范化面板配置并补全默认值。 */
 function normalize(value) {
     const source = value && typeof value === "object" && !Array.isArray(value)
@@ -49,6 +61,9 @@ function normalize(value) {
         tokenTtlHours: integer(source.tokenTtlHours, 24, 1, 720),
         trustedDeviceTtlDays: integer(source.trustedDeviceTtlDays, 30, 1, 90),
         trustProxy: source.trustProxy === true,
+        allowExternal: source.allowExternal === true,
+        chatLogin: typeof source.chatLogin === "boolean" ? source.chatLogin : true,
+        publicUrl: validPublicUrl(source.publicUrl) ? source.publicUrl : "",
         jwtSecret: typeof source.jwtSecret === "string" && source.jwtSecret.length >= 32
             ? source.jwtSecret
             : randomSecret(),
@@ -117,6 +132,16 @@ export function savePanelSettings(stateDir, patch) {
     }
     if (patch.enabled !== undefined)
         next.enabled = patch.enabled;
+    if (patch.allowExternal !== undefined)
+        next.allowExternal = patch.allowExternal;
+    if (patch.chatLogin !== undefined)
+        next.chatLogin = patch.chatLogin;
+    if (patch.publicUrl !== undefined) {
+        const value = patch.publicUrl.trim();
+        if (value && !validPublicUrl(value))
+            throw new TypeError(M.web.publicUrl);
+        next.publicUrl = value;
+    }
     if (patch.trustedDeviceTtlDays !== undefined) {
         if (!Number.isInteger(patch.trustedDeviceTtlDays) ||
             patch.trustedDeviceTtlDays < 1 ||

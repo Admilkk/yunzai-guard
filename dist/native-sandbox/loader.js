@@ -331,12 +331,12 @@ export class NativePluginLoader {
         }
         // 原生插件显示名不能作为宿主基类共享上下文存储的键。
         Object.defineProperty(NativePluginProxy.prototype, "conKey", {
-            value: function () {
+            value() {
                 return namespace;
             },
         });
         Object.defineProperty(NativePluginProxy.prototype, "getContext", {
-            value: async function (_type, isGroup = false) {
+            async value(_type, isGroup = false) {
                 const values = row(await client.request("native-context", {
                     classId: descriptor.id,
                     isGroup,
@@ -365,7 +365,7 @@ export class NativePluginLoader {
                     continue;
                 Object.defineProperty(NativePluginProxy.prototype, method, {
                     configurable: false,
-                    value: function (...args) {
+                    value(...args) {
                         return invoke(this, method, args);
                     },
                 });

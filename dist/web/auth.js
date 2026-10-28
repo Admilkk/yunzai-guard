@@ -18,6 +18,9 @@ const maxFailures = 8;
 const failureWindowMs = 5 * 60_000;
 const blockMs = 5 * 60_000;
 const codeTtlSeconds = 300;
+const linkTtlSeconds = 300;
+const linkCooldownMs = 30_000;
+const linkPattern = /^[A-Za-z0-9_-]{43}$/;
 const maxSessions = 32;
 const maxAttempts = 1024;
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
@@ -29,8 +32,8 @@ function sameSecret(a, b) {
 }
 /** 取字符串并截断，非字符串返回空串。 */
 const text = (value, length) => typeof value === "string" ? value.slice(0, length) : "";
-/** 校验持久化会话记录的结构。 */
-function validSession(value) {
+/** 校验会话记录的结构；落盘的只能是信任设备会话，热替换交接的只能是内存会话。 */
+function validSession(value, remembered = true) {
     if (!value || typeof value !== "object")
         return false;
     const item = value;
@@ -40,7 +43,7 @@ function validSession(value) {
         item.createdAt > 0 &&
         item.createdAt <= item.lastSeenAt &&
         item.lastSeenAt <= item.expiresAt &&
-        item.remember === true &&
+        item.remember === remembered &&
         typeof item.address === "string" &&
         item.address.length <= 128 &&
         typeof item.userAgent === "string" &&
@@ -52,10 +55,13 @@ export class PanelAuth {
     #attempts = new Map();
     #file;
     #secretId;
+    #events;
     #code;
+    #link;
     /** 创建会话管理器，可选持久化到状态目录。 */
-    constructor(settings, stateDir) {
+    constructor(settings, stateDir, events = {}) {
         this.#settings = settings;
+        this.#events = events;
         this.#secretId = digest(settings().jwtSecret);
         this.#file = stateDir ? path.join(stateDir, "auth-sessions.json") : undefined;
         this.#load();
@@ -149,6 +155,31 @@ export class PanelAuth {
         if (typeof token === "string" && this.#sessions.delete(digest(token)))
             this.#persist();
     }
+    /**
+     * 导出仅保存在内存中的会话（未勾选信任设备），只含令牌摘要。
+     * 热替换控制台时交给新控制台，避免更新后需要重新登录；这类会话仍不落盘。
+     */
+    exportVolatile() {
+        const now = Date.now();
+        return [...this.#sessions]
+            .filter(([, session]) => !session.remember && session.expiresAt > now)
+            .map(([hash, session]) => ({ hash, session: { ...session } }));
+    }
+    /** 接收上一个控制台交来的内存会话，格式不符的条目直接忽略。 */
+    importVolatile(entries) {
+        if (!Array.isArray(entries))
+            return;
+        const now = Date.now();
+        for (const entry of entries.slice(0, maxSessions)) {
+            const hash = entry?.hash;
+            const session = entry?.session;
+            if (typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash) || !validSession(session, false))
+                continue;
+            if (session.expiresAt <= now || this.#sessions.size >= maxSessions)
+                continue;
+            this.#sessions.set(hash, session);
+        }
+    }
     /** 生成一次性登录验证码，已有有效验证码时拒绝。 */
     requestCode() {
         if (this.#code && this.#code.expires > Date.now())
@@ -156,6 +187,31 @@ export class PanelAuth {
         const value = randomCode(16);
         this.#code = { hash: digest(value), expires: Date.now() + codeTtlSeconds * 1000 };
         return value;
+    }
+    /**
+     * 生成一次性登录链接令牌：5 分钟有效、仅能使用一次；新链接会使旧链接失效，
+     * 冷却期内重复请求直接拒绝，避免被反复触发刷屏。
+     */
+    issueLink() {
+        const now = Date.now();
+        if (this.#link && now - this.#link.issuedAt < linkCooldownMs)
+            throw new PanelError(429, M.web.linkCooldown);
+        const token = randomBytes(32).toString("base64url");
+        this.#link = { hash: digest(token), issuedAt: now, expires: now + linkTtlSeconds * 1000 };
+        return { token, ttlSeconds: linkTtlSeconds };
+    }
+    /** 校验登录链接令牌并签发会话；成功后立即作废。 */
+    checkLink(input, address, options = {}) {
+        this.#ensureAllowed(address);
+        const token = typeof input === "string" && linkPattern.test(input) ? input : "";
+        const link = this.#link;
+        if (!token || !link || link.expires <= Date.now() || !sameSecret(link.hash, digest(token))) {
+            this.#fail(address);
+            throw new PanelError(401, M.web.linkInvalid);
+        }
+        this.#link = undefined;
+        this.#attempts.delete(address);
+        return this.issue({ ...options, address });
     }
     /** 校验登录验证码并签发会话，失败次数超限时暂时封禁来源。 */
     checkCode(input, address, options = {}) {
@@ -232,11 +288,20 @@ export class PanelAuth {
             attempt.failures = 0;
             attempt.resetAt = now + failureWindowMs;
         }
-        if (++attempt.failures >= maxFailures) {
+        const blocked = ++attempt.failures >= maxFailures;
+        if (blocked) {
             attempt.failures = 0;
             attempt.blockedUntil = now + blockMs;
         }
         this.#attempts.set(address, attempt);
+        try {
+            this.#events.failed?.(address);
+            if (blocked)
+                this.#events.blocked?.(address, Math.round(blockMs / 1000));
+        }
+        catch {
+            // 通知失败不影响封禁本身。
+        }
     }
     /** 从状态目录加载持久化会话。 */
     #load() {
@@ -279,7 +344,7 @@ export class PanelAuth {
             .map(([hash, session]) => ({ hash, session }));
         const temporary = `${this.#file}.${randomBytes(6).toString("hex")}.tmp`;
         fs.mkdirSync(path.dirname(this.#file), { recursive: true });
-        fs.writeFileSync(temporary, JSON.stringify({ version: 1, secretId: this.#secretId, sessions }) + "\n", { mode: 0o600 });
+        fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, secretId: this.#secretId, sessions })}\n`, { mode: 0o600 });
         try {
             fs.renameSync(temporary, this.#file);
         }

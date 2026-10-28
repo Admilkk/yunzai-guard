@@ -239,7 +239,7 @@ export function filePath(value) {
 /** 去掉 Windows 命名空间前缀（`\\?\`、`\\?\UNC\`），便于阅读和按普通路径写规则。 */
 function plainPath(value) {
     if (value.startsWith("\\\\?\\UNC\\"))
-        return "\\\\" + value.slice(8);
+        return `\\\\${value.slice(8)}`;
     if (value.startsWith("\\\\?\\"))
         return value.slice(4);
     return value;

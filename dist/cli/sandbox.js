@@ -58,7 +58,7 @@ export async function sandboxCommand(args, root) {
         const parsed = parseSettings(raw);
         if (parsed.pluginSandbox.plugins.some(plugin => plugin.id === id))
             throw new Error(M.cli.pluginExists(id));
-        const plugin = { id: id, enabled: true, match: `#${id}*`, capabilities: ["reply"] };
+        const plugin = { id, enabled: true, match: `#${id}*`, capabilities: ["reply"] };
         const sandbox = (raw.pluginSandbox ?? {});
         const updated = {
             ...raw,

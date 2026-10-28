@@ -1,4 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { M } from "../shared/messages.js";
 const timeoutMs = 120000;
 const env = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0" });
@@ -21,10 +23,20 @@ export function git(cwd, args) {
         ? reject(new Error(String(stderr).trim() || error.message))
         : resolve(String(stdout).trimEnd())));
 }
-/** 读取 Git 安装的分支；不是 Git 仓库或读取失败时返回 undefined。 */
+/** 直接读取 HEAD 获取当前分支，兼容 worktree；查询状态时不启动 Git 子进程。 */
 export function gitBranch(cwd) {
     try {
-        return gitSync(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]) || undefined;
+        let directory = path.join(cwd, ".git");
+        if (fs.statSync(directory).isFile()) {
+            const pointer = fs.readFileSync(directory, "utf8").trim();
+            if (!pointer.startsWith("gitdir: "))
+                return undefined;
+            directory = path.resolve(cwd, pointer.slice(8));
+        }
+        const head = fs.readFileSync(path.join(directory, "HEAD"), "utf8").trim();
+        if (head.startsWith("ref: refs/heads/"))
+            return head.slice(16) || undefined;
+        return /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(head) ? "HEAD" : undefined;
     }
     catch {
         return undefined;
@@ -39,6 +51,10 @@ export function versionAt(cwd, revision) {
     catch {
         return undefined;
     }
+}
+/** 把某个提交的文件导出为 tar 包。 */
+export async function exportCommit(cwd, commit, file) {
+    await git(cwd, ["archive", "--format=tar", "-o", file, commit]);
 }
 /** 拉取远端发布分支的最新提交，返回提交号与其中的版本号；不改动工作区。 */
 export async function fetchRelease(cwd, expected, force) {
@@ -57,4 +73,4 @@ export async function fetchRelease(cwd, expected, force) {
 //# sourceMappingURL=git.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "../protect/objects.js"
-__guardRegisterExports("update/git.ts", { releaseBranch, gitSync, git, gitBranch, versionAt, fetchRelease })
+__guardRegisterExports("update/git.ts", { releaseBranch, gitSync, git, gitBranch, versionAt, exportCommit, fetchRelease })

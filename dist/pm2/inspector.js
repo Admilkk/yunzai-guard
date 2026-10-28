@@ -79,7 +79,7 @@ export function safeRuntimeError(details) {
         .replace(/\b(token|password|passwd|nonce|secret|authorization|api[_-]?key)\b["']?\s*[:=]\s*(?:"[^"]*"?|'[^']*'?|[^\s,;}]+)/gi, "$1=[REDACTED]")
         .replace(/[\u0000-\u001f\u007f]/g, " ")
         .slice(0, 240);
-    return "PM2 daemon registration Runtime operation failed: " + sanitized;
+    return `PM2 daemon registration Runtime operation failed: ${sanitized}`;
 }
 /** 拒绝会将新激活端点暴露到非回环地址的可见调试配置。 */
 export function assertLoopbackInspectorArguments(commandLine) {
@@ -273,7 +273,7 @@ async function discover(pid, deadline) {
     for (const listener of owned) {
         const timeout = remaining(deadline, 800);
         try {
-            const response = await fetch(origin(listener) + "/json/list", {
+            const response = await fetch(`${origin(listener)}/json/list`, {
                 signal: AbortSignal.timeout(timeout),
                 redirect: "error",
             });

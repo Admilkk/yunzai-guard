@@ -36,7 +36,7 @@ export declare class NativeMediaSourceHost {
     private tags;
     /** 调用方须先登记待处理的适配器调用，再绑定并发送。 */
     bindRequest(requestId: string, args: unknown): void;
-    /** 响应沙箱的分块读取请求。 */
+    /** 响应已绑定适配器请求的分块读取，缺少请求标识时拒绝访问未绑定令牌。 */
     receive(requestId: unknown, method: string, args: unknown): NativeImageSourceChunk;
     /** bindRequest 前适配器校验或发送失败时调用，仅释放未绑定令牌。 */
     discardArgs(args: unknown): void;

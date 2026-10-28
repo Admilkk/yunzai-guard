@@ -2,6 +2,7 @@ import { M } from "../../shared/messages.js";
 /** 等待核心发出就绪信号。 */
 export function waitForBootstrapReady(bot, timeout, signal) {
     return new Promise((resolve, reject) => {
+        // eslint-disable-next-line prefer-const -- 先被回调引用，之后才赋值
         let timer;
         let settled = false;
         const finish = (error) => {

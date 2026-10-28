@@ -39,7 +39,7 @@ export class AuditSender {
     /** 读取通道连接状态，读取异常视为断开。 */
     #connected() {
         try {
-            return this.#options.isConnected() === true;
+            return this.#options.isConnected();
         }
         catch {
             return false;

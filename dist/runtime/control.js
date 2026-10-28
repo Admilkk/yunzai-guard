@@ -51,6 +51,7 @@ export function isControlType(value) {
         value === "update-request" ||
         value === "update-force-request" ||
         value === "rollback-request" ||
+        value === "login-link-request" ||
         value === "preload-ready" ||
         value === "worker-online");
 }
