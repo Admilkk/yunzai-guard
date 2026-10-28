@@ -1,0 +1,232 @@
+import type http from "node:http"
+import type { GuardSettings } from "../shared/types.js"
+import { parseSettings } from "../config/index.js"
+import type { SettingsApplyState } from "../config/update.js"
+import { M } from "../shared/messages.js"
+import type { PanelControllers } from "./controllers.js"
+import {
+  isPlainObject,
+  listSettingsBackups,
+  readSettingsBackup,
+  readSettingsDocument,
+  validateSettingsDocument,
+  writeSettingsDocument,
+} from "./guard-settings.js"
+import { readAudit, type AuditEntry } from "./monitor.js"
+
+export interface ExtraContext {
+  stateDir: string
+  settings: GuardSettings
+  getSettings?: () => GuardSettings
+  applySettings?: (settings: GuardSettings) => SettingsApplyState
+  controllers?: PanelControllers
+  audit?: (type: string, details?: Record<string, unknown>) => void
+  readBody: (request: http.IncomingMessage) => Promise<unknown>
+  sendJson: (response: http.ServerResponse, status: number, body: unknown) => void
+  fail: (status: number, message: string) => Error
+}
+
+const maxExportRows = 20000
+
+/** 转成 CSV 字段，处理引号、换行，并防止被表格软件当作公式。 */
+function csvField(value: unknown): string {
+  let text = value === undefined || value === null ? "" : String(value)
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+/** 把审计条目转为一行 CSV。 */
+function csvRow(entry: AuditEntry): string {
+  return [
+    new Date(entry.time).toISOString(),
+    entry.plugin,
+    entry.kind,
+    entry.operation,
+    entry.target,
+    entry.action,
+    entry.ruleId,
+    entry.blocked ? "是" : "",
+  ]
+    .map(csvField)
+    .join(",")
+}
+
+/** 设置导出时去掉 Webhook 密钥，除非明确要求带上。 */
+function exportable(document: Record<string, unknown>, secrets: boolean): Record<string, unknown> {
+  if (secrets) return document
+  const alerts = document.alerts
+  if (!isPlainObject(alerts) || !isPlainObject(alerts.webhook)) return document
+  return { ...document, alerts: { ...alerts, webhook: { ...alerts.webhook, secret: "" } } }
+}
+
+/** 面板扩展接口；未处理的路由返回 false。 */
+export async function handleExtra(
+  context: ExtraContext,
+  route: string,
+  url: URL,
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<boolean> {
+  const { stateDir, controllers, sendJson, fail } = context
+  const active = () => context.getSettings?.() ?? context.settings
+
+  if (route === "GET /api/alerts") {
+    if (!controllers) throw fail(404, M.web.notFound)
+    const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 100))
+    sendJson(response, 200, { history: controllers.alerts.history(limit) })
+    return true
+  }
+  if (route === "POST /api/alerts/test") {
+    if (!controllers) throw fail(404, M.web.notFound)
+    sendJson(response, 200, await controllers.alerts.testWebhook())
+    return true
+  }
+
+  if (route === "GET /api/profiles") {
+    if (!controllers) throw fail(404, M.web.notFound)
+    sendJson(response, 200, controllers.profiles.summary())
+    return true
+  }
+  if (route === "GET /api/profiles/detail") {
+    if (!controllers) throw fail(404, M.web.notFound)
+    const detail = controllers.profiles.detail(url.searchParams.get("plugin") ?? "")
+    if (!detail) throw fail(404, M.web.notFound)
+    sendJson(response, 200, detail)
+    return true
+  }
+  if (
+    controllers &&
+    ["trust", "forget", "end", "reset"].some(name => route === `POST /api/profiles/${name}`)
+  ) {
+    const body = await context.readBody(request)
+    const input = isPlainObject(body) ? body : {}
+    const plugin = typeof input.plugin === "string" ? input.plugin.slice(0, 128) : undefined
+    const kind = typeof input.kind === "string" ? input.kind.slice(0, 64) : ""
+    const key = typeof input.key === "string" ? input.key.slice(0, 256) : ""
+    const action = route.slice("POST /api/profiles/".length)
+    let ok = true
+    if (action === "trust" || action === "forget") {
+      if (!plugin || !kind || !key) throw fail(400, M.web.bodyObject)
+      ok =
+        action === "trust"
+          ? controllers.profiles.trust(plugin, kind, key)
+          : controllers.profiles.forget(plugin, kind, key)
+    } else if (action === "end") controllers.profiles.endLearning(plugin)
+    else controllers.profiles.reset(plugin)
+    context.audit?.("panel-profile-action", { action, plugin })
+    sendJson(response, 200, { ok })
+    return true
+  }
+
+  if (route === "GET /api/sources") {
+    if (!controllers) throw fail(404, M.web.notFound)
+    sendJson(response, 200, { sources: controllers.sources.list() })
+    return true
+  }
+  if (route === "POST /api/sources/scan") {
+    if (!controllers) throw fail(404, M.web.notFound)
+    sendJson(response, 200, { sources: await controllers.sources.scan() })
+    return true
+  }
+
+  if (route === "GET /api/settings/backups") {
+    sendJson(response, 200, { backups: listSettingsBackups(stateDir) })
+    return true
+  }
+  if (route === "GET /api/settings/backup") {
+    const text = readSettingsBackup(stateDir, url.searchParams.get("id") ?? "")
+    if (text === undefined) throw fail(404, M.web.notFound)
+    sendJson(response, 200, { document: JSON.parse(text) })
+    return true
+  }
+  if (route === "POST /api/settings/restore") {
+    const body = await context.readBody(request)
+    const text = readSettingsBackup(stateDir, isPlainObject(body) ? String(body.id) : "")
+    if (text === undefined) throw fail(404, M.web.notFound)
+    const value: unknown = JSON.parse(text)
+    const normalized = validateSettingsDocument(stateDir, value)
+    const result = writeSettingsDocument(stateDir, active(), value)
+    context.audit?.("panel-settings-restored", { pendingRestart: result.pendingRestart })
+    const apply = context.applySettings?.(normalized)
+    sendJson(response, 200, { ok: true, ...result, apply })
+    return true
+  }
+  if (route === "GET /api/settings/export") {
+    const document = readSettingsDocument(stateDir, active()).document
+    const scope = url.searchParams.get("scope")
+    const body =
+      scope === "rules"
+        ? { rules: document.rules ?? [] }
+        : exportable(document, url.searchParams.get("secrets") === "1")
+    const file = scope === "rules" ? "guard-rules.json" : "guard-settings.json"
+    response.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${file}"`,
+      "Cache-Control": "no-store",
+    })
+    response.end(`${JSON.stringify(body, null, 2)}\n`)
+    return true
+  }
+  if (route === "POST /api/settings/import-rules") {
+    const body = await context.readBody(request)
+    if (!isPlainObject(body) || !Array.isArray(body.rules)) throw fail(400, M.web.bodyObject)
+    const current = readSettingsDocument(stateDir, active()).document
+    const existing = Array.isArray(current.rules)
+      ? (current.rules as Record<string, unknown>[])
+      : []
+    const used = new Set(existing.map(rule => String(rule.id)))
+    const imported = (body.rules as Record<string, unknown>[]).map(rule => {
+      let id = String(rule?.id ?? "rule")
+      if (body.mode !== "replace")
+        for (let index = 2; used.has(id); index++) id = `${String(rule?.id ?? "rule")}-${index}`
+      used.add(id)
+      return { ...rule, id }
+    })
+    const document = {
+      ...current,
+      rules: body.mode === "replace" ? imported : [...existing, ...imported],
+    }
+    const normalized = parseSettings(document)
+    const result = writeSettingsDocument(stateDir, active(), document)
+    context.audit?.("panel-rules-imported", { count: imported.length, mode: body.mode })
+    const apply = context.applySettings?.(normalized)
+    sendJson(response, 200, { ok: true, imported: imported.length, ...result, apply })
+    return true
+  }
+
+  if (route === "GET /api/audit/export") {
+    const format = url.searchParams.get("format") === "json" ? "json" : "csv"
+    const params = new URLSearchParams(url.searchParams)
+    params.delete("format")
+    params.delete("limit")
+    params.set("pageSize", "100")
+    const limit = Math.min(
+      maxExportRows,
+      Math.max(1, Number(url.searchParams.get("limit")) || 5000),
+    )
+    const entries: AuditEntry[] = []
+    for (let page = 1; entries.length < limit; page++) {
+      params.set("page", String(page))
+      const result = readAudit(stateDir, params)
+      entries.push(...result.items)
+      if (!result.hasMore) break
+    }
+    const rows = entries.slice(0, limit)
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")
+    response.writeHead(200, {
+      "Content-Type":
+        format === "json" ? "application/json; charset=utf-8" : "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="guard-audit-${stamp}.${format}"`,
+      "Cache-Control": "no-store",
+    })
+    context.audit?.("panel-audit-exported", { format, rows: rows.length })
+    if (format === "json") response.end(`${JSON.stringify(rows, null, 2)}\n`)
+    else
+      response.end(
+        `\uFEFF时间,插件,类型,行为,目标,处理,规则,已拦截\r\n${rows.map(csvRow).join("\r\n")}\r\n`,
+      )
+    return true
+  }
+  void request
+  return false
+}

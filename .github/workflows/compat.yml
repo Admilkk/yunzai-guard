@@ -1,0 +1,77 @@
+name: Compatibility
+
+# 没有真机或不便在开发机上运行的环境：macOS 普通启动、Windows 与 Linux 上的 PM2 5.x。
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths: ["src/**", "scripts/**", ".github/workflows/compat.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS 普通启动
+            os: macos-14
+            pm2: ""
+          - name: Windows PM2 5.4.3
+            os: windows-latest
+            pm2: 5.4.3
+          - name: Windows PM2 5.0.0
+            os: windows-latest
+            pm2: 5.0.0
+          - name: Linux PM2 5.0.0
+            os: ubuntu-latest
+            pm2: 5.0.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+          cache: npm
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+      - run: npm ci --include=dev
+      - name: 单元测试（macOS 仅供参考）
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        # macOS 的 /var 是 /private/var 的符号链接，测试夹具需要真实路径。
+        run: |
+          export TMPDIR="$(cd "$RUNNER_TEMP" && pwd -P)"
+          npm run test:unit
+      - name: Redis（macOS）
+        if: runner.os == 'macOS'
+        run: brew install redis && brew services start redis
+      - name: Redis（Linux）
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y redis-server && sudo systemctl start redis-server
+      - name: Redis（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # 与 TRSS 官方 Windows 安装程序使用同一份 Redis
+          git clone --depth 1 https://github.com/zkteco-home/redis-windows "$env:RUNNER_TEMP/redis"
+          Start-Process -FilePath "$env:RUNNER_TEMP/redis/redis-server.exe" -WorkingDirectory "$env:RUNNER_TEMP/redis" -WindowStyle Hidden
+          Start-Sleep -Seconds 3
+      - name: 准备 TRSS-Yunzai
+        shell: bash
+        run: |
+          git clone --depth=1 https://github.com/TimeRainStarSky/Yunzai.git "$RUNNER_TEMP/yz"
+          cd "$RUNNER_TEMP/yz"
+          PUPPETEER_SKIP_DOWNLOAD=1 npx -y pnpm@10 install --reporter=silent
+          cp -r config/default_config config/config
+      - if: matrix.pm2 != ''
+        run: npm install -g pm2@${{ matrix.pm2 }}
+      - name: 冒烟
+        shell: bash
+        run: node scripts/smoke-yunzai.mjs "$RUNNER_TEMP/yz" ${{ matrix.pm2 != '' && '--pm2' || '' }}

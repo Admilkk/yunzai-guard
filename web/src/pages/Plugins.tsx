@@ -103,6 +103,43 @@ function PermissionEvidence({
 }
 
 /** 插件权限页面。 */
+type PluginSource = {
+  plugin: string
+  git: boolean
+  remote?: string
+  branch?: string
+  commit?: string
+  dirty?: number
+  dirtyFiles?: string[]
+  error?: string
+}
+
+/** Git 来源标记：与仓库一致、有改动或无法读取。 */
+function SourceTag({ source }: { source?: PluginSource }) {
+  if (!source?.git) return null
+  const remote = source.remote?.replace(/^https?:\/\/|\.git$/g, "") ?? "无远端"
+  const detail = `${remote} · ${source.branch ?? "?"} · ${source.commit?.slice(0, 8) ?? "?"}`
+  if (source.error)
+    return (
+      <Tooltip title={source.error}>
+        <Tag className="source-tag">Git 状态未知</Tag>
+      </Tooltip>
+    )
+  return source.dirty ? (
+    <Tooltip title={`${detail}\n改动：${(source.dirtyFiles ?? []).join("、")}`}>
+      <Tag color="orange" className="source-tag">
+        与仓库不一致 {source.dirty}
+      </Tag>
+    </Tooltip>
+  ) : (
+    <Tooltip title={detail}>
+      <Tag color="green" className="source-tag">
+        与仓库一致
+      </Tag>
+    </Tooltip>
+  )
+}
+
 export default function Plugins() {
   const ctx = useConsole()
   const { message } = App.useApp()
@@ -110,6 +147,19 @@ export default function Plugins() {
   const [search, setSearch] = useState("")
   const [mode, setMode] = useState("all")
   const [selected, setSelected] = useState<string[]>([])
+  const [sources, setSources] = useState<Record<string, PluginSource>>({})
+
+  useEffect(() => {
+    api("/api/sources")
+      .then(result =>
+        setSources(
+          Object.fromEntries(
+            (result.sources ?? []).map((item: PluginSource) => [item.plugin, item]),
+          ),
+        ),
+      )
+      .catch(() => {})
+  }, [])
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [tab, setTab] = useState("permissions")
   const [batch, setBatch] = useState(false)
@@ -204,6 +254,7 @@ export default function Plugins() {
               )}
             </Space>
             {plugin.description && <span className="plugin-description">{plugin.description}</span>}
+            <SourceTag source={sources[plugin.id]} />
           </div>
         )
       },

@@ -27,7 +27,7 @@ export function capabilities(
   platform: NodeJS.Platform = process.platform,
   mode = "managed",
 ): PlatformCapabilities {
-  const supported = ["win32", "linux", "android"].includes(platform)
+  const supported = ["win32", "linux", "android", "darwin"].includes(platform)
   const osSandbox = supported && ["win32", "linux"].includes(platform) && mode === "os-sandbox"
   return {
     platform,
@@ -66,7 +66,10 @@ export function capabilities(
 /** 确认当前平台支持所选运行模式。 */
 export function assertPlatform(mode: string, platform: NodeJS.Platform = process.platform): void {
   if (!capabilities(platform).supported) throw new Error(M.host.platform(platform))
-  if (mode !== "managed" && (mode !== "os-sandbox" || platform === "android"))
+  if (
+    mode !== "managed" &&
+    (mode !== "os-sandbox" || platform === "android" || platform === "darwin")
+  )
     throw new Error(M.host.sandboxUnavailable)
 }
 

@@ -16,6 +16,7 @@ import {
   StatTile,
 } from "../components"
 import { EventDetails, eventSource } from "../components/EventDetails"
+import { UpdateStrip } from "../components/UpdateStrip"
 import { functionName, kindName, operationName } from "../lib/labels"
 import type { AuditEntry } from "../types"
 
@@ -297,49 +298,53 @@ export default function Overview() {
           description={`连续故障后已停止自动恢复：${status.trippedReason}。修正问题后点击“解除熔断”。`}
         />
       )}
-      <section className="status-hero">
-        <div className="status-hero-main">
-          <Badge status={online ? "success" : connected ? "warning" : "error"} />
-          <div>
-            <strong>
-              {!connected
-                ? "宿主连接中断"
-                : status.workerPid
-                  ? phaseName(status.phase)
-                  : "业务未运行"}
-            </strong>
-            <span>
-              第 {status.generation ?? "—"} 代 · {isolated ? "系统隔离" : "兼容托管"} · 宿主 PID{" "}
-              <code>{status.hostPid ?? "—"}</code> · 业务 PID <code>{status.workerPid ?? "—"}</code>
-            </span>
+      <section className="status-card">
+        <div className="status-hero">
+          <div className="status-hero-main">
+            <Badge status={online ? "success" : connected ? "warning" : "error"} />
+            <div>
+              <strong>
+                {!connected
+                  ? "宿主连接中断"
+                  : status.workerPid
+                    ? phaseName(status.phase)
+                    : "业务未运行"}
+              </strong>
+              <span>
+                第 {status.generation ?? "—"} 代 · {isolated ? "系统隔离" : "兼容托管"} · 宿主 PID{" "}
+                <code>{status.hostPid ?? "—"}</code> · 业务 PID{" "}
+                <code>{status.workerPid ?? "—"}</code>
+              </span>
+            </div>
           </div>
-        </div>
-        <Space size={8} wrap>
-          <Button
-            icon={<ReloadOutlined />}
-            disabled={!connected || saving}
-            onClick={() =>
-              modal.confirm({
-                title: "重启业务进程？",
-                content: "宿主与控制台保持运行，业务会短暂重连。",
-                okText: "重启",
-                cancelText: "取消",
-                onOk: () => command("restart"),
-              })
-            }
-          >
-            重启业务
-          </Button>
-          {status.trippedReason && (
+          <Space size={8} wrap>
             <Button
-              type="primary"
+              icon={<ReloadOutlined />}
               disabled={!connected || saving}
-              onClick={() => command("resume")}
+              onClick={() =>
+                modal.confirm({
+                  title: "重启业务进程？",
+                  content: "宿主与控制台保持运行，业务会短暂重连。",
+                  okText: "重启",
+                  cancelText: "取消",
+                  onOk: () => command("restart"),
+                })
+              }
             >
-              解除熔断
+              重启业务
             </Button>
-          )}
-        </Space>
+            {status.trippedReason && (
+              <Button
+                type="primary"
+                disabled={!connected || saving}
+                onClick={() => command("resume")}
+              >
+                解除熔断
+              </Button>
+            )}
+          </Space>
+        </div>
+        <UpdateStrip />
       </section>
 
       <div className="stat-grid">

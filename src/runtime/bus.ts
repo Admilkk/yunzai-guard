@@ -13,7 +13,12 @@ import { createControlSigner, isControlType } from "./control.js"
 import { M } from "../shared/messages.js"
 
 export type Command = {
-  type: "restart-request" | "stop-request"
+  type:
+    | "restart-request"
+    | "stop-request"
+    | "update-request"
+    | "update-force-request"
+    | "rollback-request"
   reason?: string
 }
 

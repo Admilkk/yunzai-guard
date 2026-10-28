@@ -2,20 +2,29 @@
 
 ## 平台要求
 
-| 项目                     | 要求                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------- |
-| 操作系统                 | Windows x64、Linux x64；macOS 不支持                                            |
-| Node.js                  | 包最低要求 `>=23.11.0`；Windows 普通入口按需准备官方 x64 `24.22.1` 私有副本     |
-| Yunzai                   | 已安装依赖且能正常运行的 TRSS-Yunzai 或 JiuLi（玖璃）4.x，见下方核心适配        |
-| PM2（可选）              | `>=6.0.14`（含更高版本的预发布版），fork 单实例；还需通过实际接口和身份检查     |
-| Windows 系统隔离（可选） | 系统 PowerShell、.NET Framework 运行环境与可用的 AppContainer；辅助程序随包提供 |
-| Linux 系统隔离（可选）   | 优先系统 bubblewrap，缺失时使用随包静态副本；仍需所需命名空间与系统调用能力     |
+| 项目                     | 要求                                                                                                                          |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| 操作系统                 | Windows x64、Linux x64；macOS 为实验支持，仅兼容托管                                                                          |
+| Node.js                  | 包最低要求 `>=23.11.0`；Windows 普通入口按需准备官方 x64 `24.22.1` 私有副本                                                   |
+| Yunzai                   | 已安装依赖且能正常运行的 TRSS-Yunzai 或 JiuLi（玖璃）4.x，见下方核心适配                                                      |
+| PM2（可选）              | `>=5.0.0`（含更高版本的预发布版），fork 单实例；还需通过实际接口和身份检查。5.x 仅在 Linux 上实测，Windows 请先在测试环境确认 |
+| Windows 系统隔离（可选） | 系统 PowerShell、.NET Framework 运行环境与可用的 AppContainer；辅助程序随包提供                                               |
+| Linux 系统隔离（可选）   | 优先系统 bubblewrap，缺失时使用随包静态副本；仍需所需命名空间与系统调用能力                                                   |
 
 版本要求只设下限，不锁定上限；更高版本仍须通过实际接口和身份检查。Windows 身份核验与 PM2 Inspector 激活依赖原生辅助程序内置的 Node `24.22.1` 镜像摘要，属于二进制核验而非版本门槛，放宽需重新编译并验收辅助程序。最低版本与接口检查不代表所有版本、架构、发行版或业务插件均兼容。不要把 fork `reload` 理解为零停机切换；cluster 与多实例不在支持范围。实验插件沙箱的运行时要求见[独立插件沙箱](NATIVE-PLUGIN-SANDBOX.md)。
 
 在 Yunzai 根目录运行 `node plugins/yunzai-guard/dist/cli.js doctor`，可检查并准备当前配置使用的组件。Windows 官方 Node 依次查找发布包内置的 `runtime/node-v24.22.1-win-x64/node.exe`、Guard 的 `.cache/dependencies`，都没有时才从固定官方地址下载到缓存，均须通过固定 SHA-256 后才使用；普通 `app.js` 冷接管和显式 launcher 均可自动准备。离线且没有合格副本时会报告失败，不替换系统 Node、PATH 或其他应用。
 
 Windows 沙箱辅助程序随包提供，无需用户安装 C# 编译器。Linux 随包 bubblewrap 不使用 setuid，也不会调整系统命名空间策略。系统组件缺失或内核策略禁止隔离时仍需管理员处理；Guard 不会提权或静默关闭隔离。
+
+## macOS（实验）
+
+macOS 支持兼容托管模式下的 `node app.js` 普通启动与显式 launcher，使用系统自带的 Node.js（`>=23.11.0`）。与 Linux 的差异：
+
+- 原进程退出观察与进程树清理使用系统自带的 `ps` 与进程组，不读取 `/proc`。
+- 系统层观察用 `ps` 与 `lsof` 采样进程树与 TCP 连接，每 30 秒一次；macOS 不向普通用户提供逐进程读写字节，这两项显示为 0。
+- 不支持系统隔离（`isolationMode: "os-sandbox"`）与独立插件沙箱，也不支持 PM2 自动接管。
+- 没有真机验证，由仓库的兼容性工作流在 GitHub 的 macOS 环境中实际安装并启动 TRSS-Yunzai 冒烟。遇到问题请附 `data/yunzai-guard/host.log` 提交 Issue。
 
 ## 核心适配
 
@@ -26,15 +35,9 @@ Guard 启动时按 Yunzai 根目录 `package.json` 的名称及加载器文件�
 | TRSS-Yunzai   | `lib/plugins/loader.js` | 支持         |
 | JiuLi（玖璃） | `lib/core/loader.js`    | 支持         |
 
-加载器结构与已适配位置不符时，默认观察降级为不归属插件并记录覆盖事件；已启用拒绝规则、系统隔离或插件沙箱时拒绝启动，不静默失效。`node . start` 等外部托管单进程入口与 TRSS 一样会被拒绝，请改用显式 launcher。JiuLi 没有 `Bot.exitEvent`，默认保护目标中的该项会显示为不可用，退出钩子改用 `exit` 事件监听。
+加载器结构与已适配位置不符时，默认观察降级为不归属插件并记录覆盖事件；已启用拒绝规则、系统隔离或插件沙箱时拒绝启动，不静默失效。`node . start` 外部托管入口见下文“TRSS 官方脚本与守护模式”。JiuLi 没有 `Bot.exitEvent`，默认保护目标中的该项会显示为不可用，退出钩子改用 `exit` 事件监听。
 
 玖璃独立插件沙箱支持旧插件基类、`JiuLiPlugin` 和 `definePlugin` DSL，通过进程内 API 副本及受限加载器代理接入，详见[玖璃接入](NATIVE-PLUGIN-SANDBOX.md#玖璃接入)。Windows 仍需下述文档中的实验私有 Node，普通入口使用的官方 Node 副本不能替代；该适配不代表任意业务插件均兼容。
-
-2026-10-27 已验收 JiuLi 4.3.0（`7d7c9b0`）、Node.js 24.22.1、PM2 7.1.1：Windows/Linux 普通启动自动接管、`Bot.restart`、已有 daemon 下原生 PM2 `restart/reload`、同 daemon 其他应用保持原 PID、业务消息与回复、真实 Redis、Worker、外部 Node、Hook 生效及审计、逐插件规则阻断与恢复、面板会话及 SQLite 留存、退出回收与核心文件完整性。Windows 另验证了 Puppeteer 生成真实 PNG，Linux 验证了渲染后端加载；未登录真实机器人账号。
-
-2026-10-27 以 1.0.0 验收 TRSS-Yunzai 3.1.3（`ff71211`）、Node.js 24.22.1，Windows x64 本机与 Linux x64 容器各一次：`node app.js` 普通启动自动接管，探针插件触发的网络请求、TLS 连接、文件写入（重复写入去重）、端口监听、原生扩展加载、DNS 查询与子进程均正确记录并归因；文件、原生扩展与 DNS 拒绝规则生效且三条拒绝均入库，通配规则未作用于端口监听；写入 Guard 目录被自保护拒绝；系统层采样观察到外部 TCP 连接；控制台总览、行为审计、插件权限显示上述数据；CLI `restart` 重建为第 2 代、`stop` 正常退出。兼容托管模式，未登录真实机器人账号。
-
-同日另以 `0.4.0-alpha.3` 发布包验收玖璃独立插件沙箱：Windows x64 AppContainer（实验私有 Node 24.22.1）与 Linux x64 bubblewrap（容器内），覆盖原入口自动接管、两代受控运行、基类与 DSL、动态规则、捕获组、并发、私聊/群聊上下文、文件与 Hook 阻断、SQLite 留存及退出回收。Windows 缺少实验运行时时仅拒绝所选插件，不回退到核心执行，普通插件继续运行。两平台均确认 116 个核心文件及业务源码未变；未登录真实机器人账号。
 
 ## 普通启动
 
@@ -57,6 +60,14 @@ node plugins/yunzai-guard/dist/launcher.js
 宿主和工作进程输出统一写入 `data/yunzai-guard/host.log`，运行中按每份 4 MiB 保留当前与上一份。Linux 冷接管保留终端输入输出；Windows 冷接管后为独立后台宿主，可使用面板或 `dist/cli.js log` 查看日志。显式 launcher 与 PM2 保留各自原有输出。清理未确认完成时宿主保留锁和熔断状态，不强行退出后另起实例。
 
 默认 `startupTimeout` 为 60000 毫秒。启动器和外层进程管理器应为初始化及系统资源回收保留足够期限，避免过早强杀。
+
+## TRSS 官方脚本与守护模式
+
+- **Windows 安装程序**（Yunzai-Windows-Installer）用 `node .` 启动，与 `node app.js` 相同，按上文普通启动接管。
+- **官方 Docker 脚本**（TRSS 仓库 `lib/tools/docker.sh`）在容器里以 `exec node . start` 作为 1 号进程，**`node . daemon`** 守护模式也以 `node . start` 拉起子进程。这两种方式由外部管理器跟踪进程本身，Guard 在核心就绪、释放原进程资源后，用 `execve` 把同一个进程原地替换成 Guard 宿主，进程号不变，与 TRSS 自身的重启方式相同。
+  - 主动停止（`Bot.exit`、CLI `stop`、面板）以 255 退出：守护模式据此停止，不会再拉起；`docker stop` 照常可用。
+  - 版本更新与还原后宿主以 0 退出，由 Docker 的 `--restart always` 或守护模式重新执行 `node . start`，届时由新文件接管。
+  - 依赖 Node.js 的 `process.execve`，仅 Linux 与 macOS 支持；Windows 上请用 `node .`。
 
 ## PM2 自动接管
 

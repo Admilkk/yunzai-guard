@@ -18,11 +18,11 @@
 
 面板保存后自动应用，页面显示应用中、已保存、需重启或失败。字段旁的问号支持鼠标悬停和手机点击查看说明。
 
-| 配置                                                                                                                 | 生效方式                                                         |
-| -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `recovery`、`audit.maxEventsPerSecond/maxBytes/maxFiles`                                                             | 直接生效                                                         |
-| `rules`、`monitor`、`protect`、`sandbox`、`pluginSandbox`、`isolationMode`、三个启动/关闭/握手超时、`audit.maxQueue` | 协调重建业务进程及其受控后代，宿主与面板保持运行，业务会短暂重连 |
-| `controlPort`                                                                                                        | 完整重启宿主                                                     |
+| 配置                                                                                                                                     | 生效方式                                                         |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `recovery`、`update`、`alerts`、`baseline`、`sources`、`log.maxDays`、`audit.maxEventsPerSecond/maxBytes/maxFiles/maxDays/durability`    | 直接生效                                                         |
+| `rules`、`monitor`、`protect`、`sandbox`、`pluginSandbox`、`isolationMode`、三个启动/关闭/握手超时、`audit.maxQueue`、`audit.coalesceMs` | 协调重建业务进程及其受控后代，宿主与面板保持运行，业务会短暂重连 |
+| `controlPort`、`log.maxBytes`                                                                                                            | 完整重启宿主                                                     |
 
 准备或重载失败会保留错误状态；保存相同配置可重试，已生效的直接更新项仍然有效。手工编辑文件或通过离线 CLI 修改配置后，仍需完整重启宿主读取；CLI `restart` 只重建业务进程。
 

@@ -62,7 +62,14 @@ function bytes(value: string): Uint8Array {
   return result
 }
 
-export type ControlType = "restart-request" | "stop-request" | "preload-ready" | "worker-online"
+export type ControlType =
+  | "restart-request"
+  | "stop-request"
+  | "update-request"
+  | "update-force-request"
+  | "rollback-request"
+  | "preload-ready"
+  | "worker-online"
 
 export interface ControlFrame {
   type: ControlType
@@ -77,6 +84,9 @@ export function isControlType(value: unknown): value is ControlType {
   return (
     value === "restart-request" ||
     value === "stop-request" ||
+    value === "update-request" ||
+    value === "update-force-request" ||
+    value === "rollback-request" ||
     value === "preload-ready" ||
     value === "worker-online"
   )

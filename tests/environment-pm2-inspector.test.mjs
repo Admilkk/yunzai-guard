@@ -277,7 +277,7 @@ for (const scenario of ["hidden-new-wildcard", "existing-wildcard"])
           60000,
         )
         await until(
-          () => /PM2 自动接管失败/.test(read(path.join(fixture.runRoot, "application-error.log"))),
+          () => /接管 PM2 应用失败/.test(read(path.join(fixture.runRoot, "application-error.log"))),
           "The exact PM2 application error log did not record its rejection",
           5000,
         )

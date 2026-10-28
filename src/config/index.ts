@@ -6,6 +6,7 @@ import { parsePluginSandbox } from "../plugin-sandbox/config.js"
 import { freezeData } from "../protect/objects.js"
 import { newWeakSet, weakSetAdd, weakSetHas } from "../protect/intrinsics.js"
 import { defaultTargets } from "./targets.js"
+import { parseAlerts, parseBaseline, parseSources } from "./extras.js"
 import { M } from "../shared/messages.js"
 
 const maxSettingsBytes = 1024 * 1024
@@ -35,8 +36,13 @@ export function parseSettings(value: unknown): GuardSettings {
       "sandbox",
       "recovery",
       "audit",
+      "log",
       "rules",
       "monitor",
+      "update",
+      "alerts",
+      "baseline",
+      "sources",
       "protect",
       "strictJs",
       "pluginSandbox",
@@ -83,12 +89,30 @@ export function parseSettings(value: unknown): GuardSettings {
   const recovery = object(source.recovery === undefined ? {} : source.recovery, "settings.recovery")
   keys(recovery, ["maxRestarts", "windowMs", "baseDelayMs", "maxDelayMs"], "settings.recovery")
   const audit = object(source.audit === undefined ? {} : source.audit, "settings.audit")
-  keys(audit, ["maxEventsPerSecond", "maxQueue", "maxBytes", "maxFiles"], "settings.audit")
+  keys(
+    audit,
+    [
+      "maxEventsPerSecond",
+      "maxQueue",
+      "maxBytes",
+      "maxFiles",
+      "maxDays",
+      "coalesceMs",
+      "durability",
+    ],
+    "settings.audit",
+  )
+  const durability = audit.durability ?? "adaptive"
+  if (durability !== "adaptive" && durability !== "full") throw new TypeError(M.config.durability)
+  const log = object(source.log === undefined ? {} : source.log, "settings.log")
+  keys(log, ["maxBytes", "maxDays"], "settings.log")
   const monitor = object(source.monitor === undefined ? {} : source.monitor, "settings.monitor")
   keys(monitor, ["files", "process"], "settings.monitor")
   const files = monitor.files ?? "write"
   if (files !== "off" && files !== "write" && files !== "all")
     throw new TypeError(M.config.monitorFiles)
+  const update = object(source.update === undefined ? {} : source.update, "settings.update")
+  keys(update, ["check", "notify", "intervalMs"], "settings.update")
   const protect = object(source.protect === undefined ? {} : source.protect, "settings.protect")
   keys(
     protect,
@@ -132,17 +156,32 @@ export function parseSettings(value: unknown): GuardSettings {
     audit: {
       maxEventsPerSecond: number(
         audit.maxEventsPerSecond,
-        100,
+        1000,
         "settings.audit.maxEventsPerSecond",
         1,
-        10000,
+        100000,
       ),
-      maxQueue: number(audit.maxQueue, 1000, "settings.audit.maxQueue", 1, 100000),
+      maxQueue: number(audit.maxQueue, 5000, "settings.audit.maxQueue", 1, 100000),
       maxBytes: number(audit.maxBytes, 10485760, "settings.audit.maxBytes", 1024, 1073741824),
       maxFiles: number(audit.maxFiles, 3, "settings.audit.maxFiles", 1, 100),
+      maxDays: number(audit.maxDays, 0, "settings.audit.maxDays", 0, 3650),
+      coalesceMs: number(audit.coalesceMs, 1000, "settings.audit.coalesceMs", 0, 60000),
+      durability,
+    },
+    log: {
+      maxBytes: number(log.maxBytes, 4194304, "settings.log.maxBytes", 65536, 1073741824),
+      maxDays: number(log.maxDays, 0, "settings.log.maxDays", 0, 3650),
     },
     rules: parsedRules,
     monitor: { files, process: boolean(monitor.process, true, "settings.monitor.process") },
+    update: {
+      check: boolean(update.check, true, "settings.update.check"),
+      notify: boolean(update.notify, true, "settings.update.notify"),
+      intervalMs: number(update.intervalMs, 300000, "settings.update.intervalMs", 60000, 86400000),
+    },
+    alerts: parseAlerts(source.alerts),
+    baseline: parseBaseline(source.baseline),
+    sources: parseSources(source.sources),
     protect: {
       enabled: boolean(protect.enabled, true, "settings.protect.enabled"),
       intervalMs: number(protect.intervalMs, 1000, "settings.protect.intervalMs", 10, 60000),
@@ -167,7 +206,14 @@ export function parseSettings(value: unknown): GuardSettings {
   Object.freeze(result.rules)
   Object.freeze(result.recovery)
   Object.freeze(result.audit)
+  Object.freeze(result.log)
   Object.freeze(result.monitor)
+  Object.freeze(result.update)
+  for (const part of [result.alerts, result.baseline, result.sources]) {
+    for (const value of Object.values(part))
+      if (value && typeof value === "object") Object.freeze(value)
+    Object.freeze(part)
+  }
   Object.freeze(result.sandbox.writablePaths)
   Object.freeze(result.sandbox)
   Object.freeze(result.protect.targets)

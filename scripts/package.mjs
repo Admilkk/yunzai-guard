@@ -1,4 +1,4 @@
-// 生成发布资产：Linux 包、随附固定 Node 的 Windows 包、独立 node.exe 与校验和。
+// 生成发布资产：Linux 包、macOS 包（与 Linux 包同源，纯 JS 运行）、随附固定 Node 的 Windows 包、独立 node.exe 与校验和。
 // 需先执行 npm run build；Windows 运行时按 src/dependencies/node.ts 中的固定地址与摘要下载核验。
 import fs from "node:fs"
 import path from "node:path"
@@ -61,7 +61,11 @@ function archive(directory, file) {
   const base = path.basename(directory)
   if (file.endsWith(".zip"))
     process.platform === "win32"
-      ? run("tar", ["-a", "-cf", file, base], parent)
+      ? run(
+          path.join(process.env.SystemRoot ?? "C:/Windows", "System32", "tar.exe"),
+          ["-a", "-cf", file, base],
+          parent,
+        )
       : run("zip", ["-qr", file, base], parent)
   else
     createTar(
@@ -92,6 +96,7 @@ const staging = path.join(out, "staging")
 const linux = path.join(staging, "linux", "yunzai-guard")
 stage(linux)
 archive(linux, path.join(out, `${name}-linux-x64.tar.gz`))
+archive(linux, path.join(out, `${name}-macos.tar.gz`))
 
 const windows = path.join(staging, "windows", "yunzai-guard")
 stage(windows)

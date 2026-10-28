@@ -26,6 +26,8 @@ import {
 } from "./panel-settings.js"
 import { listPlugins } from "./plugins.js"
 import { readAudit, pluginMonitor, nativeExtensions } from "./monitor.js"
+import type { PanelControllers, UpdateController } from "./controllers.js"
+import { handleExtra } from "./extra-api.js"
 import { M } from "../shared/messages.js"
 
 export interface PanelOptions {
@@ -37,6 +39,8 @@ export interface PanelOptions {
   applySettings?: (settings: GuardSettings) => SettingsApplyState
   version: string
   status: () => Record<string, unknown>
+  update?: UpdateController
+  controllers?: PanelControllers
   restart: () => void
   resume: () => void
   audit?: (type: string, details?: Record<string, unknown>) => void
@@ -562,6 +566,7 @@ export class GuardPanel {
           startedAt: this.#startedAt,
         },
         status: this.#options.status(),
+        update: this.#options.update?.state(),
         plugins: listPlugins(this.root),
         audit: {
           summary: snapshot.summary,
@@ -636,6 +641,43 @@ export class GuardPanel {
       const apply = this.#options.applySettings?.(normalized)
       return sendJson(response, 200, { ok: true, ...result, apply })
     }
+    if (route === "GET /api/update")
+      return sendJson(response, 200, this.#options.update?.state() ?? null)
+    if (route === "POST /api/update/check") {
+      if (!this.#options.update) throw new PanelError(404, M.web.notFound)
+      return sendJson(response, 200, await this.#options.update.check())
+    }
+    if (route === "POST /api/update/apply") {
+      if (!this.#options.update) throw new PanelError(404, M.web.notFound)
+      const body = await readBody(request)
+      const result = await this.#options.update.apply(isPlainObject(body) && body.force === true)
+      return sendJson(response, 200, { ...result, update: this.#options.update.state() })
+    }
+    if (route === "POST /api/update/rollback") {
+      if (!this.#options.update) throw new PanelError(404, M.web.notFound)
+      const result = await this.#options.update.rollback()
+      return sendJson(response, 200, { ...result, update: this.#options.update.state() })
+    }
+    if (
+      await handleExtra(
+        {
+          stateDir: this.#options.stateDir,
+          settings: this.#options.settings,
+          getSettings: this.#options.getSettings,
+          applySettings: this.#options.applySettings,
+          controllers: this.#options.controllers,
+          audit: this.#options.audit,
+          readBody,
+          sendJson,
+          fail: (status, message) => new PanelError(status, message),
+        },
+        route,
+        url,
+        request,
+        response,
+      )
+    )
+      return
     if (route === "POST /api/actions/restart") {
       this.#options.restart()
       return sendJson(response, 200, { ok: true })

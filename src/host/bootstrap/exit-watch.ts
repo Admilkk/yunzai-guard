@@ -1,6 +1,6 @@
 import fs from "node:fs"
 import path from "node:path"
-import { spawn } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { performance } from "node:perf_hooks"
 import { M } from "../../shared/messages.js"
 
@@ -73,15 +73,47 @@ function linuxIdentity(pid: number) {
   return { ...after, namespace }
 }
 
-/** 在 Linux 上等待原进程及其子进程退出。 */
-function linuxWatch(rootPid: number, childPid: number | null, timeout: number): BootstrapExitWatch {
+/** 读取 macOS 进程身份：启动时间、父进程与状态，来自系统自带的 ps。 */
+function darwinIdentity(pid: number) {
+  let text: string
+  try {
+    text = execFileSync("/bin/ps", ["-o", "lstart=,ppid=,stat=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 5000,
+    }).trim()
+  } catch {
+    throw Object.assign(new Error(M.host.identityMissing), { code: "ESRCH" })
+  }
+  const fields = text.split(/\s+/)
+  if (fields.length < 7 || !/^\d+$/.test(fields[5] ?? ""))
+    throw Object.assign(new Error(M.host.identityMissing), { code: "ESRCH" })
+  return {
+    pid,
+    created: fields.slice(0, 5).join(" "),
+    parentPid: Number(fields[5]),
+    state: (fields[6] ?? "").slice(0, 1),
+  }
+}
+
+type ReadIdentity = (pid: number) => {
+  pid: number
+  created: string
+  parentPid: number
+  state: string
+  namespace?: string
+}
+
+/** 在 Linux 与 macOS 上轮询等待原进程及其子进程退出；身份含启动时间，防止 PID 复用。 */
+function posixWatch(
+  rootPid: number,
+  childPid: number | null,
+  timeout: number,
+  read: ReadIdentity,
+): BootstrapExitWatch {
   const start = performance.now()
-  const identities = [
-    linuxIdentity(rootPid),
-    ...(childPid === null ? [] : [linuxIdentity(childPid)]),
-  ]
+  const identities = [read(rootPid), ...(childPid === null ? [] : [read(childPid)])]
   for (const identity of identities) {
-    const current = linuxIdentity(identity.pid)
+    const current = read(identity.pid)
     if (
       current.created !== identity.created ||
       current.namespace !== identity.namespace ||
@@ -109,7 +141,7 @@ function linuxWatch(rootPid: number, childPid: number | null, timeout: number): 
     try {
       for (const identity of pending) {
         try {
-          const current = linuxIdentity(identity.pid)
+          const current = read(identity.pid)
           if (
             current.created !== identity.created ||
             current.namespace !== identity.namespace ||
@@ -338,7 +370,10 @@ export async function watchBootstrapExit(
     throw new Error(M.host.observePid)
   if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 2147483647)
     throw new Error(M.host.observeTimeout)
-  if (process.platform === "linux") return linuxWatch(bootstrapPid, ownedRedisPid, timeout)
+  if (process.platform === "linux")
+    return posixWatch(bootstrapPid, ownedRedisPid, timeout, linuxIdentity)
+  if (process.platform === "darwin")
+    return posixWatch(bootstrapPid, ownedRedisPid, timeout, darwinIdentity)
   if (process.platform === "win32") return windowsWatch(bootstrapPid, ownedRedisPid, timeout)
   throw new Error(M.host.observePlatform(process.platform))
 }

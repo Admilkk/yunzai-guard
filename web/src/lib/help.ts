@@ -74,6 +74,23 @@ export const settingHelp: Record<string, SettingHelp> = {
   "audit.maxBytes": {
     description: "同时用作审计缓冲字节上限；乘以保留倍数得到事件保留预算。",
   },
+  "audit.maxDays": {
+    description:
+      "审计事件的保留天数，早于此的事件每小时清理一次。与容量上限同时生效，先到先清；0 表示只按容量淘汰。",
+    default: "0，不按天数清理。",
+    change: "保存后立即生效。",
+  },
+  "log.maxBytes": {
+    description: "宿主日志 host.log 的单文件上限，写满后保留尾部并轮转为 host.log.1。",
+    default: "4194304 字节（4 MiB）。",
+    change: "重启宿主后生效。",
+  },
+  "log.maxDays": {
+    description:
+      "host.log 与 host.log.1 超过此天数没有再写入时删除，每小时检查一次；0 表示不按天数清理。",
+    default: "0，不按天数清理。",
+    change: "保存后立即生效。",
+  },
   "audit.maxFiles": {
     description: "基础保留容量的倍数，超出后删除最旧事件；索引和 WAL 另占空间。",
   },
@@ -210,6 +227,193 @@ export const settingHelp: Record<string, SettingHelp> = {
     description:
       "宿主定期从进程外读取业务进程树的读写字节与 TCP 连接，覆盖原生扩展；新的外部连接写入审计。只观察，不拦截。",
     default: "开启。Linux 每 10 秒，Windows 每 30 秒。",
+  },
+  "update.check": {
+    description: "定期读取公开发布信息，发现新版本后提示。只检查，不会自动安装。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "update.notify": {
+    description: "发现新版本时给主人发一条消息，同一版本只通知一次。更新结果始终会通知。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "update.intervalMs": {
+    description:
+      "两次检查之间的间隔，最短 1 分钟。使用 ETag 条件请求，未变化时不占用 GitHub 限额。",
+    default: "300000 毫秒（5 分钟）。",
+    change: "保存后立即生效。",
+  },
+  "audit.coalesceMs": {
+    description:
+      "窗口内完全相同的普通记录只写第一条，其余合并成一条“重复 N 次”。拦截与重启始终逐条记录。热循环里的大量重复调用不再挤满队列。",
+    default: "1000 毫秒。",
+    change: "业务进程重建后生效。",
+  },
+  "audit.durability": {
+    description:
+      "自适应：含拦截或重启的批次强制落盘，普通记录交给系统缓存，进程崩溃不丢，只有断电可能丢最后几批。每批强制落盘最稳，但事件量大时写盘压力高。",
+    default: "自适应。",
+    change: "保存后立即生效。",
+  },
+  "alerts.enabled": {
+    description: "总开关。关闭后不推送任何告警，也不转发 Webhook。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "alerts.masters": {
+    description: "通过机器人私聊主人。业务进程不在线时暂存，上线后补发。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "alerts.throttle.windowMs": {
+    description: "同一类告警在窗口内只发一次，其余计数；窗口结束时发一条合并摘要。",
+    default: "60000 毫秒。",
+    change: "保存后立即生效。",
+  },
+  "alerts.throttle.maxPerWindow": {
+    description: "窗口内最多推送的不同告警数，超出的进入合并摘要，避免刷屏。",
+    default: "5 条。",
+    change: "保存后立即生效。",
+  },
+  "alerts.webhook.url": {
+    description:
+      "收到告警时向该地址 POST。JSON 格式包含类别、标题、正文与实例信息；纯文本格式只发正文。",
+    default: "空，不启用。",
+    change: "保存后立即生效。",
+  },
+  "alerts.webhook.secret": {
+    description:
+      "填写后每个请求都带 X-Guard-Signature: sha256=<HMAC>，接收方可据此验证来源。该值不会下发给业务进程，导出配置时默认去掉。",
+    default: "空。",
+    change: "保存后立即生效。",
+  },
+  "alerts.forward.actions": {
+    description:
+      "除告警外，把这些处理结果的审计事件成批转发到 Webhook（每 5 秒一批，每批最多 100 条）。",
+    default: "拦截、重启。",
+    change: "保存后立即生效。",
+  },
+  "alerts.forward.kinds": {
+    description: "只转发这些类型的事件，留空表示全部类型。",
+    default: "全部。",
+    change: "保存后立即生效。",
+  },
+  "baseline.enabled": {
+    description:
+      "学习每个插件常访问的域名、端口、进程、原生扩展与目录。学习期后出现新行为、频率突增、非常规时段活动或批量新目标时提示。只提示，不拦截。",
+    default: "关闭。",
+    change: "保存后立即生效。",
+  },
+  "baseline.learnHours": {
+    description:
+      "每个插件从第一次出现行为开始计算学习期，期间只记录不提示。也可以在行为画像页手动结束学习。",
+    default: "72 小时。",
+    change: "保存后立即生效。",
+  },
+  "baseline.kinds": {
+    description: "参与画像的行为类型。文件写入通常较杂，默认不纳入。",
+    default: "网络访问、端口监听、启动进程、原生扩展。",
+    change: "保存后立即生效。",
+  },
+  "baseline.minSeverity": {
+    description:
+      "低于该级别的异常只在画像页显示，不推送。原生扩展、端口监听、shell 与裸 IP 连接计为高。",
+    default: "中及以上。",
+    change: "保存后立即生效。",
+  },
+  "baseline.learnAfterAlert": {
+    description: "新行为提示一次后自动加入常规画像；关闭则在你点“信任”之前每次都提示。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "baseline.offHours": {
+    description:
+      "学习期内该插件从未在某个时段前后活动，之后在该时段出现行为时提示，每小时最多一次。至少需要两天的学习数据。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "baseline.maxPerPlugin": {
+    description: "每个插件最多记录的常规行为数，超出时淘汰最久未出现的。",
+    default: "500。",
+    change: "保存后立即生效。",
+  },
+  "baseline.ignore": {
+    description:
+      "这些行为不参与画像，格式为 类型:对象，支持 *，例如 network:*.qq.com、process:git。也可直接写完整目标。",
+    default: "空。",
+    change: "保存后立即生效。",
+  },
+  "baseline.ignorePlugins": {
+    description: "这些插件不建立画像，支持 *。",
+    default: "空。",
+    change: "保存后立即生效。",
+  },
+  "baseline.spike.enabled": {
+    description: "按每个插件自己的历史计算每个统计窗口的平均次数与波动，明显偏高时提示。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "baseline.spike.windowMs": {
+    description: "统计频率的时间窗口。",
+    default: "600000 毫秒（10 分钟）。",
+    change: "保存后立即生效。",
+  },
+  "baseline.spike.zScore": {
+    description: "超过平均值多少倍标准差才算突增，越小越敏感。",
+    default: "4。",
+    change: "保存后立即生效。",
+  },
+  "baseline.spike.minCount": {
+    description: "窗口内次数低于该值不判断突增，避免低频插件误报。",
+    default: "30 次。",
+    change: "保存后立即生效。",
+  },
+  "baseline.burst.enabled": {
+    description: "学习期后短时间内出现大量新目标时提示一次高风险，常见于扫描或数据外送。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "baseline.burst.count": {
+    description: "时间范围内新目标达到该数量即提示。",
+    default: "8 个。",
+    change: "保存后立即生效。",
+  },
+  "baseline.burst.windowMs": {
+    description: "统计新目标的时间范围。",
+    default: "600000 毫秒。",
+    change: "保存后立即生效。",
+  },
+  "sources.enabled": {
+    description:
+      "定期读取 plugins 下 Git 插件的远端、分支、提交与工作区，只读，不执行插件代码。需要系统安装 git。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "sources.intervalMs": {
+    description: "两次扫描的间隔。",
+    default: "600000 毫秒（10 分钟）。",
+    change: "保存后立即生效。",
+  },
+  "sources.notify.dirty": {
+    description: "受跟踪的文件被改动、与仓库不一致时通知，例如被其他插件或脚本篡改。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "sources.notify.remote": {
+    description: "插件的远端地址被改动时通知。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "sources.notify.commit": {
+    description: "插件的提交变化时通知。正常更新插件也会触发，默认关闭。",
+    default: "关闭。",
+    change: "保存后立即生效。",
+  },
+  "sources.ignore": {
+    description: "不检查的插件目录名，支持 *。",
+    default: "空。",
+    change: "保存后立即生效。",
   },
   "panel.host": {
     description: "127.0.0.1 仅本机访问；0.0.0.0 监听所有网卡。",

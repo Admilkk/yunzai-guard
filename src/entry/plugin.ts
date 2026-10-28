@@ -27,7 +27,15 @@ function commitAndExit(send: (callback: (error: Error | null) => void) => void):
 export class YunzaiGuard extends plugin {
   /** 以最高优先级注册为 Yunzai 插件。 */
   constructor() {
-    super({ name: "Yunzai Guard", event: "message", priority: -1000000, rule: [] })
+    super({
+      name: "Yunzai Guard",
+      event: "message",
+      priority: -1000000,
+      rule: [
+        { reg: "^#?guard(强制)?更新$", fnc: "update", permission: "master" },
+        { reg: "^#?guard(回滚|还原)$", fnc: "rollback", permission: "master" },
+      ],
+    })
   }
 
   /** 把消息交给独立插件沙箱分派，已处理时拦截后续插件。 */
@@ -36,12 +44,33 @@ export class YunzaiGuard extends plugin {
     return (await context?.sandboxDispatch?.(event)) ? "return" : false
   }
 
+  /** 主人的 #guard更新 / #guard强制更新：转交宿主执行，结果由宿主通知主人。 */
+  async update(): Promise<boolean> {
+    const context = (globalThis as unknown as Record<symbol, GuardContext | undefined>)[contextKey]
+    if (!context?.requestUpdate) {
+      await this.reply(M.entry.updateUnavailable)
+      return true
+    }
+    const force = Boolean(this.e?.msg?.includes("强制"))
+    context.requestUpdate(force)
+    await this.reply(force ? M.entry.updateForced : M.entry.updateRequested)
+    return true
+  }
+
+  /** 主人的 #guard回滚：还原到上一版本，结果由宿主通知主人。 */
+  async rollback(): Promise<boolean> {
+    const context = (globalThis as unknown as Record<symbol, GuardContext | undefined>)[contextKey]
+    if (!context?.requestRollback) {
+      await this.reply(M.entry.updateUnavailable)
+      return true
+    }
+    context.requestRollback()
+    await this.reply(M.entry.rollbackRequested)
+    return true
+  }
+
   /** 插件初始化：检查平台与配置，并在核心就绪后交接给受管宿主。 */
   async init(): Promise<string | undefined> {
-    if (process.platform === "darwin") {
-      logger.error(M.entry.macos)
-      return "return"
-    }
     const context = (globalThis as unknown as Record<symbol, GuardContext | undefined>)[contextKey]
     if (context) return
     const managedByPm2 =
@@ -51,7 +80,13 @@ export class YunzaiGuard extends plugin {
       logger.error(M.entry.pm2NoIpc)
       process.exit(78)
     }
-    if (global.start_type !== "internal" && !managedByPm2) {
+    // TRSS 官方 Docker 脚本与 node . daemon 以 node . start 启动（external），外部管理器跟踪这个进程本身。
+    const external = global.start_type === "external" && !managedByPm2
+    if (external && (process.platform === "win32" || typeof process.execve !== "function")) {
+      logger.error(M.entry.externalUnsupported)
+      process.exit(78)
+    }
+    if (global.start_type !== "internal" && !managedByPm2 && !external) {
       logger.error(M.entry.unmanagedEntry)
       process.exit(78)
     }
@@ -67,10 +102,31 @@ export class YunzaiGuard extends plugin {
     bootstrapStarted.add(Bot)
     logger.info(M.entry.waiting)
     // 核心等待 init 完成，因此不能在此等待上线事件。
-    void this.takeOverWhenReady(settings, managedByPm2).catch(error => {
+    void (
+      external ? this.replaceInPlace(settings) : this.takeOverWhenReady(settings, managedByPm2)
+    ).catch(error => {
       console.error(M.entry.coldFailed, (error as Error).message)
       process.exit(managedByPm2 ? 78 : 1)
     })
+  }
+
+  /**
+   * 外部托管时原地接管：核心就绪后释放原进程的资源，再用 execve 把本进程替换成 Guard 宿主。
+   * PID 不变，Docker 的 1 号进程与 node . daemon 的子进程关系都保持原样，与 TRSS 自身的重启方式一致。
+   */
+  private async replaceInPlace(settings: GuardSettings): Promise<void> {
+    const exitPlan = createBootstrapExitPlan(Bot, originalRedisClient(), originalRedisClient)
+    await waitForBootstrapReady(Bot, settings.startupTimeout, new AbortController().signal)
+    await exitPlan.prepare(settings.shutdownTimeout)
+    exitPlan.assertCurrent()
+    const env: NodeJS.ProcessEnv = { ...process.env, YUNZAI_GUARD_EXTERNAL: "1" }
+    delete env.NODE_OPTIONS
+    logger.info(M.entry.replacing)
+    process.execve!(
+      process.execPath,
+      [process.execPath, fileURLToPath(new URL("../launcher.js", import.meta.url))],
+      env,
+    )
   }
 
   /** 核心就绪后准备运行时并交接；下载在交接前完成，不调整已有 PM2 daemon。 */

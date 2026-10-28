@@ -35,6 +35,7 @@ const layers = [
       "plugin-sandbox/",
       "native-sandbox/",
       "runtime/",
+      "update/",
       "pm2/",
       "dependencies/files.ts",
       "dependencies/linux-bwrap.ts",

@@ -15,10 +15,22 @@
     "maxDelayMs": 30000
   },
   "audit": {
-    "maxEventsPerSecond": 100,
-    "maxQueue": 1000,
+    "maxEventsPerSecond": 1000,
+    "maxQueue": 5000,
     "maxBytes": 10485760,
-    "maxFiles": 3
+    "maxFiles": 3,
+    "maxDays": 0,
+    "coalesceMs": 1000,
+    "durability": "adaptive"
+  },
+  "log": {
+    "maxBytes": 4194304,
+    "maxDays": 0
+  },
+  "update": {
+    "check": true,
+    "notify": true,
+    "intervalMs": 300000
   },
   "protect": {
     "enabled": true,
@@ -53,5 +65,63 @@
   "rules": [],
   "pluginSandbox": {
     "plugins": []
+  },
+  "alerts": {
+    "enabled": true,
+    "masters": true,
+    "webhook": {
+      "url": "",
+      "secret": "",
+      "format": "json"
+    },
+    "on": {
+      "deny": true,
+      "restart": true,
+      "tripped": true,
+      "integrity": true,
+      "anomaly": true,
+      "source": true,
+      "update": true
+    },
+    "forward": {
+      "actions": ["deny", "restart"],
+      "kinds": []
+    },
+    "throttle": {
+      "windowMs": 60000,
+      "maxPerWindow": 5
+    }
+  },
+  "baseline": {
+    "enabled": false,
+    "learnHours": 72,
+    "kinds": ["network", "listen", "process", "native"],
+    "ignore": [],
+    "ignorePlugins": [],
+    "learnAfterAlert": true,
+    "maxPerPlugin": 500,
+    "minSeverity": "medium",
+    "spike": {
+      "enabled": true,
+      "zScore": 4,
+      "minCount": 30,
+      "windowMs": 600000
+    },
+    "offHours": true,
+    "burst": {
+      "enabled": true,
+      "count": 8,
+      "windowMs": 600000
+    }
+  },
+  "sources": {
+    "enabled": true,
+    "intervalMs": 600000,
+    "ignore": [],
+    "notify": {
+      "commit": false,
+      "dirty": true,
+      "remote": true
+    }
   }
 }

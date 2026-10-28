@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "include-component-in-tag": false,
+  "pull-request-title-pattern": "chore: 发布 ${version}",
+  "pull-request-header": "合并后会自动打标签、用下面的更新日志创建 Release，并构建上传 Windows、Linux、macOS 安装包。",
+  "changelog-path": "CHANGELOG.md",
+  "changelog-sections": [
+    { "type": "feat", "section": "✨ 新功能" },
+    { "type": "fix", "section": "🐛 问题修复" },
+    { "type": "perf", "section": "⚡️ 性能优化" },
+    { "type": "revert", "section": "⏪️ 回退" },
+    { "type": "refactor", "section": "♻️ 重构" },
+    { "type": "docs", "section": "📝 文档" },
+    { "type": "deps", "section": "📦 依赖更新" },
+    { "type": "style", "section": "🎨 代码样式", "hidden": true },
+    { "type": "test", "section": "✅ 测试", "hidden": true },
+    { "type": "build", "section": "📦️ 构建", "hidden": true },
+    { "type": "ci", "section": "🎡 持续集成", "hidden": true },
+    { "type": "chore", "section": "🔧 其他", "hidden": true }
+  ],
+  "packages": {
+    ".": {}
+  }
+}

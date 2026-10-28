@@ -94,6 +94,7 @@ const maxBytes = 4 * 1024 * 1024
 const maxRecords = 20000
 const maxLineBytes = 128 * 1024
 const maxFiles = 100
+const minTimelineSpanMs = 30 * 60 * 1000
 const actions: AuditAction[] = ["audit", "deny", "restart", "info"]
 const queryKeys = ["page", "pageSize", "plugin", "kind", "action", "q", "from", "to", "scope"]
 const windows = new WeakMap<AuditPage, AuditEntry[]>()
@@ -340,7 +341,11 @@ function summarize(entries: AuditEntry[]): AuditSummary {
   result.windowStart = entries.at(-1)?.time
   result.windowEnd = entries[0]?.time
   if (result.windowStart !== undefined && result.windowEnd !== undefined) {
-    const { size: bucketMs, start } = timelineBucket(result.windowStart, result.windowEnd)
+    // 事件集中在很短的时间内时，至少展示 30 分钟，避免整张图只有一根柱子。
+    const { size: bucketMs, start } = timelineBucket(
+      Math.min(result.windowStart, result.windowEnd - minTimelineSpanMs),
+      result.windowEnd,
+    )
     const count = Math.floor((result.windowEnd - start) / bucketMs) + 1
     result.timeline = Array.from({ length: count }, (_, index) => ({
       time: start + index * bucketMs,
@@ -359,8 +364,42 @@ function summarize(entries: AuditEntry[]): AuditSummary {
   return result
 }
 
-/** 分页读取审计事件，优先使用 SQLite。 */
+const cacheTtlMs = 2000
+const cacheEntries = 16
+const pageCache = new Map<string, { at: number; stamp: string; page: AuditPage }>()
+
+/** 审计文件的大小与修改时间，任何写入都会改变它。 */
+function auditStamp(stateDir: string): string {
+  return ["events.sqlite", "events.sqlite-wal", "events.jsonl"]
+    .map(name => {
+      try {
+        const info = fs.statSync(path.join(stateDir, name))
+        return `${info.size}:${info.mtimeMs}`
+      } catch {
+        return "-"
+      }
+    })
+    .join("|")
+}
+
+/**
+ * 分页读取审计事件。面板多个卡片会在同一时刻发出相同查询，
+ * 文件未变化时 2 秒内直接复用结果，避免重复扫描与汇总。
+ */
 export function readAudit(stateDir: string, input: AuditQuery | URLSearchParams = {}): AuditPage {
+  const key = `${stateDir}\0${JSON.stringify(input instanceof URLSearchParams ? [...input] : input)}`
+  const stamp = auditStamp(stateDir)
+  const cached = pageCache.get(key)
+  if (cached && cached.stamp === stamp && Date.now() - cached.at < cacheTtlMs) return cached.page
+  const page = readAuditUncached(stateDir, input)
+  pageCache.delete(key)
+  pageCache.set(key, { at: Date.now(), stamp, page })
+  while (pageCache.size > cacheEntries) pageCache.delete(pageCache.keys().next().value!)
+  return page
+}
+
+/** 分页读取审计事件，优先使用 SQLite。 */
+function readAuditUncached(stateDir: string, input: AuditQuery | URLSearchParams = {}): AuditPage {
   const query = queryOf(input)
   const file = auditDatabasePath(stateDir)
   const persisted = ["", "-wal", "-shm", "-journal"].some(suffix => {

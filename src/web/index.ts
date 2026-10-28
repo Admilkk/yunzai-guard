@@ -2,6 +2,7 @@ import fs from "node:fs"
 import { GuardPanel } from "./server.js"
 import type { GuardSettings } from "../shared/types.js"
 import type { SettingsApplyState } from "../config/update.js"
+import type { PanelControllers, UpdateController } from "./controllers.js"
 
 let panel: GuardPanel | undefined
 
@@ -13,6 +14,8 @@ export interface StartPanelOptions {
   configuration?: () => SettingsApplyState
   applySettings?: (settings: GuardSettings) => SettingsApplyState
   status: () => Record<string, unknown>
+  update?: UpdateController
+  controllers?: PanelControllers
   restart: () => void
   resume: () => void
   audit?: (type: string, details?: Record<string, unknown>) => void

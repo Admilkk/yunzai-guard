@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import net from "node:net"
 import path from "node:path"
+import { execFile } from "node:child_process"
 import { powershell } from "./platform.js"
 
 /** 业务进程树的系统层采样；包含原生扩展发起、不经过 JS 入口的读写与连接。 */
@@ -199,11 +200,78 @@ async function sampleWindows(root: number): Promise<ProcessUsage | undefined> {
   return usage
 }
 
+/** 执行系统命令；失败或退出码非零时返回空串。 */
+function run(file: string, args: string[]): Promise<string> {
+  return new Promise(resolve =>
+    execFile(file, args, { timeout: 10000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) =>
+      resolve(error && !stdout ? "" : String(stdout)),
+    ),
+  )
+}
+
+/** 拆分 lsof 输出中的“地址:端口”，IPv6 带方括号。 */
+function splitEndpoint(value: string): { address: string; port: number } | undefined {
+  const at = value.lastIndexOf(":")
+  if (at < 0) return undefined
+  const port = Number(value.slice(at + 1))
+  const address = value.slice(0, at).replace(/^\[|\]$/g, "")
+  return Number.isInteger(port) && address ? { address, port } : undefined
+}
+
+/**
+ * macOS：用系统自带的 ps 找出进程树，lsof 读取已建立的 TCP 连接。
+ * macOS 不向普通用户提供逐进程累计读写字节，这两项记为 0。
+ */
+async function sampleDarwin(root: number): Promise<ProcessUsage | undefined> {
+  const children = new Map<number, number[]>()
+  let found = false
+  for (const line of (await run("/bin/ps", ["-A", "-o", "pid=,ppid="])).split("\n")) {
+    const [pid, parent] = line.trim().split(/\s+/).map(Number)
+    if (!pid || parent === undefined || Number.isNaN(parent)) continue
+    if (pid === root) found = true
+    const list = children.get(parent) ?? []
+    list.push(pid)
+    children.set(parent, list)
+  }
+  if (!found) return undefined
+  const tree = [root]
+  for (let index = 0; index < tree.length && tree.length < maxProcesses; index++)
+    tree.push(...(children.get(tree[index]!) ?? []))
+  const usage: ProcessUsage = {
+    sampledAt: Date.now(),
+    processes: tree.length,
+    readBytes: 0,
+    writeBytes: 0,
+    remote: [],
+    loopback: 0,
+  }
+  const output = await run("/usr/sbin/lsof", [
+    "-nP",
+    "-a",
+    "-p",
+    tree.join(","),
+    "-iTCP",
+    "-sTCP:ESTABLISHED",
+    "-Fn",
+  ])
+  const remote = new Set<string>()
+  for (const line of output.split("\n")) {
+    if (!line.startsWith("n") || !line.includes("->")) continue
+    const peer = splitEndpoint(line.slice(line.indexOf("->") + 2).trim())
+    if (!peer) continue
+    if (isLoopback(peer.address)) usage.loopback++
+    else if (remote.size < maxRemote) remote.add(endpoint(peer.address, peer.port))
+  }
+  usage.remote = [...remote].sort()
+  return usage
+}
+
 /** 采样进程树；进程已退出或平台不支持时返回 undefined。 */
 export async function sampleUsage(root: number): Promise<ProcessUsage | undefined> {
   if (!Number.isSafeInteger(root) || root <= 1) return undefined
   if (process.platform === "linux") return sampleLinux(root)
   if (process.platform === "win32") return sampleWindows(root)
+  if (process.platform === "darwin") return sampleDarwin(root)
   return undefined
 }
 
@@ -228,7 +296,7 @@ export class UsageWatch {
   }
 
   /** 开始定期采样；Windows 依赖 PowerShell，间隔更长。 */
-  start(intervalMs = process.platform === "win32" ? 30000 : 10000): void {
+  start(intervalMs = process.platform === "linux" ? 10000 : 30000): void {
     if (this.#timer) return
     void this.sample()
     this.#timer = setInterval(() => void this.sample(), intervalMs)

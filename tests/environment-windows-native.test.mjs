@@ -94,7 +94,7 @@ for (const mode of selectedModes)
         assert.ok(daemon)
         testFixture.capture(current.hostPid)
         testFixture.captureSession()
-        assert.doesNotMatch(readLog(errorLog), /宿主锁被拒绝|project-lock-error/)
+        assert.doesNotMatch(readLog(errorLog), /已有实例在运行|project-lock-error/)
         for (let round = 0; round < cycles; round++) {
           for (const action of ["restart", "reload"]) {
             const route = round % 2 === 0 ? "name" : "ecosystem"
@@ -161,7 +161,7 @@ for (const mode of selectedModes)
             assert.equal(fixture.lifecycle().length, lifecycleCount + 1)
             assert.doesNotMatch(
               readLog(errorLog).slice(logOffset),
-              /宿主锁被拒绝|project-lock-error/,
+              /已有实例在运行|project-lock-error/,
             )
             let barrierConfirmed = false
             if (testFixture.compat) {

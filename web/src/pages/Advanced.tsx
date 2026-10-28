@@ -31,6 +31,7 @@ import { ActionTag } from "../components"
 import { actionOptions, ConfigField, networkOptions, violationOptions } from "../lib/fields"
 import { newRuleId } from "../lib/id"
 import { FieldLabel } from "../components/FieldHelp"
+import { BackupCard } from "../components/BackupCard"
 
 /** 读取原生沙箱插件列表。 */
 function nativeList(document: Draft): any[] {
@@ -933,6 +934,7 @@ export default function Advanced() {
         { key: "native", label: "独立插件", children: <NativePage /> },
         { key: "scripts", label: "脚本沙箱", children: <ScriptsPage /> },
         { key: "raw", label: "原始配置", children: <RawPage /> },
+        { key: "backup", label: "备份与迁移", children: <BackupCard /> },
       ]}
     />
   )

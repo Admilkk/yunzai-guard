@@ -16,3 +16,6 @@
 /AGENTS.md
 __pycache__/
 *.py[cod]
+/.update/
+/docs/DEVELOPMENT.md
+/tests/README.md

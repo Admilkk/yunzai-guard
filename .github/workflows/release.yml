@@ -1,19 +1,42 @@
 name: Release
 
+# 推送到 main 时由 release-please 按约定式提交维护一个“发布 PR”（版本号与更新日志）。
+# 合并该 PR 后自动打标签并创建 Release，正文即本版更新日志；随后测试、构建并上传安装包。
+# 手动运行并填写已有标签，可为该 Release 重新构建并覆盖上传安装包。
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
     inputs:
       tag:
-        description: 已存在的发布标签，例如 v1.0.0
+        description: 重新上传安装包的已有标签，例如 v1.1.0
         required: true
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
+
   test:
+    needs: please
+    if: always() && (needs.please.outputs.created == 'true' || github.event_name == 'workflow_dispatch')
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -22,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.tag || needs.please.outputs.tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24.22.1
@@ -36,13 +59,13 @@ jobs:
       - run: npm run check
       - run: npm run test:unit
 
-  publish:
-    needs: test
+  assets:
+    needs: [please, test]
+    if: always() && needs.test.result == 'success'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     env:
-      TAG: ${{ inputs.tag || github.ref_name }}
+      TAG: ${{ inputs.tag || needs.please.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,18 +79,10 @@ jobs:
           version=$(node -p "require('./package.json').version")
           test "$TAG" = "v$version" || { echo "标签 $TAG 与 package.json 版本 $version 不一致"; exit 1; }
       - run: npm ci --include=dev
-      # 下载并按固定摘要核验 Windows Node，生成全部发布资产。
+      # 下载并按固定摘要核验 Windows Node，生成全部安装包与校验和。
       - run: npm run package
-      - name: 提取本版更新日志
+      - name: 上传安装包
         run: |
-          version=${TAG#v}
-          awk -v v="$version" '$0 ~ "^## \[" v "\]" {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > release/NOTES.md
-          test -s release/NOTES.md || echo "见 CHANGELOG.md" > release/NOTES.md
-      - name: 创建 Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          prerelease=""
-          case "$TAG" in *-*) prerelease="--prerelease" ;; esac
-          gh release create "$TAG" --title "$TAG" --notes-file release/NOTES.md $prerelease \
+          gh release upload "$TAG" --clobber \
             release/*.zip release/*.tar.gz release/*.exe release/SHA256SUMS.txt
+          case "$TAG" in *-*) gh release edit "$TAG" --prerelease ;; esac

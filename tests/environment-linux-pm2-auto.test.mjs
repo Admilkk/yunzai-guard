@@ -549,7 +549,7 @@ for (const mode of modes)
               assert.equal(fixture.lifecycle().length, lifecycleCount + 1)
               assert.doesNotMatch(
                 read(applicationLog).slice(errorOffset),
-                /宿主锁被拒绝|project-lock-error/,
+                /已有实例在运行|project-lock-error/,
               )
               capture(current.hostPid)
               assertPreserved()

@@ -110,7 +110,7 @@ function waitAutoOnline(fixture) {
     async () => {
       assert.doesNotMatch(
         read(path.join(fixture.runRoot, "application-error.log")),
-        /PM2 自动接管失败/,
+        /接管 PM2 应用失败/,
         "Original app.js automatic takeover failed",
       )
       try {
@@ -329,7 +329,7 @@ for (const mode of modes)
               assert.equal(fixture.lifecycle().length, lifecycleCount + 1)
               assert.doesNotMatch(
                 read(applicationLog).slice(errorOffset),
-                /宿主锁被拒绝|project-lock-error/,
+                /已有实例在运行|project-lock-error/,
               )
               harness.capture(current.hostPid)
               harness.captureSession()
@@ -525,7 +525,7 @@ for (const scenario of ["reuse", "collision"])
           await until(
             async () => {
               if (
-                !/PM2 自动接管失败/.test(read(path.join(fixture.runRoot, "application-error.log")))
+                !/接管 PM2 应用失败/.test(read(path.join(fixture.runRoot, "application-error.log")))
               )
                 return false
               const row = (await pm2.listRaw()).find(row => row.name === name)

@@ -8,6 +8,10 @@ export const controlCommands = [
   "stop",
   "resume",
   "invoke-bot-restart",
+  "check-update",
+  "update",
+  "force-update",
+  "rollback",
 ] as const
 export type ControlCommand = (typeof controlCommands)[number]
 
