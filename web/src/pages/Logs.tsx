@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { CSSProperties, ReactNode } from "react"
-import { App, Button, Card, Checkbox, Space, Tag } from "antd"
-import { ClearOutlined, PauseOutlined, CaretRightOutlined } from "@ant-design/icons"
+import { App, Button, Card, Checkbox, Input, Space, Tag } from "antd"
+import { ClearOutlined, PauseOutlined, CaretRightOutlined, SearchOutlined } from "@ant-design/icons"
 import { api } from "../api"
 
 const colors = [
@@ -53,6 +53,8 @@ export default function Logs() {
   const [text, setText] = useState("")
   const [paused, setPaused] = useState(false)
   const [follow, setFollow] = useState(true)
+  const [wrap, setWrap] = useState(true)
+  const [query, setQuery] = useState("")
   const [status, setStatus] = useState("连接中")
   const buffer = useRef("")
   const pausedRef = useRef(false)
@@ -124,18 +126,39 @@ export default function Logs() {
   useEffect(() => {
     if (follow && view.current) view.current.scrollTop = view.current.scrollHeight
   }, [text, follow])
-  const content = useMemo(() => ansi(text), [text])
+  const visibleText = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return text
+    const matches = text
+      .split("\n")
+      .filter(line => line.toLowerCase().includes(needle))
+      .join("\n")
+    return matches || "没有匹配的日志"
+  }, [text, query])
+  const content = useMemo(() => ansi(visibleText), [visibleText])
   return (
     <Card
       title="host.log"
       className="logs-card"
       extra={
-        <Space wrap>
+        <Space wrap size={8}>
+          <Input
+            aria-label="搜索日志"
+            className="log-search"
+            prefix={<SearchOutlined />}
+            placeholder="搜索日志"
+            allowClear
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+          />
           <Tag color={status === "实时连接" && !paused ? "green" : "orange"}>
             {paused ? "视图已暂停" : status}
           </Tag>
           <Checkbox checked={follow} onChange={event => setFollow(event.target.checked)}>
             跟随
+          </Checkbox>
+          <Checkbox checked={wrap} onChange={event => setWrap(event.target.checked)}>
+            换行
           </Checkbox>
           <Button
             icon={paused ? <CaretRightOutlined /> : <PauseOutlined />}
@@ -155,7 +178,7 @@ export default function Logs() {
         </Space>
       }
     >
-      <pre ref={view} className="log-console">
+      <pre ref={view} className={`log-console ${wrap ? "log-wrap" : "log-nowrap"}`}>
         {content}
       </pre>
     </Card>

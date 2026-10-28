@@ -1,8 +1,9 @@
-import { useRef } from "react"
-import { Button, Card, Form, InputNumber, Switch, Tabs } from "antd"
+import { useRef, useState } from "react"
+import { Button, Card, Form, InputNumber, Menu, Select, Switch } from "antd"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useConsole } from "../state"
 import { ConfigField, actionOptions, fileOptions, networkOptions } from "../lib/fields"
+import { useMediaQuery } from "../lib/use-media-query"
 import { FieldLabel } from "../components/FieldHelp"
 import { AlertSettings, BaselineSettings, SourceSettings } from "./RuntimeExtras"
 
@@ -373,30 +374,93 @@ function Updates() {
 
 /** 运行设置页面。 */
 export default function Runtime() {
+  const narrow = useMediaQuery("(max-width: 900px)")
+  const [section, setSection] = useState("monitoring")
+  const sections = [
+    {
+      key: "monitoring",
+      label: "业务监控",
+      description: "记录文件与系统行为，保护关键函数入口。",
+      children: <Monitoring />,
+    },
+    {
+      key: "update",
+      label: "版本更新",
+      description: "配置更新检查、通知和业务侧生效时机。",
+      children: <Updates />,
+    },
+    {
+      key: "alerts",
+      label: "告警通知",
+      description: "设置告警合并、Webhook 与通知范围。",
+      children: <AlertSettings />,
+    },
+    {
+      key: "baseline",
+      label: "行为画像",
+      description: "管理学习期与异常行为检测。",
+      children: <BaselineSettings />,
+    },
+    {
+      key: "sources",
+      label: "插件来源",
+      description: "检查插件仓库来源与本地改动。",
+      children: <SourceSettings />,
+    },
+    {
+      key: "recovery",
+      label: "进程恢复",
+      description: "调整进程启动、退出和故障恢复策略。",
+      children: <Recovery />,
+    },
+    {
+      key: "audit",
+      label: "日志与存储",
+      description: "控制审计容量、写盘策略和日志保留。",
+      children: (
+        <>
+          <AuditStorage />
+          <HostLog />
+        </>
+      ),
+    },
+    {
+      key: "isolation",
+      label: "运行隔离",
+      description: "选择兼容托管或系统级沙箱隔离。",
+      children: <Isolation />,
+    },
+  ]
+  const current = sections.find(item => item.key === section) ?? sections[0]
   return (
     <Form layout="horizontal" labelCol={{ flex: "132px" }} className="settings-form">
-      <Tabs
-        className="settings-tabs"
-        items={[
-          { key: "monitoring", label: "业务监控", children: <Monitoring /> },
-          { key: "update", label: "版本更新", children: <Updates /> },
-          { key: "alerts", label: "告警通知", children: <AlertSettings /> },
-          { key: "baseline", label: "行为画像", children: <BaselineSettings /> },
-          { key: "sources", label: "插件来源", children: <SourceSettings /> },
-          { key: "recovery", label: "进程恢复", children: <Recovery /> },
-          {
-            key: "audit",
-            label: "日志与存储",
-            children: (
-              <>
-                <AuditStorage />
-                <HostLog />
-              </>
-            ),
-          },
-          { key: "isolation", label: "运行隔离", children: <Isolation /> },
-        ]}
-      />
+      {narrow && (
+        <Select
+          aria-label="运行设置分类"
+          className="settings-section-select"
+          value={current.key}
+          options={sections.map(item => ({ value: item.key, label: item.label }))}
+          onChange={setSection}
+        />
+      )}
+      <div className="runtime-settings-layout">
+        {!narrow && (
+          <Menu
+            className="runtime-settings-menu"
+            mode="inline"
+            selectedKeys={[current.key]}
+            items={sections.map(item => ({ key: item.key, label: item.label }))}
+            onClick={({ key }) => setSection(key)}
+          />
+        )}
+        <div className="runtime-settings-content">
+          <div className="settings-section-heading">
+            <h2>{current.label}</h2>
+            <p>{current.description}</p>
+          </div>
+          {current.children}
+        </div>
+      </div>
     </Form>
   )
 }

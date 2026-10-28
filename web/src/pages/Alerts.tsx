@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { App, Button, Dropdown, Empty, Segmented, Space, Tag } from "antd"
-import { BellOutlined, CheckOutlined, SettingOutlined } from "@ant-design/icons"
+import { BellOutlined, CheckOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons"
 import { api } from "../api"
+import { goTo } from "../navigation"
 import { formatTime, PanelCard, relativeTime } from "../components"
 
 type AlertRecord = {
@@ -24,6 +25,8 @@ const muteOptions = [
   { minutes: 7 * 24 * 60, label: "7 天" },
 ]
 
+const criticalCategories = new Set(["deny", "restart", "tripped", "integrity"])
+
 const categoryTags: Record<string, { label: string; color: string }> = {
   deny: { label: "拦截", color: "red" },
   restart: { label: "重启", color: "volcano" },
@@ -34,6 +37,17 @@ const categoryTags: Record<string, { label: string; color: string }> = {
   update: { label: "更新", color: "blue" },
   security: { label: "登录安全", color: "cyan" },
   digest: { label: "合并摘要", color: "default" },
+}
+
+function dayLabel(time: number): string {
+  const date = new Date(time)
+  const today = new Date()
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+  const current = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+  const days = Math.round((current - start) / 86400000)
+  if (days === 0) return "今天"
+  if (days === 1) return "昨天"
+  return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(time)
 }
 
 /** 告警中心：最近发出的告警与 Webhook 测试。 */
@@ -94,8 +108,18 @@ export default function Alerts() {
   }
 
   const categories = useMemo(() => [...new Set(history.map(item => item.category))], [history])
-  const shown = filter === "all" ? history : history.filter(item => item.category === filter)
+  const shown =
+    filter === "all"
+      ? history
+      : filter === "unread"
+        ? history.filter(unread)
+        : history.filter(item => item.category === filter)
   const unreadCount = history.filter(unread).length
+  const grouped = shown.reduce<Record<string, AlertRecord[]>>((groups, item) => {
+    const day = dayLabel(item.time)
+    ;(groups[day] ??= []).push(item)
+    return groups
+  }, {})
 
   return (
     <div className="page-stack">
@@ -115,11 +139,7 @@ export default function Alerts() {
             <Button size="small" loading={testing} onClick={() => void testWebhook()}>
               测试 Webhook
             </Button>
-            <Button
-              size="small"
-              icon={<SettingOutlined />}
-              onClick={() => (location.hash = "settings")}
-            >
+            <Button size="small" icon={<SettingOutlined />} onClick={() => goTo("settings")}>
               告警设置
             </Button>
           </Space>
@@ -143,85 +163,101 @@ export default function Alerts() {
             ))}
           </div>
         )}
-        {categories.length > 1 && (
-          <Segmented
-            className="alerts-filter"
-            size="small"
-            value={filter}
-            onChange={value => setFilter(String(value))}
-            options={[
-              { value: "all", label: "全部" },
-              ...categories.map(value => ({ value, label: categoryTags[value]?.label ?? value })),
-            ]}
-          />
-        )}
+        <Segmented
+          className="alerts-filter"
+          size="small"
+          value={filter}
+          onChange={value => setFilter(String(value))}
+          options={[
+            { value: "all", label: "全部" },
+            { value: "unread", label: `未读${unreadCount ? ` ${unreadCount}` : ""}` },
+            ...categories.map(value => ({ value, label: categoryTags[value]?.label ?? value })),
+          ]}
+        />
         {shown.length ? (
-          <div className="alert-list">
-            {shown.map((item, index) => (
-              <div
-                className={`alert-item${unread(item) ? " alert-unread" : ""}${item.muted ? " alert-muted" : ""}`}
-                key={`${item.id}-${index}`}
-              >
-                <BellOutlined className="alert-icon" />
-                <div className="alert-body">
-                  <div className="alert-meta">
-                    <Tag color={categoryTags[item.category]?.color}>
-                      {categoryTags[item.category]?.label ?? item.category}
-                    </Tag>
-                    <span title={formatTime(item.time, true)}>{relativeTime(item.time)}</span>
-                    {item.muted && <Tag>已静默</Tag>}
-                  </div>
-                  <p>{item.text.replace(/^【Yunzai Guard】/, "")}</p>
-                </div>
-                <Space size={4} className="alert-actions">
-                  {unread(item) && (
-                    <Button
-                      size="small"
-                      type="text"
-                      onClick={() => void mutate("/api/alerts/ack", { ids: [item.id] })}
+          <div className="alert-groups">
+            {Object.entries(grouped).map(([day, items]) => (
+              <section className="alert-day" key={day}>
+                <h2>
+                  {day}
+                  <span>{items.length}</span>
+                </h2>
+                <div className="alert-list">
+                  {items.map((item, index) => (
+                    <div
+                      className={`alert-item${unread(item) ? " alert-unread" : ""}${item.muted ? " alert-muted" : ""}`}
+                      key={`${item.id}-${index}`}
                     >
-                      已读
-                    </Button>
-                  )}
-                  <Dropdown
-                    trigger={["click"]}
-                    menu={{
-                      items: muteOptions.flatMap(option => [
-                        ...(item.plugin
-                          ? [
+                      {criticalCategories.has(item.category) || item.severity === "high" ? (
+                        <WarningOutlined className="alert-icon alert-critical" />
+                      ) : (
+                        <BellOutlined className="alert-icon" />
+                      )}
+                      <div className="alert-body">
+                        <div className="alert-meta">
+                          <Tag color={categoryTags[item.category]?.color}>
+                            {categoryTags[item.category]?.label ?? item.category}
+                          </Tag>
+                          <span title={formatTime(item.time, true)}>{relativeTime(item.time)}</span>
+                          {item.muted && <Tag>已静默</Tag>}
+                        </div>
+                        <p>{item.text.replace(/^【Yunzai Guard】/, "")}</p>
+                      </div>
+                      <Space size={4} className="alert-actions">
+                        {unread(item) && (
+                          <Button
+                            size="small"
+                            type="text"
+                            onClick={() => void mutate("/api/alerts/ack", { ids: [item.id] })}
+                          >
+                            已读
+                          </Button>
+                        )}
+                        <Dropdown
+                          trigger={["click"]}
+                          menu={{
+                            items: muteOptions.flatMap(option => [
+                              ...(item.plugin
+                                ? [
+                                    {
+                                      key: `p-${option.minutes}`,
+                                      label: `静默 ${item.plugin} ${option.label}`,
+                                      onClick: () =>
+                                        void mutate("/api/alerts/mute", {
+                                          plugin: item.plugin,
+                                          minutes: option.minutes,
+                                        }),
+                                    },
+                                  ]
+                                : []),
                               {
-                                key: `p-${option.minutes}`,
-                                label: `静默 ${item.plugin} ${option.label}`,
+                                key: `c-${option.minutes}`,
+                                label: `静默「${categoryTags[item.category]?.label ?? item.category}」${option.label}`,
                                 onClick: () =>
                                   void mutate("/api/alerts/mute", {
-                                    plugin: item.plugin,
+                                    category: item.category,
                                     minutes: option.minutes,
                                   }),
                               },
-                            ]
-                          : []),
-                        {
-                          key: `c-${option.minutes}`,
-                          label: `静默「${categoryTags[item.category]?.label ?? item.category}」${option.label}`,
-                          onClick: () =>
-                            void mutate("/api/alerts/mute", {
-                              category: item.category,
-                              minutes: option.minutes,
-                            }),
-                        },
-                      ]),
-                    }}
-                  >
-                    <Button size="small" type="text">
-                      静默
-                    </Button>
-                  </Dropdown>
-                </Space>
-              </div>
+                            ]),
+                          }}
+                        >
+                          <Button size="small" type="text">
+                            静默
+                          </Button>
+                        </Dropdown>
+                      </Space>
+                    </div>
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无告警" />
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={filter === "unread" ? "没有未读告警" : "暂无告警"}
+          />
         )}
       </PanelCard>
     </div>

@@ -14,6 +14,7 @@ import {
 } from "antd"
 import type { TableColumnsType } from "antd"
 import { api } from "../api"
+import { goTo } from "../navigation"
 import { formatTime, PanelCard, relativeTime, StatTile } from "../components"
 import { kindName } from "../lib/labels"
 
@@ -234,28 +235,28 @@ export default function Profiles() {
           tone={recent ? "warning" : undefined}
           note="全部插件合计"
         />
-        <StatTile
-          label="操作"
-          value={
-            <Space size={6} wrap>
-              <Button size="small" onClick={() => void act("end")} disabled={!learning}>
-                全部结束学习
-              </Button>
-              <Popconfirm
-                title="清空全部画像并重新学习？"
-                onConfirm={() => void act("reset")}
-                okText="清空"
-                cancelText="取消"
-              >
-                <Button size="small" danger disabled={!plugins.length}>
-                  全部重置
-                </Button>
-              </Popconfirm>
-            </Space>
-          }
-        />
       </div>
-      <PanelCard title="插件画像" className="table-card">
+      <PanelCard
+        title="插件画像"
+        className="table-card"
+        extra={
+          <Space size={8} wrap>
+            <Button size="small" onClick={() => void act("end")} disabled={!learning}>
+              全部结束学习
+            </Button>
+            <Popconfirm
+              title="清空全部画像并重新学习？"
+              onConfirm={() => void act("reset")}
+              okText="清空"
+              cancelText="取消"
+            >
+              <Button size="small" danger disabled={!plugins.length}>
+                全部重置
+              </Button>
+            </Popconfirm>
+          </Space>
+        }
+      >
         <Table
           rowKey="plugin"
           size="middle"
@@ -265,7 +266,14 @@ export default function Profiles() {
           locale={{
             emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有画像数据" />,
           }}
-          onRow={item => ({ onClick: () => setSelected(item.plugin), className: "clickable-row" })}
+          onRow={item => ({
+            onClick: () => setSelected(item.plugin),
+            tabIndex: 0,
+            onKeyDown: event => {
+              if (event.key === "Enter") setSelected(item.plugin)
+            },
+            className: "clickable-row",
+          })}
           scroll={{ x: 860 }}
         />
       </PanelCard>
@@ -354,7 +362,7 @@ export default function Profiles() {
                             size="small"
                             type="link"
                             onClick={() =>
-                              (location.hash = `plugins?plugin=${encodeURIComponent(item.plugin)}`)
+                              goTo("plugins", `?plugin=${encodeURIComponent(item.plugin)}`)
                             }
                           >
                             去设置权限

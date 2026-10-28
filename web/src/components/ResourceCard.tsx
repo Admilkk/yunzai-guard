@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Empty, Progress } from "antd"
+import { Alert, Button, Progress, Skeleton } from "antd"
 import { api } from "../api"
 import { formatBytes, PanelCard, relativeTime } from "../components"
 
@@ -60,6 +60,7 @@ const level = (ratio: number): "normal" | "exception" => (ratio >= 0.9 ? "except
 export function ResourceCard({ enabled }: { enabled: boolean }) {
   const [data, setData] = useState<Resources>()
   const [failed, setFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let alive = true
@@ -77,7 +78,7 @@ export function ResourceCard({ enabled }: { enabled: boolean }) {
       alive = false
       clearInterval(timer)
     }
-  }, [])
+  }, [attempt])
 
   const latest = data?.points.at(-1)
   const system = data?.system
@@ -95,10 +96,20 @@ export function ResourceCard({ enabled }: { enabled: boolean }) {
       }
     >
       {!data || !system ? (
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={failed ? "资源数据读取失败" : "读取中"}
-        />
+        failed ? (
+          <Alert
+            type="error"
+            showIcon
+            message="资源数据读取失败"
+            action={
+              <Button size="small" onClick={() => setAttempt(value => value + 1)}>
+                重试
+              </Button>
+            }
+          />
+        ) : (
+          <Skeleton active paragraph={{ rows: 3 }} />
+        )
       ) : (
         <>
           <div className="resource-grid">

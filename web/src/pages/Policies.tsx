@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { Button, Popconfirm, Segmented, Select, Space, Table, Tag } from "antd"
+import { Button, Dropdown, Popconfirm, Segmented, Select, Space, Table, Tag } from "antd"
 import type { TableProps } from "antd"
 import {
   ArrowDownOutlined,
@@ -161,24 +161,6 @@ export default function Policies() {
   ]
   return (
     <div className="page-stack">
-      <PanelCard title="快捷创建" className="rule-quick-card">
-        <div className="rule-scenes">
-          {ruleScenes.map(scene => (
-            <Button
-              key={scene.id}
-              disabled={ctx.saving || rules.length >= 1000}
-              onClick={() =>
-                edit(null, {
-                  kind: scene.kind,
-                  ...("operation" in scene ? { operation: scene.operation } : {}),
-                })
-              }
-            >
-              {scene.label}
-            </Button>
-          ))}
-        </div>
-      </PanelCard>
       <PanelCard
         className="table-card"
         title={<FieldLabel helpKey="rule.order">规则列表</FieldLabel>}
@@ -213,14 +195,30 @@ export default function Policies() {
           </Space>
           <Space size={10}>
             <span className="result-count">{visible.length} 条规则</span>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => edit(null)}
+            <Dropdown
               disabled={ctx.saving || rules.length >= 1000}
+              menu={{
+                items: [
+                  { key: "blank", label: "空白规则" },
+                  ...ruleScenes.map(scene => ({ key: scene.id, label: scene.label })),
+                ],
+                onClick: ({ key }) => {
+                  const scene = ruleScenes.find(item => item.id === key)
+                  if (!scene) {
+                    edit(null)
+                    return
+                  }
+                  edit(null, {
+                    kind: scene.kind,
+                    ...("operation" in scene ? { operation: scene.operation } : {}),
+                  })
+                },
+              }}
             >
-              新增规则
-            </Button>
+              <Button type="primary" icon={<PlusOutlined />}>
+                新增规则
+              </Button>
+            </Dropdown>
           </Space>
         </div>
         <Table

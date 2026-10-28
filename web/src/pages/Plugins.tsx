@@ -3,13 +3,16 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import {
   App,
   Button,
+  Checkbox,
   Descriptions,
   Drawer,
+  Empty,
   Flex,
   Form,
   Input,
   Popover,
   Select,
+  Skeleton,
   Space,
   Table,
   Segmented,
@@ -22,8 +25,10 @@ import type { TableProps } from "antd"
 import { CloseOutlined, ReloadOutlined, SettingOutlined } from "@ant-design/icons"
 import { useConsole } from "../state"
 import { api } from "../api"
+import { replaceRoute } from "../navigation"
 import type { AuditEntry, PluginPermission, PluginRecord } from "../types"
 import { categories, nativeEntry, ownRule, setPermission } from "../lib/policy.js"
+import { useMediaQuery } from "../lib/use-media-query"
 import { ActionTag, formatTime, PanelCard, relativeTime } from "../components"
 import { EventDetails } from "../components/EventDetails"
 import { NativeFields } from "./Advanced"
@@ -47,6 +52,12 @@ const isGuard = (plugin: PluginRecord) => plugin.id.toLowerCase() === "yunzai-gu
 const configurable = (plugin: PluginRecord) => !isGuard(plugin) && !/[*?]/.test(plugin.id)
 /** 判断插件是否已启用独立沙箱。 */
 const sandboxActive = (plugin: PluginRecord) => plugin.sandbox?.enabled === true
+
+function pluginFromHash(): string | null {
+  if (!location.hash.startsWith("#plugins")) return null
+  const at = location.hash.indexOf("?")
+  return new URLSearchParams(at < 0 ? "" : location.hash.slice(at + 1)).get("plugin")
+}
 
 /** 显示权限评估所依据的示例事件。 */
 function PermissionEvidence({
@@ -155,6 +166,7 @@ export default function Plugins() {
   const ctx = useConsole()
   const { message } = App.useApp()
   const reduced = useReducedMotion()
+  const compact = useMediaQuery("(max-width: 640px)")
   const [search, setSearch] = useState("")
   const [mode, setMode] = useState("all")
   const [selected, setSelected] = useState<string[]>([])
@@ -186,7 +198,14 @@ export default function Plugins() {
       )
       .catch(() => {})
   }, [])
-  const [currentId, setCurrentId] = useState<string | null>(null)
+  const [currentId, setCurrentId] = useState<string | null>(pluginFromHash)
+  useEffect(() => {
+    const sync = () => {
+      if (location.hash.startsWith("#plugins")) setCurrentId(pluginFromHash())
+    }
+    addEventListener("hashchange", sync)
+    return () => removeEventListener("hashchange", sync)
+  }, [])
   const [tab, setTab] = useState("permissions")
   const [batch, setBatch] = useState(false)
   const [batchValues, setBatchValues] = useState<Record<string, string>>({})
@@ -239,6 +258,10 @@ export default function Plugins() {
     setEvent(null)
     setAudit({ items: [], total: 0 })
   }
+  const close = () => {
+    setCurrentId(null)
+    if (location.hash.startsWith("#plugins?")) replaceRoute("plugins")
+  }
   const grant = (category: (typeof categories)[number], action: string) => {
     if (!current) return
     ctx.update(document => setPermission(document, current.id, category, action))
@@ -280,13 +303,13 @@ export default function Plugins() {
               )}
             </Space>
             {plugin.description && <span className="plugin-description">{plugin.description}</span>}
-            <SourceTag source={sources[plugin.id]} />
           </div>
         )
       },
     },
     {
       title: "权限",
+      responsive: ["lg"],
       render: (_, plugin) => {
         if (isGuard(plugin)) return <span className="muted">固定自保护</span>
         const chips = categories.flatMap(category => {
@@ -362,6 +385,7 @@ export default function Plugins() {
     },
     {
       title: "最近活动",
+      responsive: ["xl"],
       width: 120,
       sorter: (a, b) => (a.stats.lastEventAt ?? 0) - (b.stats.lastEventAt ?? 0),
       render: (_, plugin) => (
@@ -460,36 +484,92 @@ export default function Plugins() {
             </motion.div>
           )}
         </AnimatePresence>
-        <Table
-          className="compact-table"
-          rowKey="id"
-          loading={ctx.loading}
-          columns={columns}
-          dataSource={visible}
-          size="middle"
-          scroll={{ x: 1040 }}
-          pagination={{
-            defaultPageSize: 12,
-            showSizeChanger: true,
-            pageSizeOptions: [12, 24, 50],
-            showTotal: total => `${total} 项`,
-          }}
-          onRow={plugin => ({ onClick: () => edit(plugin), className: "clickable-row" })}
-          rowSelection={{
-            selectedRowKeys: ids,
-            onChange: keys => setSelected(keys.map(String)),
-            getCheckboxProps: plugin => ({
-              disabled: !configurable(plugin) || ctx.saving,
-              "aria-label": `选择 ${plugin.id}`,
-            }),
-          }}
-        />
+        {compact && ctx.loading && !visible.length ? (
+          <Skeleton active paragraph={{ rows: 4 }} className="mobile-plugin-list" />
+        ) : compact && !visible.length ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的插件" />
+        ) : compact ? (
+          <div className="mobile-plugin-list">
+            {visible.map(plugin => {
+              const risk = risks[plugin.id]
+              return (
+                <article className="mobile-plugin-card" key={plugin.id}>
+                  <div className="mobile-plugin-card-head">
+                    <Checkbox
+                      checked={ids.includes(plugin.id)}
+                      disabled={!configurable(plugin) || ctx.saving}
+                      aria-label={`选择 ${plugin.id}`}
+                      onChange={event =>
+                        setSelected(previous =>
+                          event.target.checked
+                            ? [...previous, plugin.id]
+                            : previous.filter(id => id !== plugin.id),
+                        )
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="mobile-plugin-open"
+                      onClick={() => edit(plugin)}
+                    >
+                      {plugin.id}
+                    </button>
+                    {risk && (
+                      <Tag color={riskTags[risk.risk.level].color}>
+                        {riskTags[risk.risk.level].label} {risk.risk.score}
+                      </Tag>
+                    )}
+                  </div>
+                  {plugin.description && <p>{plugin.description}</p>}
+                  <div className="mobile-plugin-meta">
+                    <span>{sandboxActive(plugin) ? "独立沙箱" : "兼容托管"}</span>
+                    <span>事件 {plugin.stats.total.toLocaleString()}</span>
+                    <span>拦截 {(plugin.stats.deny + plugin.stats.restart).toLocaleString()}</span>
+                    <span>{relativeTime(plugin.stats.lastEventAt)}</span>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        ) : (
+          <Table
+            className="compact-table"
+            rowKey="id"
+            loading={ctx.loading}
+            columns={columns}
+            dataSource={visible}
+            size="middle"
+            scroll={{ x: 1040 }}
+            pagination={{
+              defaultPageSize: 12,
+              showSizeChanger: true,
+              pageSizeOptions: [12, 24, 50],
+              showTotal: total => `${total} 项`,
+            }}
+            onRow={plugin => ({
+              onClick: () => edit(plugin),
+              tabIndex: 0,
+              onKeyDown: event => {
+                if (event.key === "Enter") edit(plugin)
+              },
+              className: "clickable-row",
+            })}
+            rowSelection={{
+              selectedRowKeys: ids,
+              onChange: keys => setSelected(keys.map(String)),
+              getCheckboxProps: plugin => ({
+                disabled: !configurable(plugin) || ctx.saving,
+                "aria-label": `选择 ${plugin.id}`,
+              }),
+            }}
+          />
+        )}
       </PanelCard>
 
       <Drawer
         title={current?.id}
         open={Boolean(current)}
-        onClose={() => setCurrentId(null)}
+        onClose={close}
         size={680}
         className="config-drawer"
         extra={
@@ -507,7 +587,7 @@ export default function Plugins() {
         }
         footer={
           <Flex justify="end">
-            <Button onClick={() => setCurrentId(null)}>返回</Button>
+            <Button onClick={close}>返回</Button>
           </Flex>
         }
       >
@@ -518,6 +598,35 @@ export default function Plugins() {
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: reduced ? 0 : 0.15 }}
           >
+            <div className="plugin-drawer-summary">
+              <div>
+                <span>风险</span>
+                {risks[current.id] ? (
+                  <Tag color={riskTags[risks[current.id].risk.level].color}>
+                    {riskTags[risks[current.id].risk.level].label} {risks[current.id].risk.score}
+                  </Tag>
+                ) : (
+                  <span className="muted">未画像</span>
+                )}
+              </div>
+              <div>
+                <span>事件 / 拦截</span>
+                <strong>
+                  {current.stats.total.toLocaleString()} /{" "}
+                  {(current.stats.deny + current.stats.restart).toLocaleString()}
+                </strong>
+              </div>
+              <div>
+                <span>最近活动</span>
+                <strong>{relativeTime(current.stats.lastEventAt)}</strong>
+              </div>
+              {sources[current.id]?.git && (
+                <div>
+                  <span>来源</span>
+                  <SourceTag source={sources[current.id]} />
+                </div>
+              )}
+            </div>
             <Tabs
               activeKey={tab}
               onChange={setTab}
@@ -525,7 +634,36 @@ export default function Plugins() {
                 {
                   key: "permissions",
                   label: "单独权限",
-                  children: (
+                  children: compact ? (
+                    <div className="mobile-permission-list">
+                      {categories.map(category => {
+                        const permission = current.permissions.find(item => item.id === category.id)
+                        return (
+                          <section className="mobile-permission-item" key={category.id}>
+                            <div className="mobile-permission-heading">
+                              <FieldLabel helpKey={`permission.${category.id}`}>
+                                {category.label}
+                              </FieldLabel>
+                              <ActionTag action={permission?.action ?? "audit"} />
+                            </div>
+                            <Segmented
+                              aria-label={category.label}
+                              size="small"
+                              className="permission-segmented"
+                              disabled={!configurable(current) || ctx.saving}
+                              options={actionOptions}
+                              value={
+                                ownRule(ctx.draft.rules ?? [], current.id, category)?.action ??
+                                "inherit"
+                              }
+                              onChange={action => grant(category, String(action))}
+                            />
+                            <PermissionEvidence plugin={current} permission={permission} />
+                          </section>
+                        )
+                      })}
+                    </div>
+                  ) : (
                     <Table
                       rowKey="id"
                       size="small"
@@ -607,6 +745,10 @@ export default function Plugins() {
                       }}
                       onRow={entry => ({
                         onClick: () => setEvent(entry),
+                        tabIndex: 0,
+                        onKeyDown: event => {
+                          if (event.key === "Enter") setEvent(entry)
+                        },
                         className: "clickable-row",
                       })}
                       columns={[

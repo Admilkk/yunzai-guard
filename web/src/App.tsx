@@ -8,6 +8,7 @@ import {
   Dropdown,
   Layout,
   Menu,
+  Skeleton,
   Space,
   Spin,
   Tag,
@@ -362,7 +363,7 @@ export default function ConsoleApp() {
             <Suspense
               fallback={
                 <div className="page-loading">
-                  <Spin />
+                  <Skeleton active paragraph={{ rows: 7 }} />
                 </div>
               }
             >

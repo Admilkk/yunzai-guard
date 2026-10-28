@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react"
 import {
+  Alert,
   App,
   Button,
   Descriptions,
+  Drawer,
   Input,
   Popover,
   Segmented,
@@ -22,10 +24,12 @@ import {
   SearchOutlined,
   DownloadOutlined,
   DeleteOutlined,
+  FilterOutlined,
   StarOutlined,
   SwapOutlined,
 } from "@ant-design/icons"
 import { api } from "../api"
+import { replaceRoute } from "../navigation"
 import type { AuditEntry } from "../types"
 import { ActionTag, formatTime, PanelCard } from "../components"
 import { AuditCompare } from "../components/AuditCompare"
@@ -79,6 +83,8 @@ function filtersFromHash(): Filters {
     kind: params.get("kind") ?? "",
     action: params.get("action") ?? "",
     q: params.get("q") ?? "",
+    range: params.get("range") ?? "",
+    system: params.get("system") === "1",
   }
 }
 
@@ -149,6 +155,8 @@ export default function Audit() {
   const [live, setLive] = useState(false)
   const [tick, setTick] = useState(0)
   const [comparing, setComparing] = useState(false)
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [error, setError] = useState("")
   const [saved, setSaved] = useState<SavedFilter[]>(loadSaved)
   const [saveName, setSaveName] = useState("")
   const searchRef = useRef<InputRef>(null)
@@ -165,6 +173,16 @@ export default function Audit() {
     }, 300)
     return () => clearTimeout(timer)
   }, [search, filters.q])
+
+  useEffect(() => {
+    if (!location.hash.startsWith("#audit")) return
+    const params = new URLSearchParams()
+    for (const key of ["plugin", "kind", "action", "q", "range"] as const)
+      if (filters[key]) params.set(key, filters[key])
+    if (filters.system) params.set("system", "1")
+    const search = params.toString()
+    replaceRoute("audit", search ? `?${search}` : "")
+  }, [filters])
 
   useEffect(() => {
     const sync = () => {
@@ -241,18 +259,39 @@ export default function Audit() {
     if (filters.range) params.set("from", String(Date.now() - Number(filters.range)))
     if (!filters.system) params.set("scope", "behavior")
     api(`/api/audit?${params}`, { signal: controller.signal })
-      .then(setResult)
-      .catch((error: Error) => {
-        if (error.name !== "AbortError") message.error(error.message)
+      .then(value => {
+        setResult(value)
+        setError("")
+      })
+      .catch((failure: Error) => {
+        if (failure.name !== "AbortError") setError(failure.message)
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [filters, page, tick, message])
+  }, [filters, page, tick])
 
-  const active =
-    filters.plugin || filters.kind || filters.action || filters.q || filters.range || filters.system
+  const activeFilters = [
+    filters.plugin && { key: "plugin" as const, label: `来源：${filters.plugin}` },
+    filters.kind && { key: "kind" as const, label: `类型：${kindName(filters.kind)}` },
+    filters.action && {
+      key: "action" as const,
+      label: `处理：${actionLabels[filters.action] ?? filters.action}`,
+    },
+    filters.q && { key: "q" as const, label: `搜索：${filters.q}` },
+    filters.range && {
+      key: "range" as const,
+      label: `时间：${ranges.find(item => item.value === filters.range)?.label ?? filters.range}`,
+    },
+    filters.system && { key: "system" as const, label: "包含系统记录" },
+  ].filter(Boolean) as Array<{ key: keyof Filters; label: string }>
+  const active = activeFilters.length > 0
+  const clearFilters = () => {
+    setFilters({ ...emptyFilters })
+    setSearch("")
+    setPage(previous => ({ ...previous, current: 1 }))
+  }
   const options = (key: string, first: string) => [
     { value: "", label: first },
     ...(result.facets?.[key] ?? [])
@@ -306,7 +345,16 @@ export default function Audit() {
       render: value => (
         <Tag
           className={`kind-tag kind-${value}`}
+          role="button"
+          tabIndex={0}
+          aria-label={`只看${kindName(value)}类型`}
           onClick={event => {
+            event.stopPropagation()
+            change({ kind: value })
+          }}
+          onKeyDown={event => {
+            if (event.key !== "Enter" && event.key !== " ") return
+            event.preventDefault()
             event.stopPropagation()
             change({ kind: value })
           }}
@@ -339,49 +387,63 @@ export default function Audit() {
       render: (value, item) => <ActionTag action={value} blocked={item.blocked} />,
     },
   ]
+  const filterFields = (
+    <>
+      <Select
+        aria-label="来源"
+        value={filters.plugin}
+        options={options("plugins", "全部来源")}
+        onChange={plugin => change({ plugin })}
+        showSearch
+        popupMatchSelectWidth={false}
+        className="audit-select"
+      />
+      <Select
+        aria-label="类型"
+        value={filters.kind}
+        options={options("kinds", "全部类型")}
+        onChange={kind => change({ kind })}
+        popupMatchSelectWidth={false}
+        className="audit-select"
+      />
+      <Select
+        aria-label="处理"
+        value={filters.action}
+        options={options("actions", "全部处理")}
+        onChange={action => change({ action })}
+        className="audit-select narrow"
+      />
+      <Segmented
+        aria-label="时间范围"
+        value={filters.range}
+        options={ranges}
+        onChange={range => change({ range: String(range) })}
+      />
+    </>
+  )
   return (
     <div className="page-stack">
       <div className="audit-toolbar">
-        <Input
-          ref={searchRef}
-          aria-label="搜索事件"
-          placeholder="搜索操作、目标或规则  /"
-          prefix={<SearchOutlined />}
-          allowClear
-          value={search}
-          onChange={event => setSearch(event.target.value)}
-          className="audit-search"
-        />
-        <Select
-          aria-label="来源"
-          value={filters.plugin}
-          options={options("plugins", "全部来源")}
-          onChange={plugin => change({ plugin })}
-          showSearch
-          popupMatchSelectWidth={false}
-          className="audit-select"
-        />
-        <Select
-          aria-label="类型"
-          value={filters.kind}
-          options={options("kinds", "全部类型")}
-          onChange={kind => change({ kind })}
-          popupMatchSelectWidth={false}
-          className="audit-select"
-        />
-        <Select
-          aria-label="处理"
-          value={filters.action}
-          options={options("actions", "全部处理")}
-          onChange={action => change({ action })}
-          className="audit-select narrow"
-        />
-        <Segmented
-          aria-label="时间范围"
-          value={filters.range}
-          options={ranges}
-          onChange={range => change({ range: String(range) })}
-        />
+        <div className="audit-primary">
+          <Input
+            ref={searchRef}
+            aria-label="搜索事件"
+            placeholder="搜索操作、目标或规则  /"
+            prefix={<SearchOutlined />}
+            allowClear
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            className="audit-search"
+          />
+          <div className="audit-filter-fields">{filterFields}</div>
+          <Button
+            className="audit-filter-open"
+            icon={<FilterOutlined />}
+            onClick={() => setFilterOpen(true)}
+          >
+            筛选{activeFilters.length ? `（${activeFilters.length}）` : ""}
+          </Button>
+        </div>
         <div className="audit-toolbar-end">
           <Dropdown
             trigger={["click"]}
@@ -478,20 +540,6 @@ export default function Audit() {
               实时
             </label>
           </Tooltip>
-          {active && (
-            <Button
-              type="link"
-              size="small"
-              onClick={() => {
-                setFilters({ ...emptyFilters })
-                setSearch("")
-                setPage(previous => ({ ...previous, current: 1 }))
-                if (location.hash.includes("?")) history.replaceState(null, "", "#audit")
-              }}
-            >
-              清除筛选
-            </Button>
-          )}
           <Button
             aria-label="刷新审计"
             icon={<ReloadOutlined spin={loading} />}
@@ -499,6 +547,43 @@ export default function Audit() {
           />
         </div>
       </div>
+      {active && (
+        <div className="active-filters" aria-label="已生效筛选">
+          <span className="muted">已筛选</span>
+          {activeFilters.map(filter => (
+            <Tag
+              key={filter.key}
+              closable
+              onClose={event => {
+                event.preventDefault()
+                if (filter.key === "system") change({ system: false })
+                else if (filter.key === "q") {
+                  setSearch("")
+                  change({ q: "" })
+                } else change({ [filter.key]: "" } as Partial<Filters>)
+              }}
+            >
+              {filter.label}
+            </Tag>
+          ))}
+          <Button type="link" size="small" onClick={clearFilters}>
+            全部清除
+          </Button>
+        </div>
+      )}
+      {error && (
+        <Alert
+          type="error"
+          showIcon
+          message="审计记录读取失败"
+          description={error}
+          action={
+            <Button size="small" onClick={() => setTick(value => value + 1)}>
+              重试
+            </Button>
+          }
+        />
+      )}
       <PanelCard title={<Coverage result={result} />} className="table-card audit-table-card">
         <Table
           rowKey="id"
@@ -527,6 +612,25 @@ export default function Audit() {
           }}
         />
       </PanelCard>
+      <Drawer
+        title="筛选事件"
+        open={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        size={360}
+        className="config-drawer audit-filter-drawer"
+        footer={
+          <Space size={8}>
+            <Button disabled={!active} onClick={clearFilters}>
+              全部清除
+            </Button>
+            <Button type="primary" onClick={() => setFilterOpen(false)}>
+              查看 {Number(result.total ?? 0).toLocaleString()} 条结果
+            </Button>
+          </Space>
+        }
+      >
+        <div className="audit-mobile-fields">{filterFields}</div>
+      </Drawer>
       <EventDetails entry={selected} onClose={() => setSelected(null)} />
       <AuditCompare
         open={comparing}

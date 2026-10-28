@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Alert, App, Button, Empty, Space, Table, Tag, Tooltip } from "antd"
+import { Alert, App, Button, Collapse, Empty, Space, Table, Tag, Tooltip } from "antd"
 import type { TableColumnsType } from "antd"
 import {
   ApiOutlined,
@@ -12,9 +12,9 @@ import {
   StopOutlined,
   WarningOutlined,
 } from "@ant-design/icons"
-import { motion, useReducedMotion } from "motion/react"
 import { api } from "../api"
 import { useConsole } from "../state"
+import { goTo } from "../navigation"
 import {
   ActionTag,
   baseName,
@@ -44,7 +44,6 @@ type NativeExtension = { plugin: string; target: string; lastAt: number; count: 
 
 /** 事件趋势柱状图：已拦截部分单独着色。 */
 function Trend({ timeline }: { timeline: Bucket[] }) {
-  const reduced = useReducedMotion()
   if (!timeline.length)
     return (
       <Empty className="chart-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无事件" />
@@ -54,7 +53,7 @@ function Trend({ timeline }: { timeline: Bucket[] }) {
   return (
     <div className="trend-chart" role="img" aria-label="事件趋势">
       <div className="trend-bars">
-        {timeline.map((item, index) => {
+        {timeline.map(item => {
           const blocked = (item.deny ?? 0) + (item.restart ?? 0)
           return (
             <Tooltip
@@ -62,11 +61,8 @@ function Trend({ timeline }: { timeline: Bucket[] }) {
               title={`${formatTime(item.time)} · ${item.total} 条${blocked ? ` · 拦截 ${blocked}` : ""}`}
             >
               <div className="trend-slot">
-                <motion.div
+                <div
                   className="trend-bar"
-                  initial={reduced ? false : { scaleY: 0 }}
-                  animate={{ scaleY: 1 }}
-                  transition={{ duration: reduced ? 0 : 0.3, delay: reduced ? 0 : index * 0.012 }}
                   style={{
                     height: `${Math.max(item.total ? 3 : 0, (item.total / maximum) * 100)}%`,
                   }}
@@ -77,7 +73,7 @@ function Trend({ timeline }: { timeline: Bucket[] }) {
                       style={{ height: `${(blocked / Math.max(1, item.total)) * 100}%` }}
                     />
                   )}
-                </motion.div>
+                </div>
               </div>
             </Tooltip>
           )
@@ -173,7 +169,7 @@ function NativeCard({ items, isolated }: { items: NativeExtension[]; isolated: b
           message="原生扩展不受 JS 层检查"
           description={<span>当前只记录加载。要限制，请开启系统隔离或添加原生扩展规则。</span>}
           action={
-            <Button size="small" onClick={() => (location.hash = "runtime")}>
+            <Button size="small" onClick={() => goTo("runtime")}>
               运行设置
             </Button>
           }
@@ -329,6 +325,7 @@ export default function Overview() {
           </div>
           <Space size={8} wrap>
             <Button
+              danger
               icon={<ReloadOutlined />}
               disabled={!connected || saving}
               onClick={() =>
@@ -357,18 +354,16 @@ export default function Overview() {
         <UpdateStrip />
       </section>
 
-      <ResourceCard enabled={Boolean(overview?.active?.monitor?.process)} />
-
       <div className="stat-grid">
         <StatTile
           label="已记录行为"
-          value={Number(summary.total ?? 0).toLocaleString()}
+          value={Number(summary.total ?? 0)}
           icon={<AuditOutlined />}
           note={summary.unknownPlugin ? `${summary.unknownPlugin} 条来源不明` : undefined}
         />
         <StatTile
           label="已拦截"
-          value={blocked.toLocaleString()}
+          value={blocked}
           icon={<StopOutlined />}
           note={summary.restart ? `含 ${summary.restart} 次重启` : undefined}
           tone={blocked ? "danger" : undefined}
@@ -392,7 +387,7 @@ export default function Overview() {
         />
         <StatTile
           label="审计队列"
-          value={Number(buffer.pendingRecords ?? 0).toLocaleString()}
+          value={Number(buffer.pendingRecords ?? 0)}
           icon={<InboxOutlined />}
           note={`丢弃 ${buffer.dropped ?? status.auditDropped ?? 0}`}
           tone={Number(buffer.dropped ?? status.auditDropped ?? 0) ? "warning" : undefined}
@@ -425,7 +420,7 @@ export default function Overview() {
                   type="button"
                   className="kind-item"
                   key={kind}
-                  onClick={() => (location.hash = `audit?kind=${encodeURIComponent(kind)}`)}
+                  onClick={() => goTo("audit", `?kind=${encodeURIComponent(kind)}`)}
                 >
                   <span>{kindName(kind)}</span>
                   <span className="kind-bar">
@@ -441,58 +436,84 @@ export default function Overview() {
         </PanelCard>
       </div>
 
-      <div className="overview-pair-grid">
-        <NativeCard items={native} isolated={isolated} />
-        <UsageCard usage={usage} enabled={overview?.active?.monitor?.process !== false} />
-      </div>
+      <PanelCard
+        title="最近行为"
+        className="table-card"
+        extra={
+          <Button type="text" icon={<ArrowRightOutlined />} onClick={() => goTo("audit")}>
+            全部
+          </Button>
+        }
+      >
+        <Table<AuditEntry>
+          rowKey="id"
+          columns={columns}
+          dataSource={recent}
+          pagination={false}
+          size="middle"
+          className="compact-table"
+          onRow={entry => ({
+            onClick: () => setSelected(entry),
+            tabIndex: 0,
+            onKeyDown: event => {
+              if (event.key === "Enter") setSelected(entry)
+            },
+            className: "clickable-row",
+          })}
+          scroll={{ x: 520 }}
+        />
+      </PanelCard>
 
-      <div className="overview-detail-grid">
-        <PanelCard
-          title="最近行为"
-          className="table-card"
-          extra={
-            <Button
-              type="text"
-              icon={<ArrowRightOutlined />}
-              onClick={() => (location.hash = "audit")}
-            >
-              全部
-            </Button>
-          }
-        >
-          <Table<AuditEntry>
-            rowKey="id"
-            columns={columns}
-            dataSource={recent}
-            pagination={false}
-            size="middle"
-            className="compact-table"
-            onRow={entry => ({ onClick: () => setSelected(entry), className: "clickable-row" })}
-            scroll={{ x: 520 }}
-          />
-        </PanelCard>
-        <PanelCard
-          title="函数监控"
-          className="monitor-card"
-          extra={changed ? <Tag color="red">{changed} 项异常</Tag> : <Tag color="green">正常</Tag>}
-        >
-          {targets.length ? (
-            <div className="monitor-list">
-              {targets.map((item: Record<string, any>) => {
-                const state = monitorStates[item.state] ?? { label: item.state }
-                return (
-                  <div className="monitor-item" key={item.target}>
-                    <span title={item.target}>{functionName(item.target)}</span>
-                    <Tag color={state.color}>{state.label}</Tag>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无监控目标" />
-          )}
-        </PanelCard>
-      </div>
+      <ResourceCard enabled={Boolean(overview?.active?.monitor?.process)} />
+
+      <Collapse
+        className="diagnostics-collapse"
+        ghost
+        items={[
+          {
+            key: "diagnostics",
+            label: (
+              <span className="diagnostics-label">
+                运行诊断
+                <span className="muted">原生扩展、系统观察与函数完整性</span>
+              </span>
+            ),
+            children: (
+              <div className="overview-diagnostics-grid">
+                <NativeCard items={native} isolated={isolated} />
+                <UsageCard usage={usage} enabled={overview?.active?.monitor?.process !== false} />
+                <PanelCard
+                  title="函数监控"
+                  className="monitor-card"
+                  extra={
+                    changed ? (
+                      <Tag color="red">{changed} 项异常</Tag>
+                    ) : (
+                      <Tag color="green">正常</Tag>
+                    )
+                  }
+                >
+                  {targets.length ? (
+                    <div className="monitor-list">
+                      {targets.map((item: Record<string, any>) => {
+                        const state = monitorStates[item.state] ?? { label: item.state }
+                        return (
+                          <div className="monitor-item" key={item.target}>
+                            <span title={item.target}>{functionName(item.target)}</span>
+                            <Tag color={state.color}>{state.label}</Tag>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无监控目标" />
+                  )}
+                </PanelCard>
+              </div>
+            ),
+          },
+        ]}
+      />
       <EventDetails entry={selected} onClose={() => setSelected(null)} />
     </div>
   )
