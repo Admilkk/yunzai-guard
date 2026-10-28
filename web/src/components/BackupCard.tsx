@@ -22,7 +22,7 @@ async function download(path: string, fallback: string) {
 /** 配置的历史备份、回滚、导出与规则导入。 */
 export function BackupCard() {
   const { message } = App.useApp()
-  const { reload, dirty, saving } = useConsole()
+  const { reload, dirty, saving, settingsRevision } = useConsole()
   const [backups, setBackups] = useState<Backup[]>([])
   const [preview, setPreview] = useState<{ id: string; text: string }>()
   const [imported, setImported] = useState<{ rules: unknown[]; name: string }>()
@@ -54,7 +54,10 @@ export function BackupCard() {
   /** 回滚到指定备份；当前配置会先被备份。 */
   async function restore(id: string) {
     try {
-      await api("/api/settings/restore", { method: "POST", body: JSON.stringify({ id }) })
+      await api("/api/settings/restore", {
+        method: "POST",
+        body: JSON.stringify({ id, revision: settingsRevision }),
+      })
       message.success("已恢复，并按字段自动应用")
       setPreview(undefined)
       await Promise.all([load(), reload(true)])
@@ -81,7 +84,7 @@ export function BackupCard() {
     try {
       const result = await api("/api/settings/import-rules", {
         method: "POST",
-        body: JSON.stringify({ rules: imported.rules, mode }),
+        body: JSON.stringify({ rules: imported.rules, mode, revision: settingsRevision }),
       })
       message.success(`已导入 ${result.imported} 条规则`)
       setImported(undefined)

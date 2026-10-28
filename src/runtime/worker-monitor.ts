@@ -11,10 +11,11 @@ import { evaluatePolicy, GuardDeniedError } from "../config/policy.js"
 import { runtimeEventDecision, runtimeFailureDecision } from "./policy.js"
 import {
   arrayIsArray,
-  arrayMap,
-  arrayEvery,
+  arrayEach,
   arrayPush,
   objectDefine,
+  objectHasOwn,
+  reflectGet,
   stringSlice,
 } from "../protect/intrinsics.js"
 import type { EmitEvent, GuardEvent, GuardSettings } from "../shared/types.js"
@@ -28,9 +29,42 @@ import {
 export const workerMetadataKey = "yunzai.guard.runtime.bootstrap.v1"
 export const runtimeKey = Symbol.for("yunzai.guard.runtime.v1")
 const construct = Reflect.construct
+const toObject = Object
 const Channel = MessageChannel
 const getData = getEnvironmentData
 const setData = setEnvironmentData
+const workerOptionKeys = [
+  "argv",
+  "env",
+  "eval",
+  "execArgv",
+  "name",
+  "resourceLimits",
+  "stdin",
+  "stdout",
+  "stderr",
+  "trackUnmanagedFds",
+  "transferList",
+  "workerData",
+] as const
+
+/** 固定 Worker 使用的选项值，保留继承与不可枚举属性，避免检查后再次触发 getter。 */
+function snapshotWorkerOptions(input: unknown): workerThreads.WorkerOptions {
+  const source = input === undefined ? undefined : toObject(input)
+  const result = { __proto__: null, ...source }
+  if (source)
+    arrayEach(workerOptionKeys, key => {
+      if (!objectHasOwn(result, key))
+        objectDefine(result, key, {
+          value: reflectGet(source, key),
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        })
+    })
+  return result
+}
+
 export interface RuntimeIdentity {
   id: string
   parentId?: string
@@ -100,21 +134,20 @@ export function installWorkerMonitor(options: WorkerMonitorOptions): WorkerMonit
     /** 构造 Worker 前注入运行时元数据与审计端口。 */
     construct(target, args, newTarget) {
       const current = args[1]
-      if (
-        current !== undefined &&
-        (current === null || typeof current !== "object" || arrayIsArray(current))
-      )
-        return construct(target, args, newTarget)
-      const userOptions = {
-        __proto__: null,
-        ...(current as workerThreads.WorkerOptions | undefined),
-      }
-      const supplied = userOptions.execArgv === undefined ? process.execArgv : userOptions.execArgv
+      if (current === null) return construct(target, args, newTarget)
+      const userOptions = snapshotWorkerOptions(current)
+      // Node 将所有假值视为继承参数；这些有效输入也必须经过策略与预加载注入。
+      const supplied = userOptions.execArgv || process.execArgv
       if (!arrayIsArray(supplied))
-        return construct(target, [args[0], { ...userOptions, execArgv: supplied }], newTarget)
-      const argv = arrayMap(supplied, value => value)
-      if (!arrayEvery(argv, value => typeof value === "string"))
-        return construct(target, [args[0], { ...userOptions, execArgv: argv }], newTarget)
+        return construct(
+          target,
+          [args[0], { __proto__: null, ...userOptions, execArgv: supplied }],
+          newTarget,
+        )
+      // 原生 Worker 也接受可转成字符串的参数，固定转换结果后再注入监控。
+      const argv: string[] = []
+      const length = supplied.length
+      for (let index = 0; index < length; index++) arrayPush(argv, `${supplied[index]}`)
       const originPlugin = options.originPlugin() ?? options.identity.originPlugin
       const runtime: RuntimeIdentity = {
         id: randomUUID(),
@@ -148,7 +181,12 @@ export function installWorkerMonitor(options: WorkerMonitorOptions): WorkerMonit
       try {
         const transferList = [...(userOptions.transferList ?? [])]
         arrayPush(transferList, channel.port2)
-        const workerOptions = { ...userOptions, execArgv: monitoredExecArgv(argv), transferList }
+        const workerOptions = {
+          __proto__: null,
+          ...userOptions,
+          execArgv: monitoredExecArgv(argv),
+          transferList,
+        }
         setData(workerMetadataKey, {
           version: 1,
           identity: runtime,

@@ -133,11 +133,12 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       clearTimeout(timer)
     }
   }, [session, apply?.status, reload])
+  /** 建立登录会话，重新认证时保留尚未保存的配置草稿。 */
   const enter = useCallback(async () => {
     const value = await api("/api/session")
     setCsrf(value.csrfToken)
     setSession(value)
-    await reload(false)
+    await reload(true)
   }, [reload])
 
   useEffect(() => {
@@ -271,6 +272,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     connected,
     configurationLoaded,
     configurationError,
+    settingsRevision: settings?.revision,
     error,
     meta,
     session,

@@ -19,8 +19,12 @@ const run = (cwd, ...args) => {
 }
 
 /** 建一个带 release 分支的远端，与一个停在旧版本的插件克隆。 */
-function fixture() {
+function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-update-git-"))
+  t.after(() => {
+    assert.equal(path.dirname(fs.realpathSync(root)), fs.realpathSync(os.tmpdir()))
+    fs.rmSync(root, { recursive: true, force: true })
+  })
   const source = path.join(root, "source")
   fs.mkdirSync(source)
   run(source, "init", "-q", "-b", "release")
@@ -46,18 +50,24 @@ function fixture() {
 test(
   "release-branch git installs fetch, switch and roll back through the update service",
   { skip: !hasGit },
-  async () => {
-    const { root, plugin } = fixture()
+  async t => {
+    const { root, plugin } = fixture(t)
     assert.equal(gitBranch(plugin), "release")
     const settings = parseSettings({})
-    const service = new UpdateService({
+    const installs = []
+    let refuseInstall = false
+    const options = {
       pluginDir: plugin,
       stateDir: path.join(root, "state"),
       settings: () => settings.update,
       send: () => true,
-      install() {},
+      install: (...args) => {
+        if (refuseInstall) throw new Error("fixture install refused")
+        installs.push(args)
+      },
       record() {},
-    })
+    }
+    const service = new UpdateService(options)
     const state = service.state()
     assert.equal(state.installMode, "git")
     assert.equal(state.autoUpdate, true)
@@ -75,6 +85,34 @@ test(
     )
     service.swap({ version: "1.1.0", directory: plugin, commit: fetched.commit }).commit()
     assert.equal(service.state().rollback?.version, "1.0.0")
+    const restarted = new UpdateService(options)
+    const originalPath = process.env.PATH
+    try {
+      // 状态展示不依赖 Git 可执行文件；回滚版本在宿主启动时解析。
+      process.env.PATH = ""
+      const state = restarted.state()
+      assert.equal(state.autoUpdate, true)
+      assert.equal(state.current, "1.1.0")
+      assert.equal(state.rollback?.version, "1.0.0")
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH
+      else process.env.PATH = originalPath
+    }
+    refuseInstall = true
+    const refused = await restarted.rollback()
+    assert.equal(refused.ok, false)
+    assert.match(refused.message, /fixture install refused/)
+    assert.equal(restarted.state().phase, "failed")
+    refuseInstall = false
+    assert.equal((await restarted.rollback()).ok, true)
+    const [previous, from, rollback] = installs.at(-1)
+    assert.equal(previous.version, "1.0.0")
+    assert.equal(from, "1.1.0")
+    assert.equal(rollback, true)
+    restarted.swap(previous).commit()
+    const restored = new UpdateService(options).state()
+    assert.equal(restored.current, "1.0.0")
+    assert.equal(restored.rollback?.version, "1.1.0")
     fs.appendFileSync(path.join(plugin, "index.js"), "// local\n")
     await assert.rejects(fetchRelease(plugin, "1.1.0", false), /未提交的改动/)
     await fetchRelease(plugin, "1.1.0", true)
@@ -84,8 +122,8 @@ test(
 test(
   "source checkouts on other branches are left to manual updates",
   { skip: !hasGit },
-  async () => {
-    const { root, plugin } = fixture()
+  async t => {
+    const { root, plugin } = fixture(t)
     run(plugin, "checkout", "-q", "-b", "main")
     const service = new UpdateService({
       pluginDir: plugin,
@@ -101,3 +139,12 @@ test(
     assert.match(result.message, /源码安装/)
   },
 )
+
+test("branch metadata follows worktrees and detached HEAD", { skip: !hasGit }, t => {
+  const { root, plugin } = fixture(t)
+  const worktree = path.join(root, "worktree")
+  run(plugin, "worktree", "add", "-q", "-b", "preview", worktree)
+  assert.equal(gitBranch(worktree), "preview")
+  run(plugin, "checkout", "-q", "--detach")
+  assert.equal(gitBranch(plugin), "HEAD")
+})

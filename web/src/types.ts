@@ -57,6 +57,7 @@ export interface ConsoleValue {
   connected: boolean
   configurationLoaded: boolean
   configurationError: string | null
+  settingsRevision?: string
   error: string
   meta: Record<string, any> | null
   session: Record<string, any> | null

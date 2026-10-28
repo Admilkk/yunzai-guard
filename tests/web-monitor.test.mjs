@@ -33,6 +33,33 @@ function event(sequence, plugin, patch = {}) {
   }
 }
 
+test("JSONL 分页共用读取窗口，写入或缓存到期后重新读取", async t => {
+  const root = fixture(t)
+  const file = path.join(root, "events.jsonl")
+  fs.writeFileSync(
+    file,
+    [event(1, "foo-plugin"), event(2, "foo-plugin")].map(row => JSON.stringify(row)).join("\n") +
+      "\n",
+  )
+  const reader = t.mock.method(fs, "readSync")
+  const first = readAudit(root, { pageSize: 1 })
+  const reads = reader.mock.calls.length
+  assert.ok(reads > 0)
+  const second = readAudit(root, { pageSize: 1, page: 2 })
+  assert.equal(second.items[0].sequence, 1)
+  assert.equal(first.total, second.total)
+  assert.equal(reader.mock.calls.length, reads)
+  fs.appendFileSync(file, JSON.stringify(event(3, "foo-plugin")) + "\n")
+  const updated = readAudit(root, { pageSize: 1 })
+  assert.equal(updated.total, 3)
+  assert.equal(updated.items[0].sequence, 3)
+  assert.ok(reader.mock.calls.length > reads)
+  await new Promise(resolve => setTimeout(resolve, 2100))
+  const before = reader.mock.calls.length
+  assert.equal(readAudit(root, { pageSize: 1 }).total, 3)
+  assert.ok(reader.mock.calls.length > before)
+})
+
 test("审计读取真实宿主信封与轮转，过滤分页并保留覆盖不足和脱敏详情", t => {
   const root = fixture(t)
   const rows = [

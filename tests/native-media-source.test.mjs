@@ -255,6 +255,11 @@ test("source tokens cannot cross sessions or requests, bind twice, or be read be
   const dto = one.host.serializeArgs(imageArgs()),
     tag = firstTag(dto)
   const read = [{ handle: tag.handle, offset: 0 }]
+  for (const id of [undefined, null, ""]) {
+    assert.throws(() => one.host.receive(id, "read", read), { code: "MEDIA_INVALID_REQUEST" })
+    assert.throws(() => one.host.bindRequest(id, dto), { code: "MEDIA_INVALID_REQUEST" })
+  }
+  assert.equal(one.host.stats.requests, 0)
   assert.throws(() => one.host.receive("adapter-a", "read", read), { code: "MEDIA_SOURCE_HANDLE" })
   assert.throws(() => two.host.bindRequest("adapter-a", dto), { code: "MEDIA_SOURCE_HANDLE" })
   one.host.bindRequest("adapter-a", dto)

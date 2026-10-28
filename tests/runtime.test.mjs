@@ -187,6 +187,25 @@ test("fork and synchronous direct Node descendants propagate monitoring without 
   }
 })
 
+test("valid Worker option variants cannot bypass a denied creation policy", async () => {
+  const probe = await fixture({
+    rules: [{ id: "no-workers", kind: "process", operation: "worker", action: "deny" }],
+  })
+  try {
+    const marker = path.join(probe.directory, "unmonitored-worker")
+    const entry = path.join(probe.directory, "business-worker.cjs")
+    const code = `require("node:fs").writeFileSync(${JSON.stringify(marker)},"bad")`
+    fs.writeFileSync(entry, code)
+    const result = await probe.launch(
+      `import {Worker} from "node:worker_threads";const results=[];const options=[...[null,false,"",0].map(execArgv=>({execArgv})),Object.assign([],{execArgv:[]}),Object.assign(function(){},{execArgv:[]}),{execArgv:[null,0,false,undefined]},{execArgv:[{toString(){return "--no-warnings"}}]},new Proxy({execArgv:[]},{}),false,0,"",1,"text",Symbol("options"),7n];for(const option of options){try{new Worker(${JSON.stringify(entry)},option);results.push("allowed")}catch(error){results.push(error.code)}}console.log(JSON.stringify(results));`,
+    )
+    assert.deepEqual(JSON.parse(result.stdout.trim()), new Array(16).fill("GUARD_DENIED"))
+    assert.equal(fs.existsSync(marker), false)
+  } finally {
+    await probe.close()
+  }
+})
+
 test("nested Workers preserve application transfers and report a blocked internal operation", async () => {
   const probe = await fixture({
     audit: { maxQueue: 1 },

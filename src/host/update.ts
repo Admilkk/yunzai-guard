@@ -41,7 +41,7 @@ export interface UpdateState {
   phase: Phase
   message?: string
   hostRestartPending: boolean
-  /** 上一版本仍保留在 .update/previous 时可以还原。 */
+  /** 上一版本的发布文件或 Git 提交仍保留时可以还原。 */
   rollback?: { version: string }
   lastResult?: { ok: boolean; version: string; message: string; at: number }
 }
@@ -112,8 +112,10 @@ export class UpdateService {
   #message: string | undefined
   #error: string | undefined
   #hostRestartPending = false
+  /** 启动或提交更新时解析，避免状态查询反复执行 git show。 */
+  #previousVersion: string | undefined
 
-  /** 载入上次保存的检查结果和待发通知。 */
+  /** 载入持久化检查结果、待发通知与回滚目标，并解析上一版本。 */
   constructor(options: UpdateOptions) {
     this.#options = options
     this.#file = path.join(options.stateDir, "update.json")
@@ -130,13 +132,20 @@ export class UpdateService {
               .slice(-maxPending)
           : [],
         lastResult: value.lastResult,
+        previousCommit:
+          typeof value.previousCommit === "string" &&
+          /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value.previousCommit)
+            ? value.previousCommit
+            : undefined,
       }
     } catch {
       // 首次运行或文件损坏时从空状态开始。
     }
+    if (this.#stored.previousCommit)
+      this.#previousVersion = versionAt(options.pluginDir, this.#stored.previousCommit)
   }
 
-  /** 当前状态快照，供面板、命令与 CLI 展示。 */
+  /** 读取轻量元数据与已解析的回滚版本，供面板、命令与 CLI 展示；不启动子进程。 */
   state(): UpdateState {
     const git = fs.existsSync(path.join(this.#options.pluginDir, ".git"))
     const branch = git ? gitBranch(this.#options.pluginDir) : undefined
@@ -206,8 +215,8 @@ export class UpdateService {
   }
 
   /**
-   * 暂存最新发布并交给生命周期队列。force 允许重装当前版本、跨主版本更新，
-   * 并跳过版本比较。返回给调用方的文本即用户可见的结果。
+   * 暂存最新发布并交给生命周期队列。force 允许重装当前版本或跨主版本升级，
+   * 低于当前版本的发布仍拒绝；必须成功检查发布信息，不以旧缓存替代失败响应。
    */
   async apply(force: boolean): Promise<{ ok: boolean; message: string }> {
     if (this.#busy) return { ok: false, message: M.update.busy }
@@ -218,6 +227,7 @@ export class UpdateService {
       this.#phase = "downloading"
       this.#message = undefined
       await this.check(true)
+      if (this.#error) throw new Error(this.#error)
       const release = this.#stored.release
       if (!release) throw new Error(this.#error ?? M.update.fetchFailed("无发布信息"))
       const current = state.current
@@ -256,9 +266,8 @@ export class UpdateService {
 
   /** 读取保留的上一版本号；没有或不完整时返回 undefined。 */
   #previous(): { version: string } | undefined {
-    const commit = this.#stored.previousCommit
     if (fs.existsSync(path.join(this.#options.pluginDir, ".git"))) {
-      const version = commit ? versionAt(this.#options.pluginDir, commit) : undefined
+      const version = this.#previousVersion
       return version ? { version } : undefined
     }
     try {
@@ -285,28 +294,29 @@ export class UpdateService {
     const previous = this.#previous()
     if (!previous) return { ok: false, message: M.update.noPrevious }
     this.#busy = true
-    if (state.installMode === "git") {
-      const current = readVersion(this.#options.pluginDir)
-      this.#phase = "installing"
-      this.#message = `正在还原到 ${previous.version}`
-      this.notify(`【Yunzai Guard】开始还原：${current} → ${previous.version}，宿主将重新启动`)
-      this.#options.install(
-        {
-          version: previous.version,
-          directory: this.#options.pluginDir,
-          commit: this.#stored.previousCommit,
-        },
-        current,
-        true,
-      )
-      return { ok: true, message: `开始还原：${current} → ${previous.version}` }
-    }
     try {
+      if (state.installMode === "git") {
+        const current = readVersion(this.#options.pluginDir)
+        this.#phase = "installing"
+        this.#message = `正在还原到 ${previous.version}`
+        this.notify(`【Yunzai Guard】开始还原：${current} → ${previous.version}，宿主将重新启动`)
+        this.#options.install(
+          {
+            version: previous.version,
+            directory: this.#options.pluginDir,
+            commit: this.#stored.previousCommit,
+          },
+          current,
+          true,
+        )
+        return { ok: true, message: `开始还原：${current} → ${previous.version}` }
+      }
       const paths = workPaths(this.#options.pluginDir)
       clearWork(this.#options.pluginDir)
       fs.mkdirSync(paths.staged, { recursive: true })
       const directory = path.join(paths.staged, "yunzai-guard")
-      fs.renameSync(paths.previous, directory)
+      // 调度失败会清理暂存目录，原备份须保留到真正替换文件时。
+      fs.cpSync(paths.previous, directory, { recursive: true })
       const current = readVersion(this.#options.pluginDir)
       this.#phase = "installing"
       this.#message = `正在还原到 ${previous.version}`
@@ -327,6 +337,7 @@ export class UpdateService {
     // Git 安装：切换到目标提交；还原时切回原提交，完成后记录原提交供之后还原。
     const directory = this.#options.pluginDir
     const before = gitSync(directory, ["rev-parse", "HEAD"])
+    const previousVersion = versionAt(directory, before)
     gitSync(directory, ["reset", "--hard", "--quiet", staged.commit])
     return {
       rollback: () => {
@@ -334,6 +345,7 @@ export class UpdateService {
       },
       commit: () => {
         this.#stored.previousCommit = before
+        this.#previousVersion = previousVersion
         this.#save()
       },
     }

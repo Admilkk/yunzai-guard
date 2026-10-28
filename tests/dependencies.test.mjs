@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url"
 import { hash, verifyFile } from "../dist/dependencies/files.js"
 import { windowsBroker } from "../dist/dependencies/windows-broker.js"
 import { prepareNode, windowsNode } from "../dist/dependencies/node.js"
+import { hashFile } from "../dist/shared/hash.js"
 
 const repository = fileURLToPath(new URL("../", import.meta.url))
 
@@ -41,6 +42,23 @@ test("dependency verification rejects changed bytes and hard links", t => {
   fs.writeFileSync(file, "original")
   fs.linkSync(file, path.join(root, "alias"))
   assert.throws(() => verifyFile(file, expected), /依赖须为大小受限的单链接普通文件/)
+})
+
+test("file digests handle empty files and short reads with bounded buffers", t => {
+  const file = path.join(directory(t), "dependency")
+  fs.writeFileSync(file, "")
+  assert.equal(hashFile(file), hash(Buffer.alloc(0)))
+  const bytes = Buffer.alloc(2 * 1024 * 1024 + 17, 0x6a)
+  fs.writeFileSync(file, bytes)
+  const read = fs.readSync
+  let maximum = 0
+  t.mock.method(fs, "readSync", (handle, buffer, offset, length, position) => {
+    maximum = Math.max(maximum, buffer.byteLength)
+    return read(handle, buffer, offset, Math.min(length, 4093), position)
+  })
+  assert.equal(verifyFile(file, hash(bytes)), file)
+  assert.equal(hashFile(file), hash(bytes))
+  assert.ok(maximum < bytes.length)
 })
 
 test("bundled Windows broker rejects stale source digest and altered executable", t => {

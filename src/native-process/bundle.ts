@@ -1,14 +1,12 @@
 import fs from "node:fs"
 import path from "node:path"
-import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
+import { hashFile } from "../shared/hash.js"
 import type { NativeIdentityOptions } from "./protocol.js"
 import { fail, object, keys, integer, parseNativeIdentityJson } from "./validation.js"
 
-/** 计算文件的 SHA-256 摘要。 */
-export function hashFile(file: string): string {
-  return createHash("sha256").update(fs.readFileSync(file)).digest("hex")
-}
+export { hashFile } from "../shared/hash.js"
+
 /** 定位并校验当前平台的原生身份辅助程序。 */
 export function resolveBundle(options: NativeIdentityOptions): {
   root: string

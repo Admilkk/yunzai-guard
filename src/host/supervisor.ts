@@ -283,7 +283,7 @@ const updates = new UpdateService({
   send: noticeToMasters,
   /** 暂存完成后排入生命周期队列。 */
   install(staged, from, rollback) {
-    enqueue({ type: "update", staged, from, rollback })
+    if (!enqueue({ type: "update", staged, from, rollback })) throw new Error(M.update.busy)
   },
   record,
 })
@@ -1102,6 +1102,7 @@ async function applyUpdate(staged: StagedRelease, from: string, rollback = false
       await stopWorker()
     } catch (error) {
       record("update-stop-failed", { message: (error as Error).message })
+      throw error
     }
     handle.rollback()
     try {
@@ -1120,27 +1121,30 @@ async function applyUpdate(staged: StagedRelease, from: string, rollback = false
   if (relaunch || (external && !stopping)) enqueue({ type: "stop" })
 }
 
-/** 加入生命周期动作队列，停止动作优先。 */
-function enqueue(action: Action): void {
+/** 加入生命周期动作队列，停止动作优先；返回是否接收或合并，避免更新被静默丢弃。 */
+function enqueue(action: Action): boolean {
   if (action.type === "stop") {
     bootstrapAbort.abort()
     stopping = true
     phase = "stopping"
   } else if (bootstrapPending) {
     record("bootstrap-action-rejected", { action: action.type })
-    return
+    return false
   } else if (
     stopping ||
     (recovery.tripped && action.type !== "resume" && action.type !== "configure")
   )
-    return
+    return false
   if (action.type === "restart" && (active?.type === "restart" || pending?.type === "restart")) {
     record("restart-coalesced", { generation })
-    return
+    return true
   }
-  if (action.type === "resume" && (active?.type === "resume" || pending?.type === "resume")) return
-  if (!pending || priority[action.type] > priority[pending.type]) pending = action
+  if (action.type === "resume" && (active?.type === "resume" || pending?.type === "resume"))
+    return true
+  const accepted = !pending || priority[action.type] > priority[pending.type]
+  if (accepted) pending = action
   if (!pumping) void pump()
+  return accepted
 }
 
 /** 关闭宿主：停止业务进程、面板与控制端点。 */
@@ -1247,6 +1251,14 @@ async function pump(): Promise<void> {
       }
     } catch (error) {
       record("lifecycle-error", { action: active.type, message: (error as Error).message })
+      if (active.type === "update")
+        updates.finish({
+          ok: false,
+          from: active.from ?? "unknown",
+          to: active.staged?.version ?? "unknown",
+          message: (error as Error).message,
+          relaunch: false,
+        })
       if (active.type === "stop") {
         stopping = false
         trip("stop-cleanup-failed")

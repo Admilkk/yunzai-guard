@@ -327,6 +327,26 @@ test("HTTP 结构化审计和插件汇总可读，配置保存拒绝旧版本覆
     ).status,
     200,
   )
+  fs.appendFileSync(
+    path.join(app.stateDir, "events.jsonl"),
+    JSON.stringify({
+      type: "audit",
+      time: Date.now(),
+      sequence: 3,
+      event: {
+        plugin: "demo-plugin",
+        kind: "network",
+        operation: "  =1+1",
+        target: "https://example.test/",
+        action: "audit",
+      },
+    }) + "\n",
+  )
+  const exported = await fetch(app.base + "/api/audit/export?format=csv", {
+    headers: { Cookie: session.cookie, Connection: "close" },
+  })
+  assert.equal(exported.status, 200)
+  assert.ok((await exported.text()).includes("'  =1+1"))
 })
 
 test("可信设备跨面板重启续用，撤销同时终止 API 与日志会话", { timeout: 15000 }, async t => {
@@ -361,6 +381,104 @@ test("可信设备跨面板重启续用，撤销同时终止 API 与日志会话
   } finally {
     await reader.cancel()
   }
+})
+
+test("备份恢复与规则导入拒绝旧配置版本，不把无效规则转换为全局放行规则", async t => {
+  const app = await fixture(t)
+  const session = await app.login()
+  const before = (await app.request("/api/settings", session)).body
+  const document = { ...before.document, startupTimeout: 61000 }
+  assert.equal(
+    (
+      await app.request("/api/settings", {
+        ...session,
+        method: "PUT",
+        body: { document, revision: before.revision },
+      })
+    ).status,
+    200,
+  )
+  const backup = (await app.request("/api/settings/backups", session)).body.backups[0]
+  assert.ok(backup)
+  const current = (await app.request("/api/settings", session)).body
+  const rules = [{ id: "imported-rule", kind: "process", action: "deny" }]
+  for (const [route, body] of [
+    ["restore", { id: backup.id }],
+    ["import-rules", { rules, mode: "replace" }],
+  ])
+    assert.equal(
+      (
+        await app.request(`/api/settings/${route}`, {
+          ...session,
+          method: "POST",
+          body: { ...body, revision: before.revision },
+        })
+      ).status,
+      409,
+    )
+  assert.equal(
+    (
+      await app.request("/api/settings/import-rules", {
+        ...session,
+        method: "POST",
+        body: { rules: [null], mode: "replace", revision: current.revision },
+      })
+    ).status,
+    400,
+  )
+  assert.deepEqual((await app.request("/api/settings", session)).body.document, document)
+  assert.equal(
+    (
+      await app.request("/api/settings/import-rules", {
+        ...session,
+        method: "POST",
+        body: { rules, mode: "replace", revision: current.revision },
+      })
+    ).status,
+    200,
+  )
+  const imported = (await app.request("/api/settings", session)).body
+  assert.deepEqual(imported.document.rules, rules)
+  assert.equal(
+    (
+      await app.request("/api/settings/restore", {
+        ...session,
+        method: "POST",
+        body: { id: backup.id, revision: imported.revision },
+      })
+    ).status,
+    200,
+  )
+  assert.equal(
+    (await app.request("/api/settings", session)).body.document.startupTimeout,
+    before.document.startupTimeout,
+  )
+})
+
+test("分块请求体超限返回 413 JSON，后续面板请求仍可正常使用", async t => {
+  const app = await fixture(t)
+  const result = await new Promise((resolve, reject) => {
+    const request = http.request(
+      app.base + "/api/login/code/check",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Transfer-Encoding": "chunked" },
+      },
+      response => {
+        let text = ""
+        response.setEncoding("utf8")
+        response.on("data", chunk => (text += chunk))
+        response.on("end", () => resolve({ status: response.statusCode, body: JSON.parse(text) }))
+        response.on("error", reject)
+      },
+    )
+    request.on("error", reject)
+    for (let index = 0; index < 17; index++) request.write("x".repeat(64 * 1024))
+    request.end()
+  })
+  assert.equal(result.status, 413)
+  assert.equal(typeof result.body.error, "string")
+  assert.equal((await app.request("/api/meta")).status, 200)
 })
 
 test("面板保存值与实际监听地址分开，只有地址变更需要重启", { timeout: 15000 }, async t => {

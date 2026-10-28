@@ -253,6 +253,7 @@ function fixture(options = {}) {
       "trip",
       "enqueue",
       "closeHost",
+      "applyUpdate",
       "pump",
       "handleHostFailure",
     ],
@@ -381,6 +382,42 @@ test("trip removes a queued recovery while preserving an explicit stop request",
   f.trip("still-unconfirmed")
   assert.equal(f.context.pending.type, "stop")
   assert.equal(f.steps.includes("spawn"), false)
+  assert.equal(f.enqueue({ type: "update", staged: { version: "1.1.0" } }), false)
+  f.context.recovery.tripped = false
+  f.context.pending = undefined
+  assert.equal(f.enqueue({ type: "update", staged: { version: "1.1.0" } }), true)
+})
+
+test("update cleanup failure retains the candidate files and releases the failed operation", async () => {
+  const f = fixture()
+  const results = []
+  let stops = 0
+  let starts = 0
+  f.context.sleep = async () => {}
+  f.context.stopWorker = async () => {
+    if (++stops === 2) throw new Error("candidate-cleanup-unconfirmed")
+  }
+  f.context.startWorker = async () => {
+    starts++
+    f.context.worker = { online: false, failure: "candidate-failed", expectedExit: true }
+  }
+  f.context.updates = {
+    swap() {
+      return {
+        rollback: () => assert.fail("不能在候选进程退出未确认时改写运行文件"),
+        commit: () => assert.fail("失败的候选版本不能提交"),
+      }
+    },
+    finish: result => results.push(result),
+  }
+  f.context.pending = { type: "update", staged: { version: "1.1.0" }, from: "1.0.0" }
+  await f.pump()
+  assert.equal(starts, 1)
+  assert.equal(f.context.phase, "tripped")
+  assert.equal(f.context.worker.failure, "candidate-failed")
+  assert.equal(results.length, 1)
+  assert.equal(results[0].ok, false)
+  assert.match(results[0].message, /candidate-cleanup-unconfirmed/)
 })
 
 test("fatal host cleanup failure retains worker ownership instead of forcing host exit", async () => {
