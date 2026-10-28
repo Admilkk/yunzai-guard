@@ -182,3 +182,53 @@ test("risk grows with capability and persistence survives a restart", () => {
   reload.reset("demo")
   assert.equal(reload.detail("demo"), undefined)
 })
+
+test("prototype-named plugins have independent profiles across restart and reset", () => {
+  const t = create()
+  const names = ["constructor", "__proto__", "toString"]
+  for (const plugin of names) t.event("https://a.example.com/", { plugin })
+  t.profile.flush()
+  const reload = new BehaviorProfile({
+    file: path.join(t.directory, "profiles.json"),
+    settings: () => parseSettings({ baseline: { enabled: true } }).baseline,
+  })
+  assert.equal(reload.summary().plugins.length, names.length)
+  for (const plugin of names) assert.equal(reload.detail(plugin).total, 1)
+  reload.reset()
+  for (const plugin of names) assert.equal(reload.detail(plugin), undefined)
+  assert.deepEqual(
+    reload.observe({ plugin: "constructor", kind: "network", target: "https://a.example.com/" }),
+    [],
+  )
+  assert.equal(reload.detail("constructor").total, 1)
+  reload.flush()
+})
+
+test("corrupt saved profile entries are skipped while valid plugin history survives", () => {
+  const t = create()
+  t.event("https://a.example.com/")
+  t.profile.flush()
+  const file = path.join(t.directory, "profiles.json")
+  const saved = JSON.parse(fs.readFileSync(file, "utf8"))
+  saved.plugins.empty = null
+  for (const field of ["hourly", "features", "rates", "days", "anomalies", "cooldown"])
+    saved.plugins[field] = { ...saved.plugins.demo, [field]: null }
+  saved.plugins.badFeature = { ...saved.plugins.demo, features: { "network|x": null } }
+  saved.plugins.badRate = { ...saved.plugins.demo, rates: { network: {} } }
+  saved.plugins.badAnomaly = { ...saved.plugins.demo, anomalies: [null] }
+  fs.writeFileSync(file, JSON.stringify(saved))
+  const reload = new BehaviorProfile({
+    file,
+    settings: () => parseSettings({ baseline: { enabled: true } }).baseline,
+  })
+  assert.deepEqual(
+    reload.summary().plugins.map(item => item.plugin),
+    ["demo"],
+  )
+  assert.equal(reload.detail("demo").features.length, 1)
+  assert.doesNotThrow(() => reload.tick())
+  assert.doesNotThrow(() =>
+    reload.observe({ plugin: "demo", kind: "network", target: "https://a.example.com/" }),
+  )
+  reload.flush()
+})

@@ -12,6 +12,7 @@ import { parseSettings } from "../dist/config/index.js"
 import { planSettingsUpdate } from "../dist/config/update.js"
 import { crossesMajor, isNewer, parseRelease } from "../dist/update/release.js"
 import { assetName, checksumFor, stageRelease, swapPackage } from "../dist/update/install.js"
+import { UpdateService } from "../dist/host/update.js"
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "guard-update-"))
 const write = (file, text) => {
@@ -192,7 +193,7 @@ test(
   },
 )
 
-test("latest release falls back to the redirect when the anonymous API quota is used up", async () => {
+test("release discovery falls back on rate limits and bounds streamed metadata", async () => {
   const { fetchLatestRelease } = await import("../dist/update/release.js")
   const original = globalThis.fetch
   globalThis.fetch = async url =>
@@ -213,7 +214,95 @@ test("latest release falls back to the redirect when the anonymous API quota is 
     )
     globalThis.fetch = async () => new Response("{}", { status: 403 })
     await assert.rejects(fetchLatestRelease("1.0.0"), /HTTP 403/)
+    let reads = 0
+    let cancelled = false
+    globalThis.fetch = async url =>
+      String(url).startsWith("https://api.github.com/")
+        ? new Response(
+            new ReadableStream({
+              pull(controller) {
+                controller.enqueue(new Uint8Array(256 * 1024))
+                if (++reads === 16) controller.close()
+              },
+              cancel() {
+                cancelled = true
+              },
+            }),
+          )
+        : new Response("{}", { status: 403 })
+    await assert.rejects(fetchLatestRelease("1.0.0"), /过大/)
+    assert.ok(reads < 16)
+    assert.equal(cancelled, true)
   } finally {
     globalThis.fetch = original
   }
+})
+
+test("failed fresh checks do not install cached releases and can be retried", async t => {
+  const plugin = tmp()
+  const stateDir = path.join(plugin, "state")
+  write(path.join(plugin, "package.json"), '{"version":"1.0.0"}')
+  const tag = "v1.1.0"
+  const metadata = {
+    tag_name: tag,
+    assets: [assetName("1.1.0"), "SHA256SUMS.txt"].map(name => ({
+      name,
+      browser_download_url: `https://github.com/Admilkk/yunzai-guard/releases/download/${tag}/${name}`,
+      size: 1,
+    })),
+  }
+  write(path.join(stateDir, "update.json"), JSON.stringify({ release: parseRelease(metadata) }))
+  const calls = []
+  t.mock.method(globalThis, "fetch", async url => {
+    calls.push(String(url))
+    return new Response("{}", { status: 403 })
+  })
+  const service = new UpdateService({
+    pluginDir: plugin,
+    stateDir,
+    settings: () => parseSettings({}).update,
+    send: () => true,
+    install() {
+      assert.fail("a failed version check must not install cached files")
+    },
+    record() {},
+  })
+  const failed = await service.apply(false)
+  assert.equal(failed.ok, false)
+  assert.match(failed.message, /HTTP 403/)
+  assert.equal(calls.length, 2)
+  assert.equal(service.state().phase, "failed")
+  t.mock.method(globalThis, "fetch", async () => new Response('{"tag_name":"v1.0.0"}'))
+  const retried = await service.apply(false)
+  assert.equal(retried.ok, false)
+  assert.match(retried.message, /已是最新版本/)
+})
+
+test("a refused package rollback preserves the previous version for retry", async () => {
+  const plugin = tmp()
+  const previous = path.join(plugin, ".update", "previous")
+  write(path.join(plugin, "package.json"), '{"version":"1.1.0"}')
+  write(path.join(previous, "package.json"), '{"version":"1.0.0"}')
+  let refuseInstall = true
+  let staged
+  const service = new UpdateService({
+    pluginDir: plugin,
+    stateDir: path.join(plugin, "state"),
+    settings: () => parseSettings({}).update,
+    send: () => true,
+    install(value) {
+      if (refuseInstall) throw new Error("fixture install refused")
+      staged = value
+    },
+    record() {},
+  })
+  const refused = await service.rollback()
+  assert.equal(refused.ok, false)
+  assert.match(refused.message, /fixture install refused/)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(previous, "package.json"))).version, "1.0.0")
+  refuseInstall = false
+  assert.equal((await service.rollback()).ok, true)
+  service.swap(staged).commit()
+  assert.equal(service.state().current, "1.0.0")
+  assert.equal(service.state().rollback?.version, "1.1.0")
 })

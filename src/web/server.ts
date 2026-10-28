@@ -188,16 +188,20 @@ function readBody(request: http.IncomingMessage): Promise<unknown> {
     if (declared > maxBodyBytes) return reject(new PanelError(413, M.web.bodyTooLarge))
     const chunks: Buffer[] = []
     let size = 0
+    let oversized = false
     request.on("data", chunk => {
+      if (oversized) return
       size += chunk.length
       if (size > maxBodyBytes) {
-        request.destroy()
+        oversized = true
+        chunks.length = 0
         reject(new PanelError(413, M.web.bodyTooLarge))
         return
       }
       chunks.push(chunk)
     })
     request.on("end", () => {
+      if (oversized) return
       const text = Buffer.concat(chunks).toString("utf8").trim()
       if (!text) return resolve({})
       try {
@@ -370,6 +374,7 @@ export class GuardPanel {
     } catch (error) {
       if (response.headersSent) return
       if (error instanceof PanelError) {
+        if (error.status === 413) response.setHeader("Connection", "close")
         if (error.retryAfter) response.setHeader("Retry-After", String(error.retryAfter))
         return sendJson(response, error.status, { error: error.message })
       }
@@ -377,6 +382,15 @@ export class GuardPanel {
       this.#log(M.web.requestFailed((error as Error).message))
       return sendJson(response, 500, { error: M.web.internal })
     }
+  }
+
+  /** 在写入配置前核对读取版本，供保存、备份恢复与规则导入共用。 */
+  #checkSettingsRevision(body: unknown): void {
+    if (!isPlainObject(body) || body.revision === undefined) return
+    const active = this.#options.getSettings?.() ?? this.#options.settings
+    const current = readSettingsDocument(this.#options.stateDir, active)
+    if (typeof body.revision !== "string" || body.revision !== revision(current.text))
+      throw new PanelError(409, M.web.revision)
   }
 
   /** 提供面板静态资源，禁止越出面板目录。 */
@@ -613,11 +627,7 @@ export class GuardPanel {
     if (route === "PUT /api/settings" || route === "POST /api/settings") {
       const body = await readBody(request)
       const active = this.#options.getSettings?.() ?? this.#options.settings
-      if (isPlainObject(body) && body.revision !== undefined) {
-        const current = readSettingsDocument(this.#options.stateDir, active)
-        if (typeof body.revision !== "string" || body.revision !== revision(current.text))
-          throw new PanelError(409, M.web.revision)
-      }
+      this.#checkSettingsRevision(body)
       let value: unknown = isPlainObject(body) ? body.document : undefined
       if (isPlainObject(body) && typeof body.raw === "string") {
         try {
@@ -668,6 +678,7 @@ export class GuardPanel {
           controllers: this.#options.controllers,
           audit: this.#options.audit,
           readBody,
+          checkSettingsRevision: body => this.#checkSettingsRevision(body),
           sendJson,
           fail: (status, message) => new PanelError(status, message),
         },

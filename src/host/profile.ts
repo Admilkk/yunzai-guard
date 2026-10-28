@@ -78,6 +78,52 @@ const shells = new Set([
 ])
 const sensitivePath = /(^|\/)(\.ssh|\.aws|\.gnupg|etc|windows|system32|startup)(\/|$)/i
 
+/** 仅恢复统计流程会使用的完整画像，损坏条目不影响其他插件。 */
+function validProfile(value: unknown): value is PluginProfile {
+  const row = (item: unknown): item is Record<string, unknown> =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+  const finite = (item: unknown): item is number =>
+    typeof item === "number" && Number.isFinite(item) && item >= 0
+  const counts = (items: unknown): boolean =>
+    Array.isArray(items) && items.length === 24 && items.every(finite)
+  if (!row(value)) return false
+  return (
+    finite(value.startedAt) &&
+    (value.endedAt === undefined || finite(value.endedAt)) &&
+    finite(value.total) &&
+    finite(value.learnedTotal) &&
+    counts(value.hourly) &&
+    counts(value.learnedHourly) &&
+    Array.isArray(value.days) &&
+    value.days.every(day => typeof day === "string") &&
+    Array.isArray(value.newTargets) &&
+    value.newTargets.every(finite) &&
+    row(value.features) &&
+    Object.values(value.features).every(
+      item => row(item) && ["count", "firstAt", "lastAt"].every(key => finite(item[key])),
+    ) &&
+    row(value.rates) &&
+    Object.values(value.rates).every(
+      item =>
+        row(item) &&
+        ["mean", "variance", "windows", "current", "windowStart"].every(key => finite(item[key])),
+    ) &&
+    row(value.cooldown) &&
+    Object.values(value.cooldown).every(finite) &&
+    Array.isArray(value.anomalies) &&
+    value.anomalies.every(
+      item =>
+        row(item) &&
+        finite(item.time) &&
+        typeof item.severity === "string" &&
+        ["low", "medium", "high"].includes(item.severity) &&
+        ["id", "plugin", "type", "kind", "key", "detail"].every(
+          key => typeof item[key] === "string",
+        ),
+    )
+  )
+}
+
 /** 判断严重度是否不低于下限。 */
 export function atLeast(value: Severity, minimum: Severity): boolean {
   return rank[value] >= rank[minimum]
@@ -135,7 +181,7 @@ export class BehaviorProfile {
   readonly #file: string
   readonly #settings: () => Baseline
   readonly #clock: () => number
-  #plugins: Record<string, PluginProfile> = {}
+  #plugins: Record<string, PluginProfile> = Object.create(null)
   #timer: NodeJS.Timeout | undefined
   #dirty = false
 
@@ -146,9 +192,11 @@ export class BehaviorProfile {
     this.#clock = options.clock ?? Date.now
     try {
       const value = JSON.parse(fs.readFileSync(this.#file, "utf8")) as {
-        plugins?: Record<string, PluginProfile>
-      }
-      if (value.plugins && typeof value.plugins === "object") this.#plugins = value.plugins
+        plugins?: Record<string, unknown>
+      } | null
+      if (value?.plugins && typeof value.plugins === "object" && !Array.isArray(value.plugins))
+        for (const [plugin, profile] of Object.entries(value.plugins))
+          if (validProfile(profile)) this.#plugins[plugin] = profile
     } catch {
       // 首次运行或文件损坏。
     }
@@ -365,7 +413,7 @@ export class BehaviorProfile {
 
   /** 风险分：能力面越广、近期异常越多越高。 */
   #risk(profile: PluginProfile, now: number): { score: number; level: Severity } {
-    const kinds: Record<string, number> = {}
+    const kinds: Record<string, number> = Object.create(null)
     for (const id of Object.keys(profile.features)) {
       const kind = id.slice(0, id.indexOf("|"))
       kinds[kind] = (kinds[kind] ?? 0) + 1
@@ -391,7 +439,7 @@ export class BehaviorProfile {
       learnHours: config.learnHours,
       plugins: Object.entries(this.#plugins)
         .map(([plugin, profile]) => {
-          const kinds: Record<string, number> = {}
+          const kinds: Record<string, number> = Object.create(null)
           for (const id of Object.keys(profile.features)) {
             const kind = id.slice(0, id.indexOf("|"))
             kinds[kind] = (kinds[kind] ?? 0) + 1
@@ -470,7 +518,7 @@ export class BehaviorProfile {
   /** 清空画像并重新学习；不传插件名时清空全部。 */
   reset(plugin?: string): void {
     if (plugin) delete this.#plugins[plugin]
-    else this.#plugins = {}
+    else this.#plugins = Object.create(null)
     this.#changed()
   }
 

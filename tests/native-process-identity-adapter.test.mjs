@@ -21,6 +21,7 @@ const moduleSources = fs
   .readdirSync(path.join(root, "src/native-process"))
   .filter(name => name.endsWith(".ts"))
   .map(name => `native-process/${name}`)
+  .concat("shared/hash.ts")
 for (const relative of moduleSources) {
   const destination = path.join(stage, relative.replace(/\.ts$/, ".js"))
   fs.mkdirSync(path.dirname(destination), { recursive: true })

@@ -174,7 +174,7 @@ export class NativeMediaSourceHost {
 
   /** 调用方须先登记待处理的适配器调用，再绑定并发送。 */
   bindRequest(requestId: string, args: unknown): void {
-    const id = this.active(requestId)!
+    const id = this.active(mediaRequestId(requestId))!
     if (this.requests.has(id))
       return mediaFail("MEDIA_SOURCE_REPLAY", "Adapter request already has source bindings")
     const tags = this.tags(args)
@@ -205,9 +205,9 @@ export class NativeMediaSourceHost {
     this.requests.add(id)
   }
 
-  /** 响应沙箱的分块读取请求。 */
+  /** 响应已绑定适配器请求的分块读取，缺少请求标识时拒绝访问未绑定令牌。 */
   receive(requestId: unknown, method: string, args: unknown): NativeImageSourceChunk {
-    const id = this.active(requestId)!
+    const id = this.active(mediaRequestId(requestId))!
     if (method !== "read") return mediaFail("MEDIA_SOURCE_METHOD", "Unknown media source service")
     const input = mediaObject(mediaArgument(args), ["handle", "offset"])
     const handle = sourceHandle(input.handle)

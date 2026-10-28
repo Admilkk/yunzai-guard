@@ -1,4 +1,6 @@
 import { execFile, execFileSync } from "node:child_process"
+import fs from "node:fs"
+import path from "node:path"
 import { M } from "../shared/messages.js"
 
 const timeoutMs = 120000
@@ -34,10 +36,18 @@ export function git(cwd: string, args: string[]): Promise<string> {
   )
 }
 
-/** 读取 Git 安装的分支；不是 Git 仓库或读取失败时返回 undefined。 */
+/** 直接读取 HEAD 获取当前分支，兼容 worktree；查询状态时不启动 Git 子进程。 */
 export function gitBranch(cwd: string): string | undefined {
   try {
-    return gitSync(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]) || undefined
+    let directory = path.join(cwd, ".git")
+    if (fs.statSync(directory).isFile()) {
+      const pointer = fs.readFileSync(directory, "utf8").trim()
+      if (!pointer.startsWith("gitdir: ")) return undefined
+      directory = path.resolve(cwd, pointer.slice(8))
+    }
+    const head = fs.readFileSync(path.join(directory, "HEAD"), "utf8").trim()
+    if (head.startsWith("ref: refs/heads/")) return head.slice(16) || undefined
+    return /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(head) ? "HEAD" : undefined
   } catch {
     return undefined
   }

@@ -162,7 +162,7 @@ export class AlertService {
     while (this.#pending.length && this.#options.send(this.#pending[0]!)) this.#pending.shift()
   }
 
-  /** 最近的告警历史，新的在前。 */
+  /** 最近的告警历史，新的在前；跳过损坏或缺少展示字段的记录。 */
   history(limit = 100): AlertRecord[] {
     try {
       return fs
@@ -172,7 +172,21 @@ export class AlertService {
         .slice(-limit)
         .flatMap(line => {
           try {
-            return [JSON.parse(line) as AlertRecord]
+            const value = JSON.parse(line) as Partial<AlertRecord> | null
+            if (
+              !value ||
+              typeof value !== "object" ||
+              Array.isArray(value) ||
+              typeof value.time !== "number" ||
+              !Number.isFinite(value.time) ||
+              typeof value.category !== "string" ||
+              typeof value.title !== "string" ||
+              typeof value.text !== "string" ||
+              (value.plugin !== undefined && typeof value.plugin !== "string") ||
+              (value.severity !== undefined && typeof value.severity !== "string")
+            )
+              return []
+            return [value as AlertRecord]
           } catch {
             return []
           }

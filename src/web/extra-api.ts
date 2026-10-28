@@ -22,6 +22,8 @@ export interface ExtraContext {
   controllers?: PanelControllers
   audit?: (type: string, details?: Record<string, unknown>) => void
   readBody: (request: http.IncomingMessage) => Promise<unknown>
+  /** 写入前核对浏览器读取配置时的版本。 */
+  checkSettingsRevision: (body: unknown) => void
   sendJson: (response: http.ServerResponse, status: number, body: unknown) => void
   fail: (status: number, message: string) => Error
 }
@@ -31,7 +33,7 @@ const maxExportRows = 20000
 /** 转成 CSV 字段，处理引号、换行，并防止被表格软件当作公式。 */
 function csvField(value: unknown): string {
   let text = value === undefined || value === null ? "" : String(value)
-  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`
+  if (/^[\s\uFEFF]*[=+\-@]|^[\t\r\n]/.test(text)) text = `'${text}`
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 
@@ -141,6 +143,7 @@ export async function handleExtra(
   }
   if (route === "POST /api/settings/restore") {
     const body = await context.readBody(request)
+    context.checkSettingsRevision(body)
     const text = readSettingsBackup(stateDir, isPlainObject(body) ? String(body.id) : "")
     if (text === undefined) throw fail(404, M.web.notFound)
     const value: unknown = JSON.parse(text)
@@ -169,7 +172,13 @@ export async function handleExtra(
   }
   if (route === "POST /api/settings/import-rules") {
     const body = await context.readBody(request)
-    if (!isPlainObject(body) || !Array.isArray(body.rules)) throw fail(400, M.web.bodyObject)
+    context.checkSettingsRevision(body)
+    if (
+      !isPlainObject(body) ||
+      !Array.isArray(body.rules) ||
+      body.rules.some(rule => !isPlainObject(rule))
+    )
+      throw fail(400, M.web.bodyObject)
     const current = readSettingsDocument(stateDir, active()).document
     const existing = Array.isArray(current.rules)
       ? (current.rules as Record<string, unknown>[])

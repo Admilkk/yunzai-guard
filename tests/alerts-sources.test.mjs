@@ -18,15 +18,29 @@ function create(alerts = {}, online = true) {
   const sent = []
   const state = { online }
   const settings = parseSettings({ alerts })
+  const directory = tmp()
   const service = new AlertService({
     settings: () => settings,
-    stateDir: tmp(),
+    stateDir: directory,
     projectId: "test",
     send: text => (state.online ? (sent.push(text), true) : false),
     record() {},
   })
-  return { service, sent, state }
+  return { service, sent, state, directory }
 }
+
+test("alert history ignores malformed rows without hiding valid alerts", () => {
+  const { service, directory } = create()
+  service.raise("deny", "有效告警", "保留这条记录")
+  const invalid = [null, [], "text", {}, { time: 1, category: "deny", title: null, text: "bad" }]
+  fs.appendFileSync(
+    path.join(directory, "alerts.jsonl"),
+    invalid.map(value => JSON.stringify(value)).join("\n") + "\n{partial\n",
+  )
+  assert.equal(service.history().length, 1)
+  assert.equal(service.history()[0].text, "保留这条记录")
+  service.stop()
+})
 
 test("deny and restart events become alerts and repeated ones are merged", () => {
   const { service, sent } = create()
@@ -149,6 +163,10 @@ const hasGit = spawnSync("git", ["--version"]).status === 0
 
 test("remote credentials are stripped from reported addresses", () => {
   assert.equal(cleanRemote("https://user:token@github.com/a/b.git"), "https://github.com/a/b.git")
+  assert.equal(
+    cleanRemote("https://user:p@ss@github.com/a/b.git?token=private#secret"),
+    "https://github.com/a/b.git",
+  )
   assert.equal(cleanRemote("git@github.com:a/b.git"), "git@github.com:a/b.git")
 })
 
@@ -180,13 +198,31 @@ test("git plugins are scanned and changes are reported", { skip: !hasGit }, asyn
   assert.equal(demo.dirty, 0)
   assert.equal(first.find(item => item.plugin === "plain-plugin").git, false)
   assert.deepEqual(changes, [])
-  fs.appendFileSync(path.join(repo, "index.js"), "// tampered\n")
+  const marker = path.join(root, "host-command-executed")
+  const hook = path.join(repo, "hook.cjs")
+  fs.writeFileSync(hook, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed");`)
+  const command = `"${process.execPath}" "${hook}"`
+  fs.writeFileSync(path.join(repo, ".gitattributes"), "index.js filter=probe\n")
+  git("config", "core.fsmonitor", command)
+  git("config", "filter.probe.clean", command)
+  const index = fs.readFileSync(path.join(repo, ".git", "index"))
+  fs.writeFileSync(path.join(repo, "index.js"), "export []\n")
   await watch.scan()
+  assert.equal(fs.existsSync(marker), false, "来源检查不能执行插件配置中的命令")
+  assert.deepEqual(fs.readFileSync(path.join(repo, ".git", "index")), index)
   assert.deepEqual(
     changes.map(item => item.type),
     ["dirty"],
   )
+  git("config", "--unset", "core.fsmonitor")
+  git("config", "--unset", "filter.probe.clean")
   git("commit", "-q", "-am", "second")
   await watch.scan()
   assert.ok(changes.some(item => item.type === "commit"))
+  const worktree = path.join(plugins, "worktree-plugin")
+  assert.equal(git("worktree", "add", "-q", "-b", "preview", worktree).status, 0)
+  const linked = (await watch.scan()).find(item => item.plugin === "worktree-plugin")
+  assert.equal(linked.branch, "preview")
+  assert.equal(linked.dirty, 0)
+  assert.equal(linked.error, undefined)
 })
