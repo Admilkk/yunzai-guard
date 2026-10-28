@@ -28,6 +28,8 @@ import { listPlugins } from "./plugins.js"
 import { readAudit, pluginMonitor, nativeExtensions } from "./monitor.js"
 import type { PanelControllers, UpdateController } from "./controllers.js"
 import { handleExtra } from "./extra-api.js"
+import { isLocalAddress } from "./network.js"
+import { compareAudit } from "./compare.js"
 import { M } from "../shared/messages.js"
 
 export interface PanelOptions {
@@ -230,7 +232,15 @@ export class GuardPanel {
     this.root = options.root
     this.#options = options
     this.#settings = loadPanelSettings(options.stateDir)
-    this.#auth = new PanelAuth(() => this.#settings, options.stateDir)
+    this.#auth = new PanelAuth(() => this.#settings, options.stateDir, {
+      failed: address => this.#options.audit?.("panel-login-failed", { address }),
+      blocked: (address, seconds) =>
+        this.#notify(
+          "面板登录被锁定",
+          `【Yunzai Guard】控制台登录连续失败，已暂时锁定来源 ${address}（${Math.round(seconds / 60)} 分钟）`,
+          `login-blocked:${address}`,
+        ),
+    })
   }
 
   /** 当前面板配置。 */
@@ -259,6 +269,12 @@ export class GuardPanel {
       for (const item of items ?? [])
         if (item.family === "IPv4" && !item.internal) result.push(`http://${item.address}${suffix}`)
     return result
+  }
+
+  /** 登录安全事件：写入审计，并通过告警通知主人。 */
+  #notify(title: string, text: string, key: string): void {
+    this.#options.audit?.("panel-security", { title })
+    this.#options.controllers?.alerts.raise("security", title, text, { key })
   }
 
   /** 启动面板服务并打印访问地址。 */
@@ -365,6 +381,15 @@ export class GuardPanel {
     try {
       const url = new URL(request.url ?? "/", "http://localhost")
       const method = request.method ?? "GET"
+      const address = clientAddress(request, this.#settings.trustProxy)
+      if (!this.#settings.allowExternal && !isLocalAddress(address)) {
+        this.#notify(
+          "外网访问被拒绝",
+          `【Yunzai Guard】已拒绝来自 ${address} 的控制台访问（默认只开放本机和局域网）`,
+          `external-denied:${address}`,
+        )
+        throw new PanelError(403, M.web.externalDenied)
+      }
       if (method === "GET" || method === "HEAD") {
         if (await this.#serveStatic(url.pathname, request, response, method === "HEAD")) return
       }
@@ -470,7 +495,13 @@ export class GuardPanel {
       const expiresAt = Number(payload.exp) * 1000
       setSessionCookie(request, response, token, payload.remember === true, expiresAt)
       this.#clearCodeFile()
+      const address = clientAddress(request, this.#settings.trustProxy)
       this.#options.audit?.("panel-login", { remembered: payload.remember === true })
+      this.#notify(
+        "面板登录",
+        `【Yunzai Guard】控制台已登录：${deviceName(String(request.headers["user-agent"] ?? ""))}，来源 ${address}`,
+        `login:${address}`,
+      )
       return sendJson(response, 200, {
         ok: true,
         expiresAt,
@@ -525,6 +556,25 @@ export class GuardPanel {
       this.#options.audit?.("panel-session-revoked", { current: id === payload.jti })
       return sendJson(response, 200, { ok: true, revoked, current: id === payload.jti })
     }
+    if (route === "GET /api/audit/compare") {
+      const bound = (name: string): number => {
+        const value = Number(url.searchParams.get(name))
+        if (!Number.isSafeInteger(value) || value <= 0) throw new PanelError(400, M.web.filterRange)
+        return value
+      }
+      const windows = {
+        a: { from: bound("aFrom"), to: bound("aTo") },
+        b: { from: bound("bFrom"), to: bound("bTo") },
+      }
+      if (windows.a.from > windows.a.to || windows.b.from > windows.b.to)
+        throw new PanelError(400, M.web.filterRange)
+      const plugin = url.searchParams.get("plugin")?.slice(0, 128) || undefined
+      return sendJson(
+        response,
+        200,
+        compareAudit(params => readAudit(this.#options.stateDir, params), windows, plugin),
+      )
+    }
     if (route === "GET /api/audit") {
       return sendJson(response, 200, readAudit(this.#options.stateDir, url.searchParams))
     }
@@ -576,6 +626,7 @@ export class GuardPanel {
           restartRequired: this.#panelRestartRequired(),
           tokenTtlHours: this.#settings.tokenTtlHours,
           trustedDeviceTtlDays: this.#settings.trustedDeviceTtlDays,
+          allowExternal: this.#settings.allowExternal,
           path: panelSettingsPath(this.#options.stateDir),
           startedAt: this.#startedAt,
         },
@@ -707,6 +758,9 @@ export class GuardPanel {
           ...(body.port !== undefined ? { port: Number(body.port) } : {}),
           ...(body.tokenTtlHours !== undefined
             ? { tokenTtlHours: Number(body.tokenTtlHours) }
+            : {}),
+          ...(body.allowExternal !== undefined
+            ? { allowExternal: body.allowExternal === true }
             : {}),
           ...(body.trustedDeviceTtlDays !== undefined
             ? { trustedDeviceTtlDays: Number(body.trustedDeviceTtlDays) }

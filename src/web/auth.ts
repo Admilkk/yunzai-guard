@@ -72,16 +72,25 @@ function validSession(value: unknown): value is Session {
   )
 }
 
+export interface AuthEvents {
+  /** 一次验证码校验失败。 */
+  failed?: (address: string) => void
+  /** 来源因失败过多被暂时封禁。 */
+  blocked?: (address: string, seconds: number) => void
+}
+
 export class PanelAuth {
   readonly #settings: () => PanelSettings
   readonly #sessions = new Map<string, Session>()
   readonly #attempts = new Map<string, Attempt>()
   readonly #file: string | undefined
   readonly #secretId: string
+  readonly #events: AuthEvents
   #code: { hash: string; expires: number } | undefined
   /** 创建会话管理器，可选持久化到状态目录。 */
-  constructor(settings: () => PanelSettings, stateDir?: string) {
+  constructor(settings: () => PanelSettings, stateDir?: string, events: AuthEvents = {}) {
     this.#settings = settings
+    this.#events = events
     this.#secretId = digest(settings().jwtSecret)
     this.#file = stateDir ? path.join(stateDir, "auth-sessions.json") : undefined
     this.#load()
@@ -247,11 +256,18 @@ export class PanelAuth {
       attempt.failures = 0
       attempt.resetAt = now + failureWindowMs
     }
-    if (++attempt.failures >= maxFailures) {
+    const blocked = ++attempt.failures >= maxFailures
+    if (blocked) {
       attempt.failures = 0
       attempt.blockedUntil = now + blockMs
     }
     this.#attempts.set(address, attempt)
+    try {
+      this.#events.failed?.(address)
+      if (blocked) this.#events.blocked?.(address, Math.round(blockMs / 1000))
+    } catch {
+      // 通知失败不影响封禁本身。
+    }
   }
   /** 从状态目录加载持久化会话。 */
   #load(): void {

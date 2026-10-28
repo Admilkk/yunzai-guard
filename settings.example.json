@@ -81,7 +81,8 @@
       "integrity": true,
       "anomaly": true,
       "source": true,
-      "update": true
+      "update": true,
+      "security": true
     },
     "forward": {
       "actions": ["deny", "restart"],

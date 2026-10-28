@@ -56,7 +56,7 @@ import {
   terminateWorkerTree,
   type ProcessIdentity,
 } from "./platform.js"
-import { UsageWatch } from "./usage.js"
+import { ResourceHistory, UsageWatch } from "./usage.js"
 import { UpdateService } from "./update.js"
 import { AlertService } from "./alerts.js"
 import { SourceWatch } from "./sources.js"
@@ -306,6 +306,7 @@ const profiles = new BehaviorProfile({
   file: path.join(stateDir, "profiles.json"),
   settings: () => configuration.active.baseline,
 })
+const resources = new ResourceHistory()
 const sourceWatch = new SourceWatch({
   pluginsDir: path.join(root, "plugins"),
   stateDir,
@@ -437,30 +438,37 @@ function status() {
 function watchUsage(session: Session): void {
   const pid = session.child.pid
   if (!session.settings.monitor.process || !pid || session.usage) return
-  session.usage = new UsageWatch(pid, (remote, usage) => {
-    if (session !== worker) return
-    auditBuffer.offer({
-      type: "audit",
-      details: {
-        generation: session.generation,
-        event: {
-          kind: "network",
-          operation: "connection.observed",
-          target: `tcp://${remote}`,
-          plugin: "unknown",
-          action: "audit",
-          timestamp: new Date(usage.sampledAt).toISOString(),
-          details: {
-            source: "os-sample",
-            detection: "after-connect",
-            blocked: false,
-            processes: usage.processes,
+  resources.restart()
+  session.usage = new UsageWatch(
+    pid,
+    (remote, usage) => {
+      if (session !== worker) return
+      auditBuffer.offer({
+        type: "audit",
+        details: {
+          generation: session.generation,
+          event: {
+            kind: "network",
+            operation: "connection.observed",
+            target: `tcp://${remote}`,
+            plugin: "unknown",
+            action: "audit",
+            timestamp: new Date(usage.sampledAt).toISOString(),
+            details: {
+              source: "os-sample",
+              detection: "after-connect",
+              blocked: false,
+              processes: usage.processes,
+            },
           },
         },
-      },
-      time: usage.sampledAt,
-    })
-  })
+        time: usage.sampledAt,
+      })
+    },
+    usage => {
+      if (session === worker) resources.push(usage)
+    },
+  )
   session.usage.start()
 }
 
@@ -1413,9 +1421,15 @@ try {
       alerts: {
         history: limit => alerts.history(limit),
         testWebhook: () => alerts.testWebhook(),
+        state: () => alerts.state(),
+        acknowledge: ids => alerts.acknowledge(ids),
+        mute: (target, minutes) => alerts.mute(target, minutes),
+        unmute: key => alerts.unmute(key),
+        raise: (...args) => alerts.raise(...args),
       },
       profiles,
       sources: sourceWatch,
+      resources: { points: () => resources.points() },
     },
     update: {
       state: () => updates.state(),

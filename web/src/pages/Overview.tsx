@@ -16,6 +16,7 @@ import {
   StatTile,
 } from "../components"
 import { EventDetails, eventSource } from "../components/EventDetails"
+import { ResourceCard } from "../components/ResourceCard"
 import { UpdateStrip } from "../components/UpdateStrip"
 import { functionName, kindName, operationName } from "../lib/labels"
 import type { AuditEntry } from "../types"
@@ -346,6 +347,8 @@ export default function Overview() {
         </div>
         <UpdateStrip />
       </section>
+
+      <ResourceCard enabled={Boolean(overview?.active?.monitor?.process)} />
 
       <div className="stat-grid">
         <StatTile

@@ -24,6 +24,7 @@ const categories: Array<[string, string]> = [
   ["anomaly", "画像异常"],
   ["source", "插件来源变化"],
   ["update", "版本更新"],
+  ["security", "面板登录安全"],
 ]
 
 /** 告警通知：渠道、类别、Webhook 与限流。 */

@@ -9,6 +9,7 @@ import {
   Flex,
   Form,
   Input,
+  Segmented,
   Select,
   Space,
   Tag,
@@ -52,6 +53,13 @@ function toRule(value: Values): Rule {
 }
 
 /** 规则编辑器，显示匹配预览与近期命中。 */
+const replayRanges = [
+  { value: "recent", label: "最近 100 条", hours: 0 },
+  { value: "1h", label: "近 1 小时", hours: 1 },
+  { value: "24h", label: "近 24 小时", hours: 24 },
+  { value: "7d", label: "近 7 天", hours: 168 },
+]
+
 export function RuleEditor({
   open,
   seed,
@@ -71,6 +79,8 @@ export function RuleEditor({
   const values = Form.useWatch([], { form, preserve: true }) as Values | undefined
   const [samples, setSamples] = useState<AuditEntry[]>([])
   const [sampleError, setSampleError] = useState(false)
+  const [range, setRange] = useState("recent")
+  const [truncated, setTruncated] = useState(false)
   const [changed, setChanged] = useState(false)
   const [customOperation, setCustomOperation] = useState(false)
   const [customTarget, setCustomTarget] = useState(false)
@@ -98,22 +108,41 @@ export function RuleEditor({
     setCustomTarget(
       Boolean(seed?.target && !ctx.overview?.defaults?.protectTargets?.includes(seed.target)),
     )
+    setRange("recent")
+  }, [open, seed, editing, form])
+
+  /** 按所选时间范围读取回放样本：默认最近 100 条，其余分页读取至多 2000 条。 */
+  useEffect(() => {
+    if (!open) return
     setSamples(sample ? [sample] : [])
     setSampleError(false)
+    setTruncated(false)
     const controller = new AbortController()
-    api("/api/audit?pageSize=100", { signal: controller.signal })
-      .then(result => {
-        if (controller.signal.aborted) return
-        const entries: AuditEntry[] = (result.items ?? []).filter(canCreateRule)
-        setSamples(
-          sample && !entries.some(entry => entry.id === sample.id) ? [sample, ...entries] : entries,
+    const hours = replayRanges.find(item => item.value === range)?.hours
+    const since = hours ? Date.now() - hours * 3600_000 : undefined
+    ;(async () => {
+      const collected: AuditEntry[] = []
+      let more = true
+      for (let page = 1; more && page <= (since ? 20 : 1); page++) {
+        const result = await api(
+          `/api/audit?pageSize=100&page=${page}&scope=behavior${since ? `&from=${since}` : ""}`,
+          { signal: controller.signal },
         )
-      })
-      .catch((error: Error) => {
-        if (error.name !== "AbortError") setSampleError(true)
-      })
+        collected.push(...(result.items ?? []))
+        more = Boolean(since && result.hasMore)
+        if (!more) break
+        if (page === 20) setTruncated(true)
+      }
+      if (controller.signal.aborted) return
+      const entries = collected.filter(canCreateRule)
+      setSamples(
+        sample && !entries.some(entry => entry.id === sample.id) ? [sample, ...entries] : entries,
+      )
+    })().catch((error: Error) => {
+      if (error.name !== "AbortError") setSampleError(true)
+    })
     return () => controller.abort()
-  }, [open, seed, sample, editing, form])
+  }, [open, sample, range])
 
   const rule = useMemo(() => (values ? toRule(values) : undefined), [values])
   const rules = ctx.draft.rules ?? []
@@ -127,6 +156,13 @@ export function RuleEditor({
     [open, rule, candidate, samples],
   )
   const confirmed = matches.filter(item => !item.uncertain)
+  const effective = confirmed.filter(item => item.first === rule?.id)
+  const byPlugin = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const item of effective)
+      counts.set(item.entry.plugin, (counts.get(item.entry.plugin) ?? 0) + 1)
+    return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 6)
+  }, [effective])
   const kinds = values?.kind ?? []
   const targetRequired = Boolean(
     sample &&
@@ -481,6 +517,12 @@ export function RuleEditor({
               { key: "action", label: "处理", children: actionName(values?.action) },
             ]}
           />
+          <Segmented
+            size="small"
+            value={range}
+            onChange={value => setRange(String(value))}
+            options={replayRanges.map(item => ({ value: item.value, label: item.label }))}
+          />
           <Space size={6} wrap>
             <Tag>样本 {samples.length}</Tag>
             <Tag>命中 {confirmed.length}</Tag>
@@ -491,6 +533,17 @@ export function RuleEditor({
               <Tag>无法验证 {matches.length - confirmed.length}</Tag>
             )}
           </Space>
+          {byPlugin.length > 0 && (
+            <Space size={4} wrap>
+              <span className="muted">生效集中在</span>
+              {byPlugin.map(([plugin, count]) => (
+                <Tag key={plugin}>
+                  {plugin} × {count}
+                </Tag>
+              ))}
+            </Space>
+          )}
+          {truncated && <Tag color="orange">范围内事件很多，只回放了最近 2000 条</Tag>}
           {sampleError && <Tag color="orange">样本读取失败</Tag>}
           {confirmed.some(item => item.first !== rule?.id) && (
             <Alert type="warning" showIcon title="部分样本先命中其他规则" />

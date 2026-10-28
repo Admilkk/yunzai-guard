@@ -9,8 +9,9 @@ import { GuardPanel } from "../dist/web/server.js"
 import { savePanelSettings } from "../dist/web/panel-settings.js"
 import { parseSettings } from "../dist/config/index.js"
 import { SettingsController } from "../dist/host/settings.js"
+import { AlertService } from "../dist/host/alerts.js"
 
-async function fixture(t, configure, panelSettings = {}) {
+async function fixture(t, configure, panelSettings = {}, controllers) {
   const temporaryRoot = fs.realpathSync(os.tmpdir())
   const root = fs.mkdtempSync(path.join(temporaryRoot, "guard-web-panel-"))
   const stateDir = path.join(root, "data/yunzai-guard")
@@ -91,6 +92,7 @@ async function fixture(t, configure, panelSettings = {}) {
           }
         : {}),
       version: "test",
+      ...(controllers ? { controllers } : {}),
       status: () => ({ phase: "online", generation: 1 }),
       restart: () => restarts++,
       resume() {},
@@ -583,7 +585,7 @@ test("日志慢连接暂停推送并在背压超时后断开", { timeout: 12000 
 })
 
 test("同机反向代理转发时按真实客户端限速，不因一人失败锁住所有人", { timeout: 15000 }, async t => {
-  const app = await fixture(t, undefined, { trustProxy: true })
+  const app = await fixture(t, undefined, { trustProxy: true, allowExternal: true })
   assert.equal(
     (await app.request("/api/login/code/request", { method: "POST", body: {} })).status,
     200,
@@ -603,7 +605,7 @@ test("同机反向代理转发时按真实客户端限速，不因一人失败�
 
 test("默认忽略伪造代理头，启用代理时非法地址仍受连接地址限速", { timeout: 15000 }, async t => {
   for (const trustProxy of [false, true]) {
-    const app = await fixture(t, undefined, { trustProxy })
+    const app = await fixture(t, undefined, { trustProxy, allowExternal: true })
     for (let index = 0; index < 9; index++) {
       const address = trustProxy ? `203.0.113.${256 + index}` : `203.0.113.${index}`
       const result = await app.request("/api/login/code/check", {
@@ -614,4 +616,77 @@ test("默认忽略伪造代理头，启用代理时非法地址仍受连接地�
       assert.equal(result.status, index < 8 ? 401 : 429)
     }
   }
+})
+
+test("默认拒绝局域网以外的来源，开启外网访问后放行", { timeout: 15000 }, async t => {
+  const denied = await fixture(t, undefined, { trustProxy: true })
+  const headers = { "X-Forwarded-For": "203.0.113.50" }
+  const blocked = await denied.request("/api/meta", { headers })
+  assert.equal(blocked.status, 403)
+  assert.equal(
+    (await denied.request("/api/meta", { headers: { "X-Forwarded-For": "192.168.1.9" } })).status,
+    200,
+  )
+  const open = await fixture(t, undefined, { trustProxy: true, allowExternal: true })
+  assert.equal((await open.request("/api/meta", { headers })).status, 200)
+})
+
+test("告警已读与静默、资源曲线和审计对比接口可用", { timeout: 15000 }, async t => {
+  let alerts
+  const points = [{ time: 1, rssBytes: 1024, cpu: 0.2, hostRssBytes: 2048, hostLagMs: 1 }]
+  const controllers = {
+    get alerts() {
+      return {
+        history: limit => alerts.history(limit),
+        testWebhook: async () => ({ ok: true }),
+        state: () => alerts.state(),
+        acknowledge: ids => alerts.acknowledge(ids),
+        mute: (target, minutes) => alerts.mute(target, minutes),
+        unmute: key => alerts.unmute(key),
+        raise: (...args) => alerts.raise(...args),
+      }
+    },
+    resources: { points: () => points },
+    profiles: {},
+    sources: {},
+  }
+  const app = await fixture(t, undefined, {}, controllers)
+  alerts = new AlertService({
+    settings: () => app.settings,
+    stateDir: app.stateDir,
+    projectId: "test",
+    send: () => true,
+    record() {},
+  })
+  alerts.raise("deny", "一条", "【Yunzai Guard】拦截", { key: "k", plugin: "demo-plugin" })
+  const auth = await app.login()
+  const call = (route, body, method = body === undefined ? "GET" : "POST") =>
+    app.request(route, { cookie: auth.cookie, csrf: auth.csrf, method, body })
+
+  const resources = await call("/api/resources")
+  assert.equal(resources.status, 200)
+  assert.deepEqual(resources.body.points, points)
+  assert.ok(resources.body.system.totalMemory > 0)
+
+  const [first] = (await call("/api/alerts")).body.history
+  assert.ok(first.id)
+  const ack = await call("/api/alerts/ack", { ids: [first.id] })
+  assert.deepEqual(ack.body.state.read, [first.id])
+
+  const muted = await call("/api/alerts/mute", { plugin: "demo-plugin", minutes: 30 })
+  assert.equal(muted.body.state.mutes[0].key, "plugin:demo-plugin")
+  assert.equal((await call("/api/alerts/mute", { minutes: 30 })).status, 400)
+  assert.equal((await call("/api/alerts/mute", { plugin: "x", minutes: 0 })).status, 400)
+  const cleared = await call("/api/alerts/unmute", { key: "plugin:demo-plugin" })
+  assert.deepEqual(cleared.body.state.mutes, [])
+
+  const now = Date.now()
+  const compare = await call(
+    `/api/audit/compare?aFrom=1&aTo=${now - 100000}&bFrom=${now - 99999}&bTo=${now + 10000}&plugin=demo-plugin`,
+  )
+  assert.equal(compare.status, 200)
+  assert.equal(compare.body.b.total, 2)
+  assert.equal(compare.body.b.blocked, 1)
+  assert.equal(compare.body.added.length, 2)
+  assert.equal((await call("/api/audit/compare?aFrom=1")).status, 400)
 })

@@ -8,6 +8,7 @@ import {
   Input,
   InputNumber,
   Popconfirm,
+  Switch,
   Space,
   Table,
   Tag,
@@ -50,6 +51,7 @@ export default function Security() {
       port: panel.port ?? 21733,
       tokenTtlHours: panel.tokenTtlHours ?? 24,
       trustedDeviceTtlDays: panel.trustedDeviceTtlDays ?? 30,
+      allowExternal: panel.allowExternal === true,
     })
   }, [overview, form])
   const revoke = async (item: any) => {
@@ -226,6 +228,14 @@ export default function Security() {
               addonAfter="天"
               className="setting-number setting-number-unit"
             />
+          </Form.Item>
+          <Form.Item
+            name="allowExternal"
+            label={<FieldLabel helpKey="panel.allowExternal">允许外网访问</FieldLabel>}
+            valuePropName="checked"
+            className="setting-row"
+          >
+            <Switch />
           </Form.Item>
           <Form.Item className="setting-row setting-submit-row">
             <Button type="primary" htmlType="submit" loading={saving} disabled={guardSaving}>

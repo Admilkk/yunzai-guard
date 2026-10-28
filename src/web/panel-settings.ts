@@ -12,6 +12,8 @@ export interface PanelSettings {
   tokenTtlHours: number
   trustedDeviceTtlDays: number
   trustProxy: boolean
+  /** 允许局域网以外的来源访问；默认只开放本机与局域网。 */
+  allowExternal: boolean
   jwtSecret: string
 }
 
@@ -70,6 +72,7 @@ function normalize(value: unknown): PanelSettings {
     tokenTtlHours: integer(source.tokenTtlHours, 24, 1, 720),
     trustedDeviceTtlDays: integer(source.trustedDeviceTtlDays, 30, 1, 90),
     trustProxy: source.trustProxy === true,
+    allowExternal: source.allowExternal === true,
     jwtSecret:
       typeof source.jwtSecret === "string" && source.jwtSecret.length >= 32
         ? source.jwtSecret
@@ -118,6 +121,7 @@ export interface PanelSettingsPatch {
   tokenTtlHours?: number
   trustedDeviceTtlDays?: number
   enabled?: boolean
+  allowExternal?: boolean
 }
 
 /** 保留 secret，只覆盖面板可调项；非法值直接拒绝。 */
@@ -143,6 +147,7 @@ export function savePanelSettings(stateDir: string, patch: PanelSettingsPatch): 
     next.tokenTtlHours = patch.tokenTtlHours
   }
   if (patch.enabled !== undefined) next.enabled = patch.enabled
+  if (patch.allowExternal !== undefined) next.allowExternal = patch.allowExternal === true
   if (patch.trustedDeviceTtlDays !== undefined) {
     if (
       !Number.isInteger(patch.trustedDeviceTtlDays) ||

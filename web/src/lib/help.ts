@@ -429,6 +429,12 @@ export const settingHelp: Record<string, SettingHelp> = {
     description: "临时登录会话的有效期。",
     default: "24 小时。",
   },
+  "panel.allowExternal": {
+    description:
+      "默认只允许本机和局域网（含同网段的 IPv6 地址）打开控制台，外网来源会被拒绝并通知主人。需要从公网访问时再开启，并务必经过 HTTPS 反向代理。",
+    default: "关闭。",
+    change: "保存后立即生效。",
+  },
   "panel.trustedDeviceTtlDays": {
     description: "信任设备后的登录有效期，可随时在设备列表撤销。",
     default: "30 天。",

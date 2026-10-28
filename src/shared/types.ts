@@ -69,7 +69,7 @@ export interface GuardSettings {
     masters: boolean
     webhook: { url: string; secret: string; format: "json" | "text" }
     on: Record<
-      "deny" | "restart" | "tripped" | "integrity" | "anomaly" | "source" | "update",
+      "deny" | "restart" | "tripped" | "integrity" | "anomaly" | "source" | "update" | "security",
       boolean
     >
     forward: { actions: GuardAction[]; kinds: string[] }

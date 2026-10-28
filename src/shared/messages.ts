@@ -349,6 +349,7 @@ const messages = {
     tokenTtl: "令牌有效期须在 1–720 小时之间",
     deviceTtl: "可信设备有效期须在 1–90 天之间",
     crossSite: "请从控制台所在地址发起请求",
+    externalDenied: "控制台默认只允许本机和局域网访问",
     originMismatch: "请求来源不匹配",
     bodyTooLarge: "请求体过大",
     bodyJson: "请求体不是合法 JSON",

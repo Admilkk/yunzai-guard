@@ -20,6 +20,7 @@ import {
   RadarChartOutlined,
   CodeOutlined,
   ControlOutlined,
+  BulbOutlined,
   DashboardOutlined,
   FileTextOutlined,
   LockOutlined,
@@ -33,6 +34,7 @@ import {
 } from "@ant-design/icons"
 import { motion, useReducedMotion } from "motion/react"
 import { useConsole } from "./state"
+import { setThemeMode, useTheme } from "./theme"
 import { ChangeBar } from "./components/ChangeBar"
 import { ConfigurationState } from "./components/Status"
 import Overview from "./pages/Overview"
@@ -206,6 +208,7 @@ export default function ConsoleApp() {
       />
     </motion.div>
   )
+  const theme = useTheme()
   const version = String(ctx.meta?.version ?? "")
 
   if (ctx.booting)
@@ -277,6 +280,20 @@ export default function ConsoleApp() {
                 onClick={() => run(() => ctx.reload(true))}
               />
             </Tooltip>
+            <Dropdown
+              menu={{
+                selectedKeys: [theme.mode],
+                items: [
+                  { key: "system", label: "跟随系统" },
+                  { key: "light", label: "浅色" },
+                  { key: "dark", label: "深色" },
+                ],
+                onClick: ({ key }) => setThemeMode(key as "system" | "light" | "dark"),
+              }}
+              trigger={["click"]}
+            >
+              <Button type="text" icon={<BulbOutlined />} aria-label="切换主题" />
+            </Dropdown>
             <Dropdown
               menu={{
                 items: [

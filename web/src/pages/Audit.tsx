@@ -13,6 +13,7 @@ import {
   Tag,
   Tooltip,
   Dropdown,
+  Popconfirm,
 } from "antd"
 import type { InputRef, TableColumnsType } from "antd"
 import {
@@ -20,10 +21,14 @@ import {
   ReloadOutlined,
   SearchOutlined,
   DownloadOutlined,
+  DeleteOutlined,
+  StarOutlined,
+  SwapOutlined,
 } from "@ant-design/icons"
 import { api } from "../api"
 import type { AuditEntry } from "../types"
 import { ActionTag, formatTime, PanelCard } from "../components"
+import { AuditCompare } from "../components/AuditCompare"
 import { EventDetails, eventSource } from "../components/EventDetails"
 import { functionName, kindName, operationName } from "../lib/labels"
 
@@ -48,6 +53,21 @@ const ranges = [
   { value: "604800000", label: "7 天" },
   { value: "", label: "全部" },
 ]
+
+type SavedFilter = { name: string; filters: Filters }
+const savedKey = "guard.audit.saved"
+
+/** 读取本浏览器保存的常用筛选。 */
+function loadSaved(): SavedFilter[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(savedKey) ?? "[]")
+    return Array.isArray(value)
+      ? value.filter(item => typeof item?.name === "string" && item.filters).slice(0, 20)
+      : []
+  } catch {
+    return []
+  }
+}
 
 /** 从地址栏 `#audit?kind=...` 读取初始筛选。 */
 function filtersFromHash(): Filters {
@@ -128,6 +148,9 @@ export default function Audit() {
   const [selected, setSelected] = useState<AuditEntry | null>(null)
   const [live, setLive] = useState(false)
   const [tick, setTick] = useState(0)
+  const [comparing, setComparing] = useState(false)
+  const [saved, setSaved] = useState<SavedFilter[]>(loadSaved)
+  const [saveName, setSaveName] = useState("")
   const searchRef = useRef<InputRef>(null)
 
   /** 修改筛选并回到第一页。 */
@@ -170,6 +193,23 @@ export default function Audit() {
     const timer = setInterval(() => setTick(value => value + 1), 10000)
     return () => clearInterval(timer)
   }, [live])
+
+  /** 保存或删除常用筛选，仅保存在当前浏览器。 */
+  const persist = (next: SavedFilter[]) => {
+    setSaved(next)
+    try {
+      localStorage.setItem(savedKey, JSON.stringify(next))
+    } catch {
+      message.warning("浏览器不允许保存，仅本次有效")
+    }
+  }
+
+  /** 套用一组已保存的筛选。 */
+  const apply = (filters: Filters) => {
+    setFilters({ ...emptyFilters, ...filters })
+    setSearch(filters.q ?? "")
+    setPage(previous => ({ ...previous, current: 1 }))
+  }
 
   /** 按当前筛选导出，最多 20000 条。 */
   async function exportAudit(format: "csv" | "json") {
@@ -344,6 +384,72 @@ export default function Audit() {
         />
         <div className="audit-toolbar-end">
           <Dropdown
+            trigger={["click"]}
+            popupRender={menu => (
+              <div className="saved-filters">
+                {menu}
+                {active && (
+                  <div className="saved-filters-add">
+                    <Input
+                      size="small"
+                      placeholder="给当前筛选起个名字"
+                      maxLength={30}
+                      value={saveName}
+                      onChange={event => setSaveName(event.target.value)}
+                    />
+                    <Button
+                      size="small"
+                      type="primary"
+                      disabled={!saveName.trim()}
+                      onClick={() => {
+                        persist(
+                          [
+                            ...saved.filter(item => item.name !== saveName.trim()),
+                            { name: saveName.trim(), filters },
+                          ].slice(-20),
+                        )
+                        setSaveName("")
+                      }}
+                    >
+                      保存
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+            menu={{
+              items: saved.length
+                ? saved.map(item => ({
+                    key: item.name,
+                    label: (
+                      <span className="saved-filter-row">
+                        <span>{item.name}</span>
+                        <Popconfirm
+                          title="删除这个常用筛选？"
+                          okText="删除"
+                          cancelText="取消"
+                          onConfirm={() => persist(saved.filter(entry => entry.name !== item.name))}
+                        >
+                          <DeleteOutlined onClick={event => event.stopPropagation()} />
+                        </Popconfirm>
+                      </span>
+                    ),
+                  }))
+                : [{ key: "empty", label: "还没有常用筛选", disabled: true }],
+              onClick: ({ key }) => {
+                const item = saved.find(entry => entry.name === key)
+                if (item) apply(item.filters)
+              },
+            }}
+          >
+            <Button size="small" icon={<StarOutlined />}>
+              常用筛选
+            </Button>
+          </Dropdown>
+          <Button size="small" icon={<SwapOutlined />} onClick={() => setComparing(true)}>
+            对比
+          </Button>
+          <Dropdown
             menu={{
               items: [
                 { key: "csv", label: "导出 CSV（表格软件可直接打开）" },
@@ -422,6 +528,12 @@ export default function Audit() {
         />
       </PanelCard>
       <EventDetails entry={selected} onClose={() => setSelected(null)} />
+      <AuditCompare
+        open={comparing}
+        plugins={result.facets?.plugins ?? []}
+        initialPlugin={filters.plugin}
+        onClose={() => setComparing(false)}
+      />
     </div>
   )
 }

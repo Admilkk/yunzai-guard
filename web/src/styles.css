@@ -1834,3 +1834,362 @@ a:focus-visible,
 .clickable-row {
   cursor: pointer;
 }
+
+.resource-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.resource-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--page-bg);
+}
+.resource-main {
+  background: var(--primary-soft);
+  border-color: transparent;
+}
+.resource-label {
+  color: var(--secondary);
+  font-size: 12px;
+}
+.resource-value {
+  font-size: 26px;
+  font-weight: 650;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.resource-note {
+  overflow: hidden;
+  color: var(--secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.resource-tile .ant-progress {
+  margin: 4px 0 0;
+  line-height: 1;
+}
+.spark {
+  width: 100%;
+  height: 34px;
+  margin-top: 6px;
+}
+.spark-empty {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 34px;
+}
+.spark-line {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 1.5;
+}
+.spark-area {
+  fill: var(--primary);
+  opacity: 0.12;
+}
+.spark-warning .spark-line {
+  stroke: #a66b20;
+}
+.spark-warning .spark-area {
+  fill: #a66b20;
+}
+@container content (max-width: 1100px) {
+  .resource-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container content (max-width: 520px) {
+  .resource-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.alert-body {
+  flex: 1;
+  min-width: 0;
+}
+.alert-actions {
+  align-self: flex-start;
+  flex-shrink: 0;
+}
+.alert-unread {
+  box-shadow: inset 3px 0 0 var(--primary);
+  padding-left: 10px;
+}
+.alert-muted {
+  opacity: 0.6;
+}
+.alert-mutes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.saved-filters-add {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface);
+}
+.saved-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 160px;
+}
+.compare-section h4 {
+  margin: 14px 0 8px;
+  font-size: 13px;
+}
+
+/* dark-theme:begin 由亮色样式中的硬编码颜色自动换算，修改亮色颜色后需同步调整这里。 */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  color: #e4e8e5;
+  background: #121513;
+  --page-bg: #121513;
+  --surface: #1b1f1c;
+  --sidebar-bg: #171a18;
+  --text: #e4e8e5;
+  --secondary: #9aa39d;
+  --muted: #737b76;
+  --border: #2c322e;
+  --border-soft: #242a26;
+  --primary: #5fb3a0;
+  --primary-soft: #1f342d;
+  --danger: #e0777c;
+}
+:root[data-theme="dark"] button:focus-visible,
+:root[data-theme="dark"] a:focus-visible,
+:root[data-theme="dark"] [tabindex]:focus-visible {
+  outline: 2px solid #82bfb366;
+}
+:root[data-theme="dark"] ::selection {
+  background: #25372e;
+}
+:root[data-theme="dark"] .brand-mark {
+  border: 1px solid #2b3a31;
+  background: #1f2b24;
+}
+:root[data-theme="dark"] .console-sider .ant-menu-item-group-title,
+:root[data-theme="dark"] .navigation-drawer .ant-menu-item-group-title {
+  color: #686e69 !important;
+}
+:root[data-theme="dark"] .sider-bottom {
+  color: #676e69;
+}
+:root[data-theme="dark"] .console-header {
+  background: #171717f2;
+}
+:root[data-theme="dark"] .workspace-name {
+  color: #a5aca7;
+}
+:root[data-theme="dark"] .account-button .ant-avatar {
+  color: #8f9893;
+}
+:root[data-theme="dark"] .demo-tag {
+  color: #787f7a;
+}
+:root[data-theme="dark"] .panel-card {
+  box-shadow: 0 1px 2px #b5c9be03;
+}
+:root[data-theme="dark"] .clickable-row:focus-visible {
+  outline: 2px solid #82bfb355;
+}
+:root[data-theme="dark"] .settings-form .ant-form-item-label > label {
+  color: #97a09a;
+}
+:root[data-theme="dark"] .field-help-trigger.ant-btn {
+  color: #676e69;
+}
+:root[data-theme="dark"] .field-help-trigger.ant-btn:hover,
+:root[data-theme="dark"] .field-help-trigger.ant-btn:focus-visible {
+  background: #1d291f;
+}
+:root[data-theme="dark"] .field-help-detail > b {
+  color: #7b857e;
+}
+:root[data-theme="dark"] .raw-editor {
+  background: #1b2016;
+}
+:root[data-theme="dark"] .plugin-name {
+  color: #b3bab5;
+}
+:root[data-theme="dark"] .selection-toolbar {
+  background: #1d2921;
+  border: 1px solid #27382d;
+}
+:root[data-theme="dark"] .rule-position {
+  color: #aeb8b2;
+}
+:root[data-theme="dark"] .rule-target {
+  color: #97a09a;
+}
+:root[data-theme="dark"] .rule-id {
+  color: #626864;
+}
+:root[data-theme="dark"] .chart-ticks {
+  color: #656b67;
+}
+:root[data-theme="dark"] .status-hero-main code {
+  color: #939c96;
+}
+:root[data-theme="dark"] .stat-warning .stat-value {
+  color: #d19b56;
+}
+:root[data-theme="dark"] .trend-bars {
+  background: repeating-linear-gradient(
+    to top,
+    transparent 0,
+    transparent 41px,
+    #222620 41px,
+    #222620 42px
+  );
+}
+:root[data-theme="dark"] .trend-bar {
+  background: #4b685f;
+}
+:root[data-theme="dark"] .trend-slot:hover .trend-bar {
+  background: #648b80;
+}
+:root[data-theme="dark"] .trend-blocked {
+  background: #843237;
+}
+:root[data-theme="dark"] .legend-dot {
+  background: #4b685f;
+}
+:root[data-theme="dark"] .legend-dot.blocked {
+  background: #843237;
+}
+:root[data-theme="dark"] .kind-item {
+  color: #949c97;
+}
+:root[data-theme="dark"] .kind-item:hover {
+  background: #1c231c;
+}
+:root[data-theme="dark"] .kind-bar {
+  background: #222820;
+}
+:root[data-theme="dark"] .kind-bar i {
+  background: #648b80;
+}
+:root[data-theme="dark"] .kind-item b {
+  color: #9ba59f;
+}
+:root[data-theme="dark"] .native-alert {
+  border-color: #4c3b1b;
+}
+:root[data-theme="dark"] .native-alert .ant-alert-message {
+  color: #dbb883;
+}
+:root[data-theme="dark"] .native-alert .ant-alert-description {
+  color: #aa987c;
+}
+:root[data-theme="dark"] .usage-grid > div {
+  background: #1c2219;
+}
+:root[data-theme="dark"] .usage-remote-list code {
+  background: #1b2016;
+}
+:root[data-theme="dark"] .kind-tag.kind-network {
+  color: #699dc4;
+  border-color: #192f41;
+}
+:root[data-theme="dark"] .kind-tag.kind-listen {
+  color: #7464aa;
+  border-color: #211a3c;
+}
+:root[data-theme="dark"] .kind-tag.kind-process {
+  color: #d6a76b;
+  border-color: #4d3a1a;
+}
+:root[data-theme="dark"] .kind-tag.kind-filesystem {
+  color: #84c1b1;
+  border-color: #263f33;
+}
+:root[data-theme="dark"] .kind-tag.kind-native {
+  color: #b5637c;
+  border-color: #401a27;
+}
+:root[data-theme="dark"] .kind-tag.kind-self-protection {
+  color: #ba5d62;
+  border-color: #421a1d;
+}
+:root[data-theme="dark"] .target-cell {
+  color: #a8b2ab;
+}
+:root[data-theme="dark"] .compact-table .row-blocked > td:first-child {
+  box-shadow: inset 3px 0 0 #843237;
+}
+:root[data-theme="dark"] .permission-chip.chip-audit {
+  color: #699dc4;
+  border-color: #192f41;
+}
+:root[data-theme="dark"] .permission-chip.chip-deny {
+  color: #ba5d62;
+  border-color: #421a1d;
+}
+:root[data-theme="dark"] .permission-chip.chip-restart {
+  color: #d6a76b;
+  border-color: #4d3a1a;
+}
+:root[data-theme="dark"] .ant-drawer-content {
+  background: #171717;
+}
+:root[data-theme="dark"] .json-code {
+  background: #1b2218;
+  color: #939c97;
+}
+:root[data-theme="dark"] .log-console {
+  background: #c4cbc7;
+  border: 1px solid #c4cbc7;
+}
+:root[data-theme="dark"] .change-bar {
+  background: #171717f5;
+  border: 1px solid #2f3730;
+  box-shadow: 0 8px 30px #b1c9ba14;
+}
+:root[data-theme="dark"] .navigation-drawer .ant-drawer-close {
+  color: #787f79;
+}
+:root[data-theme="dark"] .login-panel {
+  background: #171717;
+  box-shadow: 0 12px 40px #b5c9be08;
+}
+:root[data-theme="dark"] .login-brand {
+  color: #b9c2bc;
+}
+:root[data-theme="dark"] .login-panel .ant-checkbox-wrapper {
+  color: #838b85;
+}
+:root[data-theme="dark"] .rule-preview {
+  background: linear-gradient(145deg, #172217, #1b2720);
+}
+:root[data-theme="dark"] .update-strip.info {
+  border-color: #2f453b;
+}
+:root[data-theme="dark"] .update-strip.warning {
+  border-color: #655224;
+}
+:root[data-theme="dark"] .hourly-slot i {
+  background: #4b685f;
+}
+:root[data-theme="dark"] .spark-warning .spark-line {
+  stroke: #d19b56;
+}
+:root[data-theme="dark"] .spark-warning .spark-area {
+  fill: #d19b56;
+}
+/* dark-theme:end */

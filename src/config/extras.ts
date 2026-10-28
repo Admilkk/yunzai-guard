@@ -15,6 +15,7 @@ const alertCategories = [
   "anomaly",
   "source",
   "update",
+  "security",
 ] as const
 
 /** 读取字符串数组配置：元素非空、无控制字符，数量与长度有上限。 */

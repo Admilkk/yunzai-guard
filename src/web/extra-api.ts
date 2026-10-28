@@ -1,4 +1,5 @@
 import type http from "node:http"
+import os from "node:os"
 import type { GuardSettings } from "../shared/types.js"
 import { parseSettings } from "../config/index.js"
 import type { SettingsApplyState } from "../config/update.js"
@@ -76,6 +77,77 @@ export async function handleExtra(
     if (!controllers) throw fail(404, M.web.notFound)
     const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 100))
     sendJson(response, 200, { history: controllers.alerts.history(limit) })
+    return true
+  }
+  if (route === "GET /api/alerts/state") {
+    if (!controllers) throw fail(404, M.web.notFound)
+    sendJson(response, 200, controllers.alerts.state())
+    return true
+  }
+  if (route === "POST /api/alerts/ack") {
+    if (!controllers) throw fail(404, M.web.notFound)
+    const body = await context.readBody(request)
+    const ids =
+      isPlainObject(body) && Array.isArray(body.ids)
+        ? body.ids.filter((id): id is string => typeof id === "string").slice(0, 200)
+        : undefined
+    controllers.alerts.acknowledge(ids)
+    sendJson(response, 200, { ok: true, state: controllers.alerts.state() })
+    return true
+  }
+  if (route === "POST /api/alerts/mute") {
+    if (!controllers) throw fail(404, M.web.notFound)
+    const body = await context.readBody(request)
+    const input = isPlainObject(body) ? body : {}
+    const plugin = typeof input.plugin === "string" ? input.plugin.slice(0, 128) : ""
+    const category = typeof input.category === "string" ? input.category : ""
+    const minutes = Number(input.minutes)
+    if (
+      (!plugin && !category) ||
+      !Number.isInteger(minutes) ||
+      minutes < 1 ||
+      minutes > 30 * 24 * 60
+    )
+      throw fail(400, M.web.bodyObject)
+    controllers.alerts.mute(
+      plugin
+        ? { plugin }
+        : { category: category as Parameters<typeof controllers.alerts.mute>[0]["category"] },
+      minutes,
+    )
+    context.audit?.("panel-alert-muted", { plugin, category, minutes })
+    sendJson(response, 200, { ok: true, state: controllers.alerts.state() })
+    return true
+  }
+  if (route === "POST /api/alerts/unmute") {
+    if (!controllers) throw fail(404, M.web.notFound)
+    const body = await context.readBody(request)
+    controllers.alerts.unmute(isPlainObject(body) ? String(body.key).slice(0, 200) : "")
+    sendJson(response, 200, { ok: true, state: controllers.alerts.state() })
+    return true
+  }
+  if (route === "GET /api/resources") {
+    if (!controllers) throw fail(404, M.web.notFound)
+    const memory = process.memoryUsage()
+    sendJson(response, 200, {
+      points: controllers.resources.points(),
+      system: {
+        platform: process.platform,
+        totalMemory: os.totalmem(),
+        freeMemory: os.freemem(),
+        cpus: os.cpus().length,
+        load: os.loadavg(),
+        uptime: os.uptime(),
+      },
+      host: {
+        pid: process.pid,
+        rss: memory.rss,
+        heapUsed: memory.heapUsed,
+        heapTotal: memory.heapTotal,
+        external: memory.external,
+        uptime: process.uptime(),
+      },
+    })
     return true
   }
   if (route === "POST /api/alerts/test") {

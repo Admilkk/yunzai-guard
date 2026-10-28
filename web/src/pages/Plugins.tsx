@@ -140,6 +140,17 @@ function SourceTag({ source }: { source?: PluginSource }) {
   )
 }
 
+type PluginRisk = {
+  learning: boolean
+  anomalies7d: number
+  risk: { score: number; level: "low" | "medium" | "high" }
+}
+const riskTags = {
+  low: { color: "default", label: "低" },
+  medium: { color: "orange", label: "中" },
+  high: { color: "red", label: "高" },
+}
+
 export default function Plugins() {
   const ctx = useConsole()
   const { message } = App.useApp()
@@ -148,6 +159,7 @@ export default function Plugins() {
   const [mode, setMode] = useState("all")
   const [selected, setSelected] = useState<string[]>([])
   const [sources, setSources] = useState<Record<string, PluginSource>>({})
+  const [risks, setRisks] = useState<Record<string, PluginRisk>>({})
 
   useEffect(() => {
     api("/api/sources")
@@ -155,6 +167,20 @@ export default function Plugins() {
         setSources(
           Object.fromEntries(
             (result.sources ?? []).map((item: PluginSource) => [item.plugin, item]),
+          ),
+        ),
+      )
+      .catch(() => {})
+  }, [])
+  useEffect(() => {
+    api("/api/profiles")
+      .then(result =>
+        setRisks(
+          Object.fromEntries(
+            (result.plugins ?? []).map((item: PluginRisk & { plugin: string }) => [
+              item.plugin,
+              item,
+            ]),
           ),
         ),
       )
@@ -286,6 +312,29 @@ export default function Plugins() {
           <div className="permission-chips">{chips}</div>
         ) : (
           <span className="muted">全部记录</span>
+        )
+      },
+    },
+    {
+      title: "风险",
+      width: 120,
+      defaultSortOrder: "descend",
+      sorter: (a, b) => (risks[a.id]?.risk.score ?? -1) - (risks[b.id]?.risk.score ?? -1),
+      render: (_, plugin) => {
+        const item = risks[plugin.id]
+        if (!item) return <span className="muted">未画像</span>
+        const tag = riskTags[item.risk.level]
+        return (
+          <Tooltip
+            title={`风险分 ${item.risk.score}${item.learning ? " · 仍在学习期" : ""} · 近 7 天异常 ${item.anomalies7d} 次`}
+          >
+            <Space size={4}>
+              <Tag color={tag.color}>
+                {tag.label} {item.risk.score}
+              </Tag>
+              {item.anomalies7d > 0 && <span className="muted">异常 {item.anomalies7d}</span>}
+            </Space>
+          </Tooltip>
         )
       },
     },
