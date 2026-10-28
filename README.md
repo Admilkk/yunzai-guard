@@ -10,9 +10,9 @@
 ![Node.js](https://img.shields.io/badge/Node.js-%3E%3D23.11-3C873A?style=flat&logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat)
-![QQ 群](https://img.shields.io/badge/QQ%20群-833016696-12B7F5?style=flat&logo=qq&logoColor=white)
+[![QQ 群](https://img.shields.io/badge/QQ%20群-833016696-12B7F5?style=flat&logo=qq&logoColor=white)](https://qun.qq.com/universal-share/share?ac=1&authKey=EcUQyFcyHxJ43n%2BIQ32YofDTWJF4Xcy9zLmsWWy2sMmBAezWtiQfrH%2FV6TqGRcdm&busi_data=eyJncm91cENvZGUiOiI4MzMwMTY2OTYiLCJ0b2tlbiI6InNsT1NRTkVWb1UyMWRRbDdBMnFVaS93YU5mMENjVEJldmg1QmVvRVVaWUpWVU11Z2ZSWC8vWFZ0R01kcDZyZ2EiLCJ1aW4iOiIyMTczMzAyMTQ0In0%3D&data=Mey29tuFq8ImC1yGNKOZHwKJHLVEr2eCx2Vnm0VvLr1AnusAaT_pDx4kDq73WWsCK2BYs9oUbf4juF7cRTLbnw&svctype=4&tempid=h5_group_info)
 
-💬 交流与反馈 QQ 群：**833016696**
+💬 交流与反馈 QQ 群：[**833016696**](https://qun.qq.com/universal-share/share?ac=1&authKey=EcUQyFcyHxJ43n%2BIQ32YofDTWJF4Xcy9zLmsWWy2sMmBAezWtiQfrH%2FV6TqGRcdm&busi_data=eyJncm91cENvZGUiOiI4MzMwMTY2OTYiLCJ0b2tlbiI6InNsT1NRTkVWb1UyMWRRbDdBMnFVaS93YU5mMENjVEJldmg1QmVvRVVaWUpWVU11Z2ZSWC8vWFZ0R01kcDZyZ2EiLCJ1aW4iOiIyMTczMzAyMTQ0In0%3D&data=Mey29tuFq8ImC1yGNKOZHwKJHLVEr2eCx2Vnm0VvLr1AnusAaT_pDx4kDq73WWsCK2BYs9oUbf4juF7cRTLbnw&svctype=4&tempid=h5_group_info)
 
 </div>
 
@@ -191,7 +191,7 @@ npm run package       # 生成发布资产到 release/
 
 ## 反馈与贡献 🤝
 
-- 交流群：QQ **833016696**
+- 交流群：QQ [**833016696**](https://qun.qq.com/universal-share/share?ac=1&authKey=EcUQyFcyHxJ43n%2BIQ32YofDTWJF4Xcy9zLmsWWy2sMmBAezWtiQfrH%2FV6TqGRcdm&busi_data=eyJncm91cENvZGUiOiI4MzMwMTY2OTYiLCJ0b2tlbiI6InNsT1NRTkVWb1UyMWRRbDdBMnFVaS93YU5mMENjVEJldmg1QmVvRVVaWUpWVU11Z2ZSWC8vWFZ0R01kcDZyZ2EiLCJ1aW4iOiIyMTczMzAyMTQ0In0%3D&data=Mey29tuFq8ImC1yGNKOZHwKJHLVEr2eCx2Vnm0VvLr1AnusAaT_pDx4kDq73WWsCK2BYs9oUbf4juF7cRTLbnw&svctype=4&tempid=h5_group_info)
 - 缺陷与建议：[Issues](https://github.com/Admilkk/yunzai-guard/issues)
 - 安全问题：请走[私密漏洞报告](https://github.com/Admilkk/yunzai-guard/security/advisories/new)，见 [SECURITY.md](SECURITY.md)
 - 提交 PR 前请运行上面的检查命令。
