@@ -2,6 +2,41 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.0](https://github.com/Admilkk/yunzai-guard/compare/v1.0.0...v1.1.0) (2026-10-28)
+
+
+### ✨ 新功能
+
+* **alerts:** 告警出口：拦截、重启、熔断、函数被改动、画像异常、插件来源变化与更新结果推给主人或 Webhook，按窗口限流合并，可选 HMAC 签名 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **audit:** 审计按当前筛选导出 CSV 或 JSON ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **entry:** 兼容 TRSS 官方 Docker 脚本（node . start）与 node . daemon，原地切换为 Guard 宿主 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **logs:** 审计事件与宿主日志支持按容量和保留天数两种方式清理 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **panel:** 控制台新增告警中心、行为画像页，总览合并状态与更新卡片 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **platform:** macOS 实验支持兼容托管模式 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **pm2:** PM2 最低版本由 6.0.14 放宽到 5.0.0 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **profile:** 行为画像：学习每个插件的常规行为，识别新行为、频率突增、非常规时段与批量新目标，并给出风险分 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **settings:** 配置历史备份与一键恢复，配置与规则的导出、导入 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **sources:** 插件来源校验：定期检查 Git 插件的提交、远端与工作区，文件被改动时通知 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **update:** 更新还原：#guard回滚、控制台与 CLI 还原到保留的上一版本 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **update:** 版本更新：定时检查新版本并通知主人，支持 #guard更新、#guard强制更新、控制台与 CLI 一键更新 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+
+
+### 🐛 问题修复
+
+* **update:** GitHub API 额度用尽时改读 releases/latest 跳转地址检查新版本 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+* **update:** 拒绝降级到低于当前版本的发布 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+
+
+### ⚡️ 性能优化
+
+* **audit:** 相同事件按窗口合并，队列溢出补充说明，自适应写盘，默认速率与队列上限提高；控制台复用短时间内的相同查询 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+
+
+### 📝 文档
+
+* **install:** 补充独立 Node 运行时用法 ([4947c94](https://github.com/Admilkk/yunzai-guard/commit/4947c94dd8283aaa56e850a35c1d91366608c643))
+* 安装方式以发布包为准，提示文案改为平实表述，补充告警、画像、大量事件与运行环境说明 ([b010aa6](https://github.com/Admilkk/yunzai-guard/commit/b010aa6749e86df4fc133580cf9a3c7d666b4b51))
+
 ## [1.0.0] - 2026-10-27
 
 首个公开稳定版，许可证改为 GPL-3.0-only。

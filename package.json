@@ -1,6 +1,6 @@
 {
   "name": "yunzai-guard",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "TRSS-Yunzai / 玖璃的进程接管、行为审计与函数完整性防护插件",
