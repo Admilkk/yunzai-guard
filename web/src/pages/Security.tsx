@@ -52,6 +52,8 @@ export default function Security() {
       tokenTtlHours: panel.tokenTtlHours ?? 24,
       trustedDeviceTtlDays: panel.trustedDeviceTtlDays ?? 30,
       allowExternal: panel.allowExternal === true,
+      chatLogin: panel.chatLogin !== false,
+      publicUrl: panel.publicUrl ?? "",
     })
   }, [overview, form])
   const revoke = async (item: any) => {
@@ -236,6 +238,21 @@ export default function Security() {
             className="setting-row"
           >
             <Switch />
+          </Form.Item>
+          <Form.Item
+            name="chatLogin"
+            label={<FieldLabel helpKey="panel.chatLogin">聊天登录</FieldLabel>}
+            valuePropName="checked"
+            className="setting-row"
+          >
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            name="publicUrl"
+            label={<FieldLabel helpKey="panel.publicUrl">外部访问地址</FieldLabel>}
+            className="setting-row"
+          >
+            <Input placeholder="https://guard.example.com/" className="setting-input" />
           </Form.Item>
           <Form.Item className="setting-row setting-submit-row">
             <Button type="primary" htmlType="submit" loading={saving} disabled={guardSaving}>

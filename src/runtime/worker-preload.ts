@@ -160,6 +160,7 @@ if (isMainThread) {
     run: <T>(name: string, callback: () => T): T => storage.run(name, callback),
     sandboxDispatch: (event: Record<string, unknown>) => sandboxDispatcher.dispatch(event),
     requestRollback: () => bus.command({ type: "rollback-request" }),
+    requestLoginLink: () => bus.command({ type: "login-link-request" }),
     requestUpdate: (force: boolean) =>
       bus.command({ type: force ? "update-force-request" : "update-request" }),
   })

@@ -33,7 +33,7 @@ import {
   type WindowsCanonicalStats,
 } from "../sandbox/windows.js"
 import { acquireProjectLock, legacyProjectPort, type ProjectLock } from "./lock.js"
-import { startPanel, stopPanel } from "../web/index.js"
+import { panelLoginLink, startPanel, stopPanel } from "../web/index.js"
 import { SettingsController } from "./settings.js"
 import type { GuardSettings } from "../shared/types.js"
 import {
@@ -605,6 +605,9 @@ function onMessage(session: Session, raw: unknown): void {
       case "rollback-request":
         void requestRollback()
         return
+      case "login-link-request":
+        sendLoginLink()
+        return
       case "update-request":
       case "update-force-request":
         void requestUpdate(message.type === "update-force-request")
@@ -1067,6 +1070,23 @@ function pruneLogs(): void {
 async function requestUpdate(force: boolean): Promise<void> {
   const result = await updates.apply(force)
   if (!result.ok) updates.notify(`【Yunzai Guard】${result.message}`)
+}
+
+/** 处理主人的 #guard登录：链接只经宿主私聊主人，不回传给工作进程里的调用方。 */
+function sendLoginLink(): void {
+  let text: string
+  try {
+    const { urls, ttlSeconds } = panelLoginLink()
+    text = [
+      "【Yunzai Guard】控制台登录链接",
+      ...urls,
+      `${Math.round(ttlSeconds / 60)} 分钟内有效，仅可使用一次，请勿转发。`,
+    ].join("\n")
+    record("panel-login-link", { urls: urls.length })
+  } catch (error) {
+    text = `【Yunzai Guard】${(error as Error).message}`
+  }
+  noticeToMasters(text)
 }
 
 /** 处理主人命令触发的还原，拒绝原因回复给主人。 */

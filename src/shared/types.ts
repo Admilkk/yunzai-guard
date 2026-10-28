@@ -122,6 +122,8 @@ export interface GuardContext {
   requestUpdate?: (force: boolean) => void
   /** 请求还原到上一版本。 */
   requestRollback?: () => void
+  /** 请求一次性面板登录链接；链接由宿主直接私聊主人，调用方拿不到。 */
+  requestLoginLink?: () => void
 }
 
 export interface CoreBot {

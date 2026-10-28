@@ -14,6 +14,10 @@ export interface PanelSettings {
   trustProxy: boolean
   /** 允许局域网以外的来源访问；默认只开放本机与局域网。 */
   allowExternal: boolean
+  /** 允许主人发送 #guard登录 获取一次性登录链接。 */
+  chatLogin: boolean
+  /** 登录链接使用的外部访问地址，例如反向代理后的域名；为空时使用监听地址。 */
+  publicUrl: string
   jwtSecret: string
 }
 
@@ -59,6 +63,17 @@ function integer(value: unknown, fallback: number, min: number, max: number): nu
     : fallback
 }
 
+/** 外部访问地址只接受不带查询与片段的 http(s) 地址。 */
+function validPublicUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !value || value.length > 300) return false
+  try {
+    const url = new URL(value)
+    return (url.protocol === "http:" || url.protocol === "https:") && !url.search && !url.hash
+  } catch {
+    return false
+  }
+}
+
 /** 规范化面板配置并补全默认值。 */
 function normalize(value: unknown): PanelSettings {
   const source =
@@ -73,6 +88,8 @@ function normalize(value: unknown): PanelSettings {
     trustedDeviceTtlDays: integer(source.trustedDeviceTtlDays, 30, 1, 90),
     trustProxy: source.trustProxy === true,
     allowExternal: source.allowExternal === true,
+    chatLogin: typeof source.chatLogin === "boolean" ? source.chatLogin : true,
+    publicUrl: validPublicUrl(source.publicUrl) ? source.publicUrl : "",
     jwtSecret:
       typeof source.jwtSecret === "string" && source.jwtSecret.length >= 32
         ? source.jwtSecret
@@ -122,6 +139,8 @@ export interface PanelSettingsPatch {
   trustedDeviceTtlDays?: number
   enabled?: boolean
   allowExternal?: boolean
+  chatLogin?: boolean
+  publicUrl?: string
 }
 
 /** 保留 secret，只覆盖面板可调项；非法值直接拒绝。 */
@@ -148,6 +167,12 @@ export function savePanelSettings(stateDir: string, patch: PanelSettingsPatch): 
   }
   if (patch.enabled !== undefined) next.enabled = patch.enabled
   if (patch.allowExternal !== undefined) next.allowExternal = patch.allowExternal
+  if (patch.chatLogin !== undefined) next.chatLogin = patch.chatLogin
+  if (patch.publicUrl !== undefined) {
+    const value = patch.publicUrl.trim()
+    if (value && !validPublicUrl(value)) throw new TypeError(M.web.publicUrl)
+    next.publicUrl = value
+  }
   if (patch.trustedDeviceTtlDays !== undefined) {
     if (
       !Number.isInteger(patch.trustedDeviceTtlDays) ||

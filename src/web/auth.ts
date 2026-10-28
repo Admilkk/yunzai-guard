@@ -41,6 +41,9 @@ const maxFailures = 8
 const failureWindowMs = 5 * 60_000
 const blockMs = 5 * 60_000
 const codeTtlSeconds = 300
+const linkTtlSeconds = 300
+const linkCooldownMs = 30_000
+const linkPattern = /^[A-Za-z0-9_-]{43}$/
 const maxSessions = 32
 const maxAttempts = 1024
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/
@@ -87,6 +90,7 @@ export class PanelAuth {
   readonly #secretId: string
   readonly #events: AuthEvents
   #code: { hash: string; expires: number } | undefined
+  #link: { hash: string; issuedAt: number; expires: number } | undefined
   /** 创建会话管理器，可选持久化到状态目录。 */
   constructor(settings: () => PanelSettings, stateDir?: string, events: AuthEvents = {}) {
     this.#settings = settings
@@ -186,6 +190,31 @@ export class PanelAuth {
     const value = randomCode(16)
     this.#code = { hash: digest(value), expires: Date.now() + codeTtlSeconds * 1000 }
     return value
+  }
+  /**
+   * 生成一次性登录链接令牌：5 分钟有效、仅能使用一次；新链接会使旧链接失效，
+   * 冷却期内重复请求直接拒绝，避免被反复触发刷屏。
+   */
+  issueLink(): { token: string; ttlSeconds: number } {
+    const now = Date.now()
+    if (this.#link && now - this.#link.issuedAt < linkCooldownMs)
+      throw new PanelError(429, M.web.linkCooldown)
+    const token = randomBytes(32).toString("base64url")
+    this.#link = { hash: digest(token), issuedAt: now, expires: now + linkTtlSeconds * 1000 }
+    return { token, ttlSeconds: linkTtlSeconds }
+  }
+  /** 校验登录链接令牌并签发会话；成功后立即作废。 */
+  checkLink(input: unknown, address: string, options: SessionOptions = {}): string {
+    this.#ensureAllowed(address)
+    const token = typeof input === "string" && linkPattern.test(input) ? input : ""
+    const link = this.#link
+    if (!token || !link || link.expires <= Date.now() || !sameSecret(link.hash, digest(token))) {
+      this.#fail(address)
+      throw new PanelError(401, M.web.linkInvalid)
+    }
+    this.#link = undefined
+    this.#attempts.delete(address)
+    return this.issue({ ...options, address })
   }
   /** 校验登录验证码并签发会话，失败次数超限时暂时封禁来源。 */
   checkCode(input: unknown, address: string, options: SessionOptions = {}): string {

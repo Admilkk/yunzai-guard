@@ -162,7 +162,7 @@ export function UpdateStrip() {
             {update.installMode === "git" && update.autoUpdate
               ? ` · Git 安装（${update.gitBranch} 分支）`
               : ""}
-            {git ? " · 源码安装需手动更新" : ""}
+            {git ? " · 源码安装需在插件目录执行 git pull 与 npm ci --include=dev" : ""}
           </span>
         </div>
       </div>

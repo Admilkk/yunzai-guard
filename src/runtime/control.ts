@@ -87,6 +87,7 @@ export function isControlType(value: unknown): value is ControlType {
     value === "update-request" ||
     value === "update-force-request" ||
     value === "rollback-request" ||
+    value === "login-link-request" ||
     value === "preload-ready" ||
     value === "worker-online"
   )

@@ -151,6 +151,7 @@ async function fixture(t, configure, panelSettings = {}, controllers) {
     request,
     login,
     restarts: () => restarts,
+    panel: () => panel,
     restart: async () => {
       await panel.stop()
       await start()
@@ -689,4 +690,43 @@ test("告警已读与静默、资源曲线和审计对比接口可用", { timeou
   assert.equal(compare.body.b.blocked, 1)
   assert.equal(compare.body.added.length, 2)
   assert.equal((await call("/api/audit/compare?aFrom=1")).status, 400)
+})
+
+test("聊天登录链接经地址片段一次性换取会话，可按配置关闭", { timeout: 15000 }, async t => {
+  const app = await fixture(t, undefined, { publicUrl: "https://guard.example.com/" })
+  const { urls, ttlSeconds } = app.panel().loginLink()
+  assert.equal(ttlSeconds, 300)
+  assert.equal(urls.length, 1)
+  const match = /^https:\/\/guard\.example\.com\/#login=([A-Za-z0-9_-]{43})$/.exec(urls[0])
+  assert.ok(match, urls[0])
+  const origin = { Origin: app.base }
+  const wrong = await app.request("/api/login/link", {
+    method: "POST",
+    body: { token: "x".repeat(43) },
+    headers: origin,
+  })
+  assert.equal(wrong.status, 401)
+  const result = await app.request("/api/login/link", {
+    method: "POST",
+    body: { token: match[1] },
+    headers: origin,
+  })
+  assert.equal(result.status, 200)
+  assert.equal(result.body.remembered, false)
+  const cookie = result.headers.get("set-cookie").split(";")[0]
+  assert.equal((await app.request("/api/session", { cookie })).status, 200)
+  const reused = await app.request("/api/login/link", {
+    method: "POST",
+    body: { token: match[1] },
+    headers: origin,
+  })
+  assert.equal(reused.status, 401)
+  const session = await app.login()
+  const saved = await app.request("/api/panel", {
+    ...session,
+    method: "POST",
+    body: { chatLogin: false },
+  })
+  assert.equal(saved.status, 200)
+  assert.throws(() => app.panel().loginLink(), { status: 403 })
 })

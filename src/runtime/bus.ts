@@ -19,6 +19,7 @@ export type Command = {
     | "update-request"
     | "update-force-request"
     | "rollback-request"
+    | "login-link-request"
   reason?: string
 }
 

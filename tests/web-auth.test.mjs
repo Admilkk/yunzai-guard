@@ -89,3 +89,30 @@ test("失败记录占满时淘汰最早记录，新地址仍可登录", t => {
     assert.throws(() => auth.checkCode("wrong", `flood-${index}`), { status: 401 })
   assert.ok(auth.checkCode(code, "administrator"))
 })
+
+test("聊天登录链接一次有效、有冷却期，新链接使旧链接作废", t => {
+  const { auth } = fixture(t)
+  const first = auth.issueLink()
+  assert.match(first.token, /^[A-Za-z0-9_-]{43}$/)
+  assert.equal(first.ttlSeconds, 300)
+  assert.throws(() => auth.issueLink(), { status: 429 })
+  assert.throws(() => auth.checkLink("x".repeat(43), "127.0.0.1"), { status: 401 })
+  assert.throws(() => auth.checkLink(undefined, "127.0.0.1"), { status: 401 })
+  const session = auth.checkLink(first.token, "127.0.0.1")
+  assert.equal(auth.verify(session).remember, false)
+  assert.throws(() => auth.checkLink(first.token, "127.0.0.1"), { status: 401 })
+})
+
+test("面板配置校验外部访问地址并默认开启聊天登录", t => {
+  const { directory, settings } = fixture(t)
+  assert.equal(settings.chatLogin, true)
+  assert.equal(settings.publicUrl, "")
+  assert.throws(() => savePanelSettings(directory, { publicUrl: "ftp://example.com/" }), TypeError)
+  assert.throws(() => savePanelSettings(directory, { publicUrl: "https://a.test/?x=1" }), TypeError)
+  const next = savePanelSettings(directory, {
+    chatLogin: false,
+    publicUrl: " https://guard.example.com/panel/ ",
+  })
+  assert.equal(next.chatLogin, false)
+  assert.equal(next.publicUrl, "https://guard.example.com/panel/")
+})

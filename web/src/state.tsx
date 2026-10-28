@@ -14,6 +14,16 @@ import { mergedDocument } from "./lib/config"
 import { documentChanges } from "./lib/diff"
 import type { ConsoleValue, Draft, PluginRecord, SettingsApplyState } from "./types"
 
+/**
+ * 聊天登录链接的令牌放在地址片段 `#login=` 里：模块加载时取出并立即从地址栏抹掉，
+ * 只尝试一次，避免留在浏览历史或被开发模式的重复执行再次提交。
+ */
+let linkToken = (() => {
+  const match = /^#login=([A-Za-z0-9_-]{43})$/.exec(location.hash)
+  if (match) history.replaceState(null, "", location.pathname + location.search)
+  return match?.[1]
+})()
+
 const Context = createContext<ConsoleValue | null>(null)
 
 /** 确认配置中的数字均为整数。 */
@@ -153,6 +163,16 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         const value = await api("/api/meta")
         if (!live) return
         setMeta(value)
+        const link = linkToken
+        linkToken = undefined
+        if (link) {
+          try {
+            await api("/api/login/link", { method: "POST", body: JSON.stringify({ token: link }) })
+          } catch (failure) {
+            if (live) setError((failure as Error).message)
+            return
+          }
+        }
         await enter()
       } catch (failure) {
         // 首次打开尚未登录属于正常情况，不提示“登录已失效”。

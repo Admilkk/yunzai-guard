@@ -435,6 +435,18 @@ export const settingHelp: Record<string, SettingHelp> = {
     default: "关闭。",
     change: "保存后立即生效。",
   },
+  "panel.chatLogin": {
+    description:
+      "主人发送 #guard登录 后，宿主私聊发送一次性登录链接。链接 5 分钟内有效、仅可使用一次，登录后会通知主人。",
+    default: "开启。",
+    change: "保存后立即生效。",
+  },
+  "panel.publicUrl": {
+    description:
+      "登录链接使用的地址，适用于反向代理或端口映射。留空时使用面板的监听地址（本机与局域网）。",
+    default: "空。",
+    change: "保存后立即生效。",
+  },
   "panel.trustedDeviceTtlDays": {
     description: "信任设备后的登录有效期，可随时在设备列表撤销。",
     default: "30 天。",

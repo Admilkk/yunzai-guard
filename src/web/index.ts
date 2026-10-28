@@ -1,5 +1,6 @@
 import fs from "node:fs"
 import { GuardPanel } from "./server.js"
+import { M } from "../shared/messages.js"
 import type { GuardSettings } from "../shared/types.js"
 import type { SettingsApplyState } from "../config/update.js"
 import type { PanelControllers, UpdateController } from "./controllers.js"
@@ -60,6 +61,12 @@ export async function startPanel(options: StartPanelOptions): Promise<void> {
     panel = undefined
     logLine(`[Yunzai Guard] 控制台启动失败：${(error as Error).message}`)
   }
+}
+
+/** 生成一次性登录链接；面板未启动或聊天登录关闭时抛出可读的错误。 */
+export function panelLoginLink(): { urls: string[]; ttlSeconds: number } {
+  if (!panel) throw new Error(M.web.linkPanelOff)
+  return panel.loginLink()
 }
 
 /** 停止面板服务。 */

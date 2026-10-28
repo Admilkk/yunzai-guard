@@ -166,8 +166,9 @@ const messages = {
     gitDirty: "插件目录存在未提交的改动，如需覆盖请使用强制更新",
     gitVersion: (expected: unknown, actual: unknown) =>
       `release 分支版本 ${actual} 与最新发布 ${expected} 不一致，请稍后重试`,
-    gitSource: "main 分支源码安装不支持自动更新，请切换至 release 分支或手动更新",
-    gitInstall: "Git 安装请在插件目录执行 git pull 更新",
+    gitSource:
+      "main 分支源码安装不支持自动更新，请切换至 release 分支，或在插件目录执行 git pull 与 npm ci --include=dev",
+    gitInstall: "Git 安装请在插件目录执行 git pull 更新（main 分支还需执行 npm ci --include=dev）",
     majorBlocked: (from: unknown, to: unknown) =>
       `跨主版本更新（${from} → ${to}）可能存在不兼容变更，请阅读更新日志后使用强制更新`,
     busy: "更新正在进行中",
@@ -280,6 +281,8 @@ const messages = {
   },
   entry: {
     updateUnavailable: "当前运行环境不支持更新",
+    loginSent: "登录链接已私聊发送",
+    loginUnavailable: "当前运行环境不支持聊天登录",
     rollbackRequested: "已开始还原至上一版本，宿主将重新启动",
     updateRequested: "已开始更新",
     updateForced: "已开始强制更新，将重新安装最新版本",
@@ -331,6 +334,11 @@ const messages = {
     codeRequired: "请输入验证码",
     codeExpired: "验证码已失效，请重新获取",
     codeWrong: "验证码错误",
+    linkInvalid: "登录链接已失效，请重新发送 #guard登录",
+    linkCooldown: "登录链接刚刚生成，请稍后再试",
+    linkDisabled: "聊天登录已关闭，请在终端获取验证码登录",
+    linkPanelOff: "控制台未启用",
+    publicUrl: "外部访问地址须为 http(s) 地址",
     tooManyAttempts: (seconds: unknown) => `尝试次数过多，请 ${seconds} 秒后再试`,
     sessionsCorrupt: "可信设备记录损坏，请检查状态目录中的 auth-sessions.json",
     settingsObject: "配置必须是 JSON 对象",

@@ -34,6 +34,7 @@ export class YunzaiGuard extends plugin {
       rule: [
         { reg: "^#?guard(强制)?更新$", fnc: "update", permission: "master" },
         { reg: "^#?guard(回滚|还原)$", fnc: "rollback", permission: "master" },
+        { reg: "^#?guard(登录|登陆|登入|面板)$", fnc: "login", permission: "master" },
       ],
     })
   }
@@ -66,6 +67,18 @@ export class YunzaiGuard extends plugin {
     }
     context.requestRollback()
     await this.reply(M.entry.rollbackRequested)
+    return true
+  }
+
+  /** 主人的 #guard登录：宿主生成一次性链接并私聊主人，群聊里只提示已发送。 */
+  async login(): Promise<boolean> {
+    const context = (globalThis as unknown as Record<symbol, GuardContext | undefined>)[contextKey]
+    if (!context?.requestLoginLink) {
+      await this.reply(M.entry.loginUnavailable)
+      return true
+    }
+    context.requestLoginLink()
+    await this.reply(M.entry.loginSent)
     return true
   }
 

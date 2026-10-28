@@ -271,6 +271,21 @@ export class GuardPanel {
     return result
   }
 
+  /**
+   * 生成一次性登录链接。令牌放在地址片段里，不会出现在请求行与代理日志中；
+   * 设置了外部访问地址时只给该地址，否则给出全部监听地址。
+   */
+  loginLink(): { urls: string[]; ttlSeconds: number } {
+    if (!this.#server) throw new PanelError(503, M.web.linkPanelOff)
+    if (!this.#settings.chatLogin) throw new PanelError(403, M.web.linkDisabled)
+    const { token, ttlSeconds } = this.#auth.issueLink()
+    const bases = this.#settings.publicUrl
+      ? [this.#settings.publicUrl.replace(/\/*$/, "/")]
+      : this.urls
+    this.#options.audit?.("panel-login-link", {})
+    return { urls: bases.map(base => `${base}#login=${token}`), ttlSeconds }
+  }
+
   /** 登录安全事件：写入审计，并通过告警通知主人。 */
   #notify(title: string, text: string, key: string): void {
     this.#options.audit?.("panel-security", { title })
@@ -484,6 +499,28 @@ export class GuardPanel {
       this.#printCode(code)
       return sendJson(response, 200, { ok: true })
     }
+    if (route === "POST /api/login/link") {
+      const body = await readBody(request)
+      const address = clientAddress(request, this.#settings.trustProxy)
+      const token = this.#auth.checkLink(isPlainObject(body) ? body.token : undefined, address, {
+        userAgent: request.headers["user-agent"],
+      })
+      const payload = this.#auth.verify(token)!
+      const expiresAt = Number(payload.exp) * 1000
+      setSessionCookie(request, response, token, false, expiresAt)
+      this.#options.audit?.("panel-login", { method: "chat-link" })
+      this.#notify(
+        "面板登录",
+        `【Yunzai Guard】控制台已通过聊天链接登录：${deviceName(String(request.headers["user-agent"] ?? ""))}，来源 ${address}`,
+        `login:${address}`,
+      )
+      return sendJson(response, 200, {
+        ok: true,
+        expiresAt,
+        remembered: false,
+        csrfToken: this.#auth.csrf(token),
+      })
+    }
     if (route === "POST /api/login/code/check") {
       const body = await readBody(request)
       const code = isPlainObject(body) ? body.code : undefined
@@ -627,6 +664,8 @@ export class GuardPanel {
           tokenTtlHours: this.#settings.tokenTtlHours,
           trustedDeviceTtlDays: this.#settings.trustedDeviceTtlDays,
           allowExternal: this.#settings.allowExternal,
+          chatLogin: this.#settings.chatLogin,
+          publicUrl: this.#settings.publicUrl,
           path: panelSettingsPath(this.#options.stateDir),
           startedAt: this.#startedAt,
         },
@@ -765,6 +804,8 @@ export class GuardPanel {
           ...(body.trustedDeviceTtlDays !== undefined
             ? { trustedDeviceTtlDays: Number(body.trustedDeviceTtlDays) }
             : {}),
+          ...(body.chatLogin !== undefined ? { chatLogin: body.chatLogin === true } : {}),
+          ...(body.publicUrl !== undefined ? { publicUrl: String(body.publicUrl) } : {}),
         })
       } catch (error) {
         throw new PanelError(400, (error as Error).message)
