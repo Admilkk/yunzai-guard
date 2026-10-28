@@ -43,49 +43,63 @@ import type { SettingsSection } from "./pages/Settings"
 const pages: Array<{
   id: string
   title: string
+  description: string
   icon: React.ReactNode
   component: ComponentType<any>
 }> = [
-  { id: "overview", title: "监控总览", icon: <DashboardOutlined />, component: Overview },
+  {
+    id: "overview",
+    title: "监控总览",
+    description: "运行状态、安全风险与最近事件",
+    icon: <DashboardOutlined />,
+    component: Overview,
+  },
   {
     id: "plugins",
     title: "插件权限",
+    description: "查看插件风险并配置独立权限与沙箱",
     icon: <ApiOutlined />,
     component: lazy(() => import("./pages/Plugins")),
   },
   {
     id: "policies",
     title: "全局规则",
+    description: "按匹配顺序管理行为处置规则",
     icon: <ControlOutlined />,
     component: lazy(() => import("./pages/Policies")),
   },
   {
     id: "profiles",
     title: "行为画像",
+    description: "识别偏离插件常规行为的异常活动",
     icon: <RadarChartOutlined />,
     component: lazy(() => import("./pages/Profiles")),
   },
   {
     id: "alerts",
     title: "告警中心",
+    description: "处理安全告警、已读状态与静默规则",
     icon: <BellOutlined />,
     component: lazy(() => import("./pages/Alerts")),
   },
   {
     id: "audit",
     title: "行为审计",
+    description: "检索、对比并导出插件行为记录",
     icon: <AuditOutlined />,
     component: lazy(() => import("./pages/Audit")),
   },
   {
     id: "logs",
     title: "运行日志",
+    description: "实时查看 Guard 宿主进程日志",
     icon: <CodeOutlined />,
     component: lazy(() => import("./pages/Logs")),
   },
   {
     id: "settings",
     title: "系统设置",
+    description: "运行监控、安全防护与面板偏好",
     icon: <SettingOutlined />,
     component: lazy(() => import("./pages/Settings")),
   },
@@ -109,13 +123,6 @@ function currentRoute(): Route {
   return routeFor(location.hash.replace(/^#\/?/, "").split(/[/?]/)[0])
 }
 
-/** 返回地址栏中 `?` 及之后的部分。 */
-function currentSearch(): string {
-  const hash = location.hash
-  const at = hash.indexOf("?")
-  return at < 0 ? "" : hash.slice(at)
-}
-
 /** 控制台根组件：登录状态、导航与页面切换。 */
 export default function ConsoleApp() {
   const ctx = useConsole()
@@ -127,23 +134,36 @@ export default function ConsoleApp() {
   const reduced = useReducedMotion()
   const current = pages.find(item => item.id === route.page) ?? pages[0]
   const View = current.component
-  const navigateRef = useRef<(name: string, search?: string) => void>(() => {})
+  const lastHash = useRef(location.hash || "#overview")
+  const commitRef = useRef(ctx.commitRaw)
+  commitRef.current = ctx.commitRaw
 
-  /** 切换页面并写入地址栏，保留页面筛选参数。 */
-  function navigate(name: string, search = "") {
+  function navigate(name: string, search = "", replace = false) {
     if (!ctx.commitRaw() && name !== "advanced") {
-      history.replaceState(null, "", `#${route.name}`)
+      history.replaceState(null, "", lastHash.current)
       return
     }
+    const next = `#${name}${search}`
+    lastHash.current = next
     setRoute(routeFor(name))
     setMenuOpen(false)
-    history.replaceState(null, "", `#${name}${search}`)
+    if (location.hash === next) return
+    if (replace) history.replaceState(null, "", next)
+    else history.pushState(null, "", next)
   }
-  navigateRef.current = navigate
 
   useEffect(() => {
     const resize = () => setMobile(innerWidth <= 800)
-    const change = () => navigateRef.current(currentRoute().name, currentSearch())
+    const change = () => {
+      const next = currentRoute()
+      if (!commitRef.current() && next.name !== "advanced") {
+        history.replaceState(null, "", lastHash.current)
+        return
+      }
+      lastHash.current = location.hash
+      setRoute(next)
+      setMenuOpen(false)
+    }
     addEventListener("resize", resize)
     addEventListener("hashchange", change)
     return () => {
@@ -176,7 +196,8 @@ export default function ConsoleApp() {
 
   const groups = [
     { label: "防护", ids: ["overview", "plugins", "policies", "profiles"] },
-    { label: "记录", ids: ["audit", "alerts", "logs", "settings"] },
+    { label: "记录", ids: ["audit", "alerts", "logs"] },
+    { label: "系统", ids: ["settings"] },
   ]
   const items = groups.map(group => ({
     type: "group" as const,
@@ -281,11 +302,7 @@ export default function ConsoleApp() {
               aria-label={mobile ? "打开导航" : collapsed ? "展开导航" : "收起导航"}
               onClick={() => (mobile ? setMenuOpen(!menuOpen) : setCollapsed(!collapsed))}
             />
-            <span className="workspace-name">
-              {group}
-              <span>/</span>
-              <b>{current.title}</b>
-            </span>
+            <span className="workspace-name">{group}</span>
             {/demo/i.test(version) && <Tag className="demo-tag">DEMO</Tag>}
           </Space>
           <Space size={12} className="header-actions">
@@ -329,7 +346,10 @@ export default function ConsoleApp() {
             </div>
           )}
           <div className="page-heading">
-            <h1>{current.title}</h1>
+            <div>
+              <h1>{current.title}</h1>
+              <p>{current.description}</p>
+            </div>
             <ConfigurationState />
           </div>
           <motion.div

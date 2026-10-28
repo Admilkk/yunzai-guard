@@ -1,0 +1,132 @@
+body {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.console-header {
+  height: 56px;
+  background: color-mix(in srgb, var(--page-bg) 88%, transparent);
+  border-bottom-color: var(--border-soft);
+}
+
+.console-content {
+  padding-top: 24px;
+}
+
+.workspace-name {
+  color: var(--secondary);
+  font-size: 13px;
+}
+
+.page-heading {
+  align-items: center;
+  margin-bottom: 22px;
+}
+
+.page-heading h1 {
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.35px;
+}
+
+.page-heading p {
+  margin-top: 5px;
+  line-height: 1.55;
+}
+
+.page-stack {
+  gap: 16px;
+}
+
+.panel-card,
+.stat-tile,
+.status-hero,
+.audit-toolbar,
+.resource-tile {
+  box-shadow: var(--card-shadow);
+}
+
+.panel-card > .ant-card-head,
+.setting-section > .ant-card-head,
+.logs-card > .ant-card-head,
+.raw-card > .ant-card-head {
+  min-height: 50px;
+}
+
+.stat-tile:hover {
+  transform: none;
+  border-color: var(--border);
+  box-shadow: var(--card-shadow);
+}
+
+.stat-tile:hover .stat-icon {
+  transform: none;
+}
+
+.stat-value,
+.resource-value {
+  font-weight: 650;
+}
+
+.status-pulse::after {
+  display: none;
+}
+
+.brand-mark {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.nav-indicator {
+  background: #63c5a614;
+  box-shadow: inset 0 0 0 1px #63c5a61a;
+}
+
+.nav-indicator::before {
+  box-shadow: none;
+}
+
+.mono,
+.target-cell,
+.json-code,
+.raw-editor,
+.log-console {
+  font-family: var(--font-mono);
+}
+
+.ant-btn,
+.ant-input,
+.ant-select-selector,
+.ant-input-number,
+.ant-segmented {
+  transition-duration: 0.15s !important;
+}
+
+.clickable-row:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.log-console {
+  color: var(--terminal-text);
+  background: var(--terminal-bg);
+  border-color: var(--terminal-bg);
+}
+
+@media (max-width: 800px) {
+  .console-header .ant-btn,
+  .header-actions .ant-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .page-heading h1 {
+    font-size: 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-frame {
+    transform: none !important;
+  }
+}

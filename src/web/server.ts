@@ -47,7 +47,7 @@ export interface PanelOptions {
   resume: () => void
   audit?: (type: string, details?: Record<string, unknown>) => void
   log?: (message: string) => void
-  /** 上一个控制台线程交来的内存会话。 */
+  /** 上一个控制台交来的内存会话。 */
   handover?: unknown
 }
 
@@ -246,7 +246,7 @@ export class GuardPanel {
     this.#auth.importVolatile(options.handover)
   }
 
-  /** 交给下一个控制台线程的内存会话。 */
+  /** 交给下一个控制台的内存会话。 */
   handover(): unknown {
     return this.#auth.exportVolatile()
   }

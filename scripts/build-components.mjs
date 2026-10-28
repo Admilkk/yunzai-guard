@@ -46,8 +46,8 @@ const workerEntries = [
   "dist/child-preload.js",
   "dist/runtime-bootstrap.cjs",
 ]
-// 可热替换的宿主核心：控制台服务线程。
-const coreEntries = ["dist/web/thread.js"]
+// 可热替换的宿主核心：控制台服务，在宿主进程内按代号重新加载。
+const coreEntries = ["dist/web/index.js"]
 
 const posix = file => file.split(path.sep).join("/")
 const relative = file => posix(path.relative(root, file))

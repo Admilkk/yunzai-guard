@@ -1,0 +1,75 @@
+:root {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: #202724;
+  background: #f4f6f5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --page-bg: #f4f6f5;
+  --surface: #ffffff;
+  --surface-subtle: #f7f9f8;
+  --surface-raised: #ffffff;
+  --sidebar-bg: #111b17;
+  --sidebar-edge: #ffffff12;
+  --sidebar-text: #a7b3ad;
+  --sidebar-dim: #718079;
+  --text: #202724;
+  --secondary: #606c66;
+  --muted: #7b8781;
+  --border: #dde4e0;
+  --border-soft: #ebefec;
+  --primary: #237761;
+  --primary-strong: #195c4b;
+  --primary-soft: #e8f2ee;
+  --accent: #49b692;
+  --success: #237761;
+  --warning: #9a671f;
+  --warning-soft: #faf2e4;
+  --danger: #bd4851;
+  --danger-soft: #fbedee;
+  --info: #356f91;
+  --info-soft: #edf4f8;
+  --terminal-bg: #151b18;
+  --terminal-text: #d5dfd9;
+  --card-shadow: 0 1px 2px #14231c05;
+  --raised-shadow: 0 12px 32px #14231c14;
+  --radius: 10px;
+  --radius-small: 7px;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  color: #e2e9e5;
+  background: #0e1412;
+  --page-bg: #0e1412;
+  --surface: #151d1a;
+  --surface-subtle: #19221e;
+  --surface-raised: #1b2521;
+  --sidebar-bg: #0a100e;
+  --sidebar-edge: #ffffff10;
+  --sidebar-text: #a7b3ad;
+  --sidebar-dim: #718079;
+  --text: #e2e9e5;
+  --secondary: #a0aca5;
+  --muted: #849189;
+  --border: #2a3530;
+  --border-soft: #222d28;
+  --primary: #63c5a6;
+  --primary-strong: #86d6bc;
+  --primary-soft: #19332a;
+  --accent: #63c5a6;
+  --success: #63c5a6;
+  --warning: #d6a557;
+  --warning-soft: #302716;
+  --danger: #eb858c;
+  --danger-soft: #351d20;
+  --info: #84b6d2;
+  --info-soft: #192b35;
+  --terminal-bg: #090e0c;
+  --terminal-text: #d5dfd9;
+  --card-shadow: 0 1px 2px #00000024;
+  --raised-shadow: 0 16px 40px #00000040;
+}

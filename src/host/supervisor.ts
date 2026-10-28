@@ -34,7 +34,6 @@ import {
 } from "../sandbox/windows.js"
 import { acquireProjectLock, legacyProjectPort, type ProjectLock } from "./lock.js"
 import { CoreHost } from "./core.js"
-import type { CoreHandlers } from "../web/core-protocol.js"
 import { SettingsController } from "./settings.js"
 import type { GuardSettings } from "../shared/types.js"
 import {
@@ -336,53 +335,48 @@ const sourceWatch = new SourceWatch({
     })
   },
 })
-/** 控制台线程可调用的宿主能力；参数来自线程，按需收窄类型。 */
-const coreHandlers: CoreHandlers = {
-  getSettings: () => configuration.active,
-  configuration: () => configuration.state,
-  applySettings: next => {
-    const state = configuration.request(next as GuardSettings)
-    enqueue({ type: "configure" })
-    return state
-  },
-  status: () => status(),
-  "update.state": () => updates.state(),
-  "update.check": () => updates.check(true),
-  "update.apply": force => updates.apply(force === true, force === true),
-  "update.rollback": () => updates.rollback(),
-  "update.applyPending": () => updates.applyPending(),
-  "alerts.history": limit => alerts.history(Number(limit)),
-  "alerts.testWebhook": () => alerts.testWebhook(),
-  "alerts.state": () => alerts.state(),
-  "alerts.acknowledge": ids => alerts.acknowledge(ids as string[] | undefined),
-  "alerts.mute": (target, minutes) =>
-    alerts.mute(target as Parameters<AlertService["mute"]>[0], Number(minutes)),
-  "alerts.unmute": key => alerts.unmute(String(key)),
-  "alerts.raise": (...args) => alerts.raise(...(args as Parameters<AlertService["raise"]>)),
-  "profiles.summary": (...args) =>
-    profiles.summary(...(args as Parameters<BehaviorProfile["summary"]>)),
-  "profiles.detail": (...args) =>
-    profiles.detail(...(args as Parameters<BehaviorProfile["detail"]>)),
-  "profiles.trust": (...args) => profiles.trust(...(args as Parameters<BehaviorProfile["trust"]>)),
-  "profiles.forget": (...args) =>
-    profiles.forget(...(args as Parameters<BehaviorProfile["forget"]>)),
-  "profiles.endLearning": (...args) =>
-    profiles.endLearning(...(args as Parameters<BehaviorProfile["endLearning"]>)),
-  "profiles.reset": (...args) => profiles.reset(...(args as Parameters<BehaviorProfile["reset"]>)),
-  "sources.list": () => sourceWatch.list(),
-  "sources.scan": () => sourceWatch.scan(),
-  "resources.points": () => resources.points(),
-  restart: () => void enqueue({ type: "restart" }),
-  resume: () => void enqueue({ type: "resume" }),
-  audit: (type, details) => record(String(type), details as Record<string, unknown>),
+/** 控制台使用的宿主能力。 */
+function panelOptions() {
+  return {
+    root: process.cwd(),
+    stateDir,
+    settings: configuration.active,
+    getSettings: () => configuration.active,
+    configuration: () => configuration.state,
+    applySettings: (next: GuardSettings) => {
+      const state = configuration.request(next)
+      enqueue({ type: "configure" })
+      return state
+    },
+    status,
+    controllers: {
+      alerts: {
+        history: (limit: number) => alerts.history(limit),
+        testWebhook: () => alerts.testWebhook(),
+        state: () => alerts.state(),
+        acknowledge: (ids?: string[]) => alerts.acknowledge(ids),
+        mute: (target: Parameters<AlertService["mute"]>[0], minutes: number) =>
+          alerts.mute(target, minutes),
+        unmute: (key: string) => alerts.unmute(key),
+        raise: (...args: Parameters<AlertService["raise"]>) => alerts.raise(...args),
+      },
+      profiles,
+      sources: sourceWatch,
+      resources: { points: () => resources.points() },
+    },
+    update: {
+      state: () => updates.state(),
+      check: () => updates.check(true),
+      apply: (force: boolean) => updates.apply(force, force),
+      rollback: () => updates.rollback(),
+      applyPending: () => updates.applyPending(),
+    },
+    restart: () => void enqueue({ type: "restart" }),
+    resume: () => void enqueue({ type: "resume" }),
+    audit: record,
+  }
 }
-const core = new CoreHost({
-  stateDir,
-  root: process.cwd(),
-  settings: () => configuration.active,
-  handlers: coreHandlers,
-  record,
-})
+const core = new CoreHost({ panel: panelOptions, record })
 
 const anomalyLabels = {
   "new-target": "出现新行为",
@@ -1169,7 +1163,7 @@ function canRelaunch(): boolean {
 
 /**
  * 按组件比较结果执行更新：
- * - static / core：只替换变化的文件并换掉控制台线程，业务进程不受影响
+ * - static / core：只替换变化的文件并重新加载控制台，业务进程不受影响
  * - worker：立即或择时重启业务进程一次；择时期间控制台先从暂存目录运行新版本
  * - host：停止业务、替换文件后宿主重新启动，新宿主确认业务上线后才算成功，否则自动还原
  */
@@ -1189,7 +1183,7 @@ async function applyUpdate(
   return restartUpdate(staged, from, rollback, plan.level === "host")
 }
 
-/** 热更新：只替换变化的文件，必要时换掉控制台线程；任何一步失败都还原文件与线程。 */
+/** 热更新：只替换变化的文件，必要时重新加载控制台；任何一步失败都还原文件与控制台。 */
 async function hotUpdate(
   staged: StagedRelease,
   from: string,

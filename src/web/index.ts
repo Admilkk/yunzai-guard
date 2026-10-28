@@ -1,6 +1,10 @@
 import fs from "node:fs"
 import { GuardPanel } from "./server.js"
 import { M } from "../shared/messages.js"
+import { coreProtocolVersion } from "./core-protocol.js"
+
+/** 控制台实现的宿主接口版本，宿主加载控制台时核对。 */
+export const coreProtocol = coreProtocolVersion
 import type { GuardSettings } from "../shared/types.js"
 import type { SettingsApplyState } from "../config/update.js"
 import type { PanelControllers, UpdateController } from "./controllers.js"
@@ -20,7 +24,7 @@ export interface StartPanelOptions {
   restart: () => void
   resume: () => void
   audit?: (type: string, details?: Record<string, unknown>) => void
-  /** 上一个控制台线程交来的内存会话。 */
+  /** 上一个控制台交来的内存会话。 */
   handover?: unknown
 }
 
@@ -77,7 +81,7 @@ export function panelLoginLink(): { urls: string[]; ttlSeconds: number } {
   return panel.loginLink()
 }
 
-/** 取出内存会话，热替换时交给下一个控制台线程。 */
+/** 取出内存会话，热替换时交给下一个控制台。 */
 export function panelHandover(): unknown {
   return panel?.handover()
 }
