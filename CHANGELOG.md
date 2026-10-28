@@ -2,6 +2,15 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.1](https://github.com/Admilkk/yunzai-guard/compare/v1.1.0...v1.1.1) (2026-10-28)
+
+
+### ✨ 新功能
+
+* **release:** 发版时同步更新编译好的 release 分支，可直接 git clone 安装并用 git pull 更新 ([02214f4](https://github.com/Admilkk/yunzai-guard/commit/02214f48219006e1269c1b6c70effe33ecefd340))
+* **update:** release 分支的 Git 安装支持面板、命令与 CLI 自动更新和还原 ([f5b845b](https://github.com/Admilkk/yunzai-guard/commit/f5b845b122dc2ef527ad2386ff5722daf5f10c3f))
+
+
 ## [1.1.0](https://github.com/Admilkk/yunzai-guard/compare/v1.0.0...v1.1.0) (2026-10-28)
 
 ### ✨ 新功能
