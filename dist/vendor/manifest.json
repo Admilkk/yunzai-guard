@@ -1,0 +1,17 @@
+[
+  {
+    "name": "vm2",
+    "version": "3.12.2",
+    "license": "MIT"
+  },
+  {
+    "name": "acorn",
+    "version": "8.19.0",
+    "license": "MIT"
+  },
+  {
+    "name": "acorn-walk",
+    "version": "8.3.5",
+    "license": "MIT"
+  }
+]

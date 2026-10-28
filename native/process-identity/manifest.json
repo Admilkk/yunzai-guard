@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "protocol": 1,
+  "profileSet": "node24.22.1-v1",
+  "sources": {
+    "WindowsIdentity.cs": "9f73ede23f4ad9667cfaf9d31c323cc4f8166368b31f3e4078c3f65d18debb6f",
+    "linux_identity.c": "bc16db5ca48f60e2cdc44be69b6e680f97cb0e76fe6c950fbfbea1d4393ee59d",
+    "native_json.h": "8b530b2ed95c722d7b6517cc66460daa49603c30d6e90921771e7382a9efaf6a",
+    "native_sha256.h": "3cf7c4850c9e8ddd37e843ab1119a028bc688a560e7677083e73f03d1d977fef",
+    "protocol.md": "07c9355e0548cd893c8be7fe8388646d250255c29889ec6d07e3caaba6d0bb61",
+    "NOTICE.txt": "eb6b2c5680572e18c4559658f03ca28588a654804fa026eefd9848ab5763ad9a"
+  },
+  "artifacts": [
+    {
+      "platform": "win32",
+      "architecture": "x64",
+      "file": "bin/win32-x64/process-identity.exe",
+      "sha256": "6c98dc939528df138e773ce7044032ead06576790119905d54985892288b7f58",
+      "bytes": 27136,
+      "format": "pe-framework"
+    },
+    {
+      "platform": "linux",
+      "architecture": "x64",
+      "file": "bin/linux-x64/process-identity",
+      "sha256": "f2eff8d1b45cb036ca6a857023aa21b9416339277b6243d48662ce6afba56b29",
+      "bytes": 1438760,
+      "format": "elf-static"
+    }
+  ],
+  "builds": [
+    {
+      "executable": "csc.exe",
+      "executableSha256": "46809206887326d2d24db1eff1f3064de972c3451abe766b49111450a5e08e00",
+      "args": [
+        "/nologo",
+        "/optimize+",
+        "/platform:x64",
+        "/target:exe",
+        "/r:System.Management.dll",
+        "/r:System.Web.Extensions.dll",
+        "/out:<build>/bundle/bin/win32-x64/process-identity.exe",
+        "<build>/bundle/WindowsIdentity.cs"
+      ],
+      "nativeExitCode": 0,
+      "nativeSignal": null,
+      "error": null,
+      "elapsedMs": 213,
+      "sourceSha256": {
+        "WindowsIdentity.cs": "9f73ede23f4ad9667cfaf9d31c323cc4f8166368b31f3e4078c3f65d18debb6f",
+        "linux_identity.c": "bc16db5ca48f60e2cdc44be69b6e680f97cb0e76fe6c950fbfbea1d4393ee59d",
+        "native_json.h": "8b530b2ed95c722d7b6517cc66460daa49603c30d6e90921771e7382a9efaf6a",
+        "native_sha256.h": "3cf7c4850c9e8ddd37e843ab1119a028bc688a560e7677083e73f03d1d977fef",
+        "protocol.md": "07c9355e0548cd893c8be7fe8388646d250255c29889ec6d07e3caaba6d0bb61",
+        "NOTICE.txt": "eb6b2c5680572e18c4559658f03ca28588a654804fa026eefd9848ab5763ad9a"
+      },
+      "output": "bin/win32-x64/process-identity.exe",
+      "outputSha256": "6c98dc939528df138e773ce7044032ead06576790119905d54985892288b7f58"
+    },
+    {
+      "executable": "zig.exe",
+      "executableSha256": "086ce9d47ba42f33a514e1a6e04eb1d4a8fa1d75e0868e0213caad447c91e864",
+      "args": [
+        "cc",
+        "-target",
+        "x86_64-linux-musl",
+        "-std=c11",
+        "-O2",
+        "-static",
+        "-Werror",
+        "-Wall",
+        "-Wextra",
+        "-Wno-unused-function",
+        "<build>/bundle/linux_identity.c",
+        "-o",
+        "<build>/bundle/bin/linux-x64/process-identity"
+      ],
+      "nativeExitCode": 0,
+      "nativeSignal": null,
+      "error": null,
+      "elapsedMs": 39541,
+      "compilerVersion": "0.16.0",
+      "versionReceiptSha256": "1dca1a6a84e351c250e5a0fa678ce897e9aa51ff891aaf307b622ebd36842657",
+      "versionExit": 0,
+      "sourceSha256": {
+        "WindowsIdentity.cs": "9f73ede23f4ad9667cfaf9d31c323cc4f8166368b31f3e4078c3f65d18debb6f",
+        "linux_identity.c": "bc16db5ca48f60e2cdc44be69b6e680f97cb0e76fe6c950fbfbea1d4393ee59d",
+        "native_json.h": "8b530b2ed95c722d7b6517cc66460daa49603c30d6e90921771e7382a9efaf6a",
+        "native_sha256.h": "3cf7c4850c9e8ddd37e843ab1119a028bc688a560e7677083e73f03d1d977fef",
+        "protocol.md": "07c9355e0548cd893c8be7fe8388646d250255c29889ec6d07e3caaba6d0bb61",
+        "NOTICE.txt": "eb6b2c5680572e18c4559658f03ca28588a654804fa026eefd9848ab5763ad9a"
+      },
+      "output": "bin/linux-x64/process-identity",
+      "outputSha256": "f2eff8d1b45cb036ca6a857023aa21b9416339277b6243d48662ce6afba56b29"
+    }
+  ]
+}

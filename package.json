@@ -1,0 +1,20 @@
+{
+  "name": "yunzai-guard",
+  "version": "1.1.1",
+  "private": true,
+  "type": "module",
+  "description": "TRSS-Yunzai / 玖璃的进程接管、行为审计与函数完整性防护插件",
+  "author": "Admilkk",
+  "homepage": "https://github.com/Admilkk/yunzai-guard#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Admilkk/yunzai-guard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Admilkk/yunzai-guard/issues"
+  },
+  "engines": {
+    "node": ">=23.11.0"
+  },
+  "license": "GPL-3.0-only"
+}

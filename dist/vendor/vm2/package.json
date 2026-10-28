@@ -1,0 +1,51 @@
+{
+	"author": {
+		"name": "Patrik Simek",
+		"url": "https://patriksimek.cz"
+	},
+	"name": "vm2",
+	"description": "vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules.",
+	"keywords": [
+		"sandbox",
+		"prison",
+		"jail",
+		"vm",
+		"alcatraz",
+		"contextify"
+	],
+	"version": "3.12.2",
+	"main": "index.js",
+	"sideEffects": false,
+	"repository": "github:patriksimek/vm2",
+	"license": "MIT",
+	"dependencies": {
+		"acorn": "^8.15.0",
+		"acorn-walk": "^8.3.4"
+	},
+	"devDependencies": {
+		"eslint": "^9.38.0",
+		"mocha": "^12.0.0-beta-9.2"
+	},
+	"engines": {
+		"node": ">=6.0"
+	},
+	"scripts": {
+		"build:sources": "node scripts/build-sources.js",
+		"pretest": "node scripts/build-sources.js",
+		"prepublishOnly": "node scripts/build-sources.js",
+		"test": "mocha test --recursive --ignore test/compilers.js --require ./test/bun-setup.js",
+		"test:compilers": "mocha test/compilers.js",
+		"lint": "eslint ."
+	},
+	"bin": {
+		"vm2": "./bin/vm2"
+	},
+	"types": "index.d.ts",
+	"files": [
+		"lib",
+		"index.js",
+		"index.d.ts",
+		"LICENSE.md",
+		"README.md"
+	]
+}

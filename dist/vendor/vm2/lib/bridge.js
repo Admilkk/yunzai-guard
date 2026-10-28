@@ -1,0 +1,4292 @@
+'use strict';
+
+/**
+ * __        ___    ____  _   _ ___ _   _  ____
+ * \ \      / / \  |  _ \| \ | |_ _| \ | |/ ___|
+ *  \ \ /\ / / _ \ | |_) |  \| || ||  \| | |  _
+ *   \ V  V / ___ \|  _ <| |\  || || |\  | |_| |
+ *    \_/\_/_/   \_\_| \_\_| \_|___|_| \_|\____|
+ *
+ * This file is critical for vm2. It implements the bridge between the host and the sandbox.
+ * If you do not know exactly what you are doing, you should NOT edit this file.
+ *
+ * The file is loaded in the host and sandbox to handle objects in both directions.
+ * This is done to ensure that RangeErrors are from the correct context.
+ * The boundary between the sandbox and host might throw RangeErrors from both contexts.
+ * Therefore, thisFromOther and friends can handle objects from both domains.
+ *
+ * Method parameters have comments to tell from which context they came.
+ *
+ */
+
+const globalsList = [
+	'Number',
+	'String',
+	'Boolean',
+	'Date',
+	'RegExp',
+	'Map',
+	'WeakMap',
+	'Set',
+	'WeakSet',
+	'Promise',
+	'Function',
+	// SECURITY (GHSA-3vgf-8m4q-q4qr): binary-data intrinsics. Their prototypes
+	// were absent from the protected inventory, so sandbox code that climbed a
+	// host object's prototype chain could `Reflect.defineProperty` onto host
+	// `Uint8Array.prototype` / `ArrayBuffer.prototype` / etc. and pollute every
+	// host-realm typed array / buffer. Listing them here routes their host
+	// prototypes (and constructors) into `protectedHostObjects`, `protoMappings`,
+	// and the GHSA-47x8 identity map exactly like `Array` / `Map`. Missing
+	// globals (e.g. `SharedArrayBuffer` disabled, `BigInt64Array` on old Node)
+	// are skipped by the `if (g)` guards in the population loops.
+	'ArrayBuffer',
+	'SharedArrayBuffer',
+	'DataView',
+	'Uint8Array',
+	'Int8Array',
+	'Uint8ClampedArray',
+	'Uint16Array',
+	'Int16Array',
+	'Uint32Array',
+	'Int32Array',
+	'Float32Array',
+	'Float64Array',
+	'BigInt64Array',
+	'BigUint64Array',
+];
+
+const errorsList = [
+	'RangeError',
+	'ReferenceError',
+	'SyntaxError',
+	'TypeError',
+	'EvalError',
+	'URIError',
+	'SuppressedError',
+	'AggregateError',
+	'Error',
+];
+
+const OPNA = 'Operation not allowed on contextified object.';
+
+// SECURITY (GHSA-j89j-5m6r-cr2q): cache THIS realm's global object at module
+// init. bridge.js is loaded in both the host and the sandbox realm, so this
+// constant resolves to the host global in the host copy and the sandbox global
+// in the sandbox copy. Each bridge publishes it (as `result.global`) so the
+// OTHER bridge can recognise — and refuse to deliver — the other realm's
+// global object across the boundary. `global` (Node's global object binding)
+// exists on every supported Node version, unlike `globalThis` (Node 12+), and
+// is identical to the object V8's OrdinaryCallBindThis substitutes for a
+// sloppy-mode function's nullish `this`.
+const thisRealmGlobal = global;
+
+const thisGlobalPrototypes = {
+	__proto__: null,
+	Object: Object.prototype,
+	Array: Array.prototype,
+};
+
+for (let i = 0; i < globalsList.length; i++) {
+	const key = globalsList[i];
+	const g = global[key];
+	if (g) thisGlobalPrototypes[key] = g.prototype;
+}
+
+for (let i = 0; i < errorsList.length; i++) {
+	const key = errorsList[i];
+	const g = global[key];
+	if (g) thisGlobalPrototypes[key] = g.prototype;
+}
+
+// Add non-global function constructor prototypes for cross-realm blocking.
+// These are not on `global` but are needed to block sandbox escape via
+// AsyncFunction('code'), GeneratorFunction('code'), etc.
+try {
+	thisGlobalPrototypes['AsyncFunction'] = async function () {}.constructor.prototype;
+} catch (e) {}
+try {
+	thisGlobalPrototypes['GeneratorFunction'] = function* () {}.constructor.prototype;
+} catch (e) {}
+try {
+	// Use eval to avoid syntax error on Node < 10 where async generators don't exist
+	thisGlobalPrototypes['AsyncGeneratorFunction'] = eval('(async function*() {})').constructor.prototype;
+} catch (e) {}
+
+// SECURITY (GHSA-3vgf-8m4q-q4qr / GHSA-59g5-pmg6-5gr4): abstract intrinsic
+// prototypes with NO named global. Same protection gap as the binary-data
+// globals above, but they cannot be reached through `global[key]`, so resolve
+// them structurally (mirroring the AsyncFunction / GeneratorFunction pattern).
+// Adding them to `thisGlobalPrototypes` routes them into `protectedHostObjects`
+// (which enumerates every key) and the mapping loops below, so the write traps
+// refuse sandbox `set` / `defineProperty` on host `%TypedArray%.prototype`,
+// `%IteratorPrototype%`, `ArrayIterator.prototype`, etc.
+// `TypedArrayProto` — the shared `%TypedArray%.prototype` above every concrete
+// typed array (Buffer -> Uint8Array.prototype -> %TypedArray%.prototype).
+try {
+	thisGlobalPrototypes['TypedArray'] = Object.getPrototypeOf(Uint8Array.prototype);
+} catch (e) {}
+// The iterator prototype chain: concrete iterator prototypes and the shared
+// `%IteratorPrototype%` they all inherit from (GHSA-59g5 targets both).
+try {
+	const arrayIteratorProto = Object.getPrototypeOf([][Symbol.iterator]());
+	thisGlobalPrototypes['ArrayIterator'] = arrayIteratorProto;
+	thisGlobalPrototypes['IteratorPrototype'] = Object.getPrototypeOf(arrayIteratorProto);
+} catch (e) {}
+try {
+	thisGlobalPrototypes['StringIterator'] = Object.getPrototypeOf(''[Symbol.iterator]());
+} catch (e) {}
+try {
+	thisGlobalPrototypes['MapIterator'] = Object.getPrototypeOf(new Map()[Symbol.iterator]());
+} catch (e) {}
+try {
+	thisGlobalPrototypes['SetIterator'] = Object.getPrototypeOf(new Set()[Symbol.iterator]());
+} catch (e) {}
+try {
+	// %RegExpStringIteratorPrototype% — matchAll's iterator (Node 12+).
+	thisGlobalPrototypes['RegExpStringIterator'] = Object.getPrototypeOf('a'.matchAll(/a/g));
+} catch (e) {}
+
+// Keys in `thisGlobalPrototypes` that are NOT named globals (so the
+// globalsList/errorsList mapping loops below do not cover them) but MUST still
+// receive proto + identity mappings so their host prototypes are recognized
+// and their `constructor` reads collapse to the sandbox realm.
+const nonGlobalProtoKeys = [
+	'TypedArray',
+	'ArrayIterator',
+	'IteratorPrototype',
+	'StringIterator',
+	'MapIterator',
+	'SetIterator',
+	'RegExpStringIterator',
+];
+
+// Cache this-realm dangerous function constructors.
+// Used to block raw host Function constructors from leaking when handler
+// methods are called directly (e.g., via showProxy handler exposure).
+// This complements isDangerousFunctionConstructor which checks OTHER-realm constructors.
+let thisAsyncFunctionCtor;
+let thisGeneratorFunctionCtor;
+let thisAsyncGeneratorFunctionCtor;
+try {
+	if (thisGlobalPrototypes.AsyncFunction) {
+		const desc = thisReflectGetOwnPropertyDescriptor(thisGlobalPrototypes.AsyncFunction, 'constructor');
+		if (desc) thisAsyncFunctionCtor = desc.value;
+	}
+} catch (e) {}
+try {
+	if (thisGlobalPrototypes.GeneratorFunction) {
+		const desc = thisReflectGetOwnPropertyDescriptor(thisGlobalPrototypes.GeneratorFunction, 'constructor');
+		if (desc) thisGeneratorFunctionCtor = desc.value;
+	}
+} catch (e) {}
+try {
+	if (thisGlobalPrototypes.AsyncGeneratorFunction) {
+		const desc = thisReflectGetOwnPropertyDescriptor(thisGlobalPrototypes.AsyncGeneratorFunction, 'constructor');
+		if (desc) thisAsyncGeneratorFunctionCtor = desc.value;
+	}
+} catch (e) {}
+
+function isThisDangerousFunctionConstructor(value) {
+	return (
+		value === thisFunction ||
+		(thisAsyncFunctionCtor && value === thisAsyncFunctionCtor) ||
+		(thisGeneratorFunctionCtor && value === thisGeneratorFunctionCtor) ||
+		(thisAsyncGeneratorFunctionCtor && value === thisAsyncGeneratorFunctionCtor)
+	);
+}
+
+const {
+	getPrototypeOf: thisReflectGetPrototypeOf,
+	setPrototypeOf: thisReflectSetPrototypeOf,
+	defineProperty: thisReflectDefineProperty,
+	deleteProperty: thisReflectDeleteProperty,
+	getOwnPropertyDescriptor: thisReflectGetOwnPropertyDescriptor,
+	isExtensible: thisReflectIsExtensible,
+	preventExtensions: thisReflectPreventExtensions,
+	apply: thisReflectApply,
+	construct: thisReflectConstruct,
+	set: thisReflectSet,
+	get: thisReflectGet,
+	has: thisReflectHas,
+	ownKeys: thisReflectOwnKeys,
+	enumerate: thisReflectEnumerate,
+} = Reflect;
+
+const thisObject = Object;
+const { freeze: thisObjectFreeze, prototype: thisObjectPrototype } = thisObject;
+const thisObjectHasOwnProperty = thisObjectPrototype.hasOwnProperty;
+const ThisProxy = Proxy;
+const ThisWeakMap = WeakMap;
+const thisWeakMapProto = ThisWeakMap.prototype;
+const thisWeakMapGet = thisWeakMapProto.get;
+const thisWeakMapSet = thisWeakMapProto.set;
+// SECURITY (GHSA-v37h, GHSA-qcp4, GHSA-vwrp): cached so the trap-this guards,
+// validateHandlerTarget, and the protected-host-object check cannot be
+// subverted by attacker mutation of WeakMap.prototype.has.
+const thisWeakMapHas = thisWeakMapProto.has;
+const thisWeakMapDelete = thisWeakMapProto.delete;
+const ThisMap = Map;
+const thisMapGet = ThisMap.prototype.get;
+const thisMapSet = ThisMap.prototype.set;
+const thisFunction = Function;
+const thisFunctionBind = thisFunction.prototype.bind;
+const thisArrayIsArray = Array.isArray;
+// SECURITY (GHSA-grj5-jjm8-h35p): Cache the this-realm Array constructor at module
+// load time, BEFORE any sandbox code runs. Used as the safe species-neutralized
+// return value from proxy.get 'constructor' on host arrays. We cache this directly
+// from `global.Array` so that prototype pollution attacks
+// (e.g., `Array.prototype.constructor = attackerFn` via cross-realm proto injection)
+// cannot redirect our defense to an attacker-controlled value.
+const thisArrayCtor = Array;
+const thisErrorCaptureStackTrace = Error.captureStackTrace;
+
+// SECURITY (GHSA-x6m4-chr9-cg97): cached String.prototype primitives for the
+// host-error `.stack` redactor below. Captured at module load — before any
+// sandbox user code can run (bridge.js is loaded in BOTH realms) — so the
+// redactor, which processes attacker-influenced stack strings, cannot be
+// subverted by a sandbox override of
+// String.prototype.{slice,indexOf,lastIndexOf,charCodeAt}.
+const thisStringSlice = String.prototype.slice;
+const thisStringIndexOf = String.prototype.indexOf;
+const thisStringLastIndexOf = String.prototype.lastIndexOf;
+const thisStringCharCodeAt = String.prototype.charCodeAt;
+
+// SECURITY (GHSA-x6m4-chr9-cg97): host-frame filename classifier. Mirrors the
+// v27g classifier `isHostFrameFileName` in lib/setup-sandbox.js: a filename is
+// a "host" frame if it is an absolute POSIX path (`/…`), a Windows-style
+// absolute path (`X:…`), or a Node internals pseudo-path (`node:…` /
+// `internal/…`). Clean sandbox filenames (no path separators, e.g. the default
+// `vm.js` or a VMScript filename) are NOT host frames, so sandbox developers
+// still see their own line numbers and function names.
+function isHostStackFrameFile(name) {
+	if (typeof name !== 'string' || name.length === 0) return false;
+	if (thisReflectApply(thisStringCharCodeAt, name, [0]) === 0x2f /* '/' */) return true;
+	if (name.length >= 2 && thisReflectApply(thisStringCharCodeAt, name, [1]) === 0x3a /* ':' */) return true;
+	if (name.length >= 5 && thisReflectApply(thisStringSlice, name, [0, 5]) === 'node:') return true;
+	if (name.length >= 9 && thisReflectApply(thisStringSlice, name, [0, 9]) === 'internal/') return true;
+	// SECURITY (GHSA-x6m4-chr9-cg97): ESM host frames appear as `file://` URLs
+	// (an ESM embedder's own source, or Node ESM internals) and WASM frames as
+	// `wasm://` — neither starts with `/` nor matches the schemes above, so the
+	// v27g allow-list would leak them. A clean sandbox filename never carries a
+	// URL scheme, so treat any `file:`/`wasm:` frame as host.
+	if (name.length >= 5 && thisReflectApply(thisStringSlice, name, [0, 5]) === 'file:') return true;
+	if (name.length >= 5 && thisReflectApply(thisStringSlice, name, [0, 5]) === 'wasm:') return true;
+	// SECURITY (GHSA-x6m4-chr9-cg97): a relative path with a `..` traversal
+	// segment is a host module path (host launched with a relative entry point;
+	// V8 then emits relative frames). A clean sandbox filename never contains
+	// `..`, so treat any such frame as host.
+	if (thisReflectApply(thisStringIndexOf, name, ['..']) !== -1) return true;
+	return false;
+}
+
+// SECURITY (GHSA-x6m4-chr9-cg97): true when `line` is a V8 stack frame line
+// (leading whitespace followed by `at `). Header / message lines are not
+// indented and return false, so the error message is always preserved.
+function isHostStackFrameLine(line) {
+	const n = line.length;
+	let i = 0;
+	while (i < n) {
+		const c = thisReflectApply(thisStringCharCodeAt, line, [i]);
+		if (c === 0x20 /* space */ || c === 0x09 /* tab */) {
+			i++;
+			continue;
+		}
+		break;
+	}
+	if (i === 0) return false; // frames are indented; a header line is not
+	if (i + 3 > n) return false;
+	return (
+		thisReflectApply(thisStringCharCodeAt, line, [i]) === 0x61 /* a */ &&
+		thisReflectApply(thisStringCharCodeAt, line, [i + 1]) === 0x74 /* t */ &&
+		thisReflectApply(thisStringCharCodeAt, line, [i + 2]) === 0x20 /* space */
+	);
+}
+
+// SECURITY (GHSA-x6m4-chr9-cg97): extract the location substring of a frame
+// line so `isHostStackFrameFile` can classify it. Two native shapes carry the
+// filename at the START of the extracted substring:
+//   `    at FUNC (FILE:LINE:COL)`  → substring after the innermost `(`
+//   `    at FILE:LINE:COL`         → substring after `at `
+// For eval frames (`at eval (eval at F (FILE:1:1), …)`) the innermost `(` still
+// precedes the real host FILE, so `lastIndexOf('(')` lands on it. The
+// classifier only inspects the START of the returned substring, so the
+// trailing `:LINE:COL)` needs no stripping.
+function hostStackFrameLocation(line) {
+	const open = thisReflectApply(thisStringLastIndexOf, line, ['(']);
+	if (open !== -1) return thisReflectApply(thisStringSlice, line, [open + 1]);
+	const at = thisReflectApply(thisStringIndexOf, line, ['at ']);
+	if (at === -1) return '';
+	return thisReflectApply(thisStringSlice, line, [at + 3]);
+}
+
+// SECURITY (GHSA-x6m4-chr9-cg97): shared host-stack redactor. Rebuilds an Error
+// `.stack` string keeping the header (message) and clean sandbox frames while
+// DROPPING every frame line whose file is a host frame. This restores the v27g
+// guarantee — host frames redacted, sandbox frames + message preserved — for a
+// stack that was FORMATTED host-side (so v27g's sandbox-realm formatter never
+// ran on it). Operates purely on the string via cached primitives: no Array
+// container and no sandbox-tamperable String/Array method is reachable.
+// Idempotent (re-redacting a clean stack is a no-op) and safe on empty strings.
+function redactHostStack(stack) {
+	const len = stack.length;
+	let out = '';
+	let first = true;
+	let lineStart = 0;
+	// Bound the line count so a pathologically huge attacker string cannot turn
+	// a single `.stack` read into a CPU DoS. On overflow we stop appending (the
+	// unprocessed tail is dropped, never leaked).
+	let guard = 0;
+	while (lineStart <= len && guard < 100000) {
+		guard++;
+		let nl = thisReflectApply(thisStringIndexOf, stack, ['\n', lineStart]);
+		if (nl === -1) nl = len;
+		const line = thisReflectApply(thisStringSlice, stack, [lineStart, nl]);
+		let keep = true;
+		if (isHostStackFrameLine(line)) {
+			keep = !isHostStackFrameFile(hostStackFrameLocation(line));
+		}
+		if (keep) {
+			out += first ? line : '\n' + line;
+			first = false;
+		}
+		if (nl >= len) break;
+		lineStart = nl + 1;
+	}
+	return out;
+}
+
+const thisSymbolToString = Symbol.prototype.toString;
+const thisSymbolToStringTag = Symbol.toStringTag;
+const thisSymbolIterator = Symbol.iterator;
+// SECURITY (GHSA-jf8q-945g-9q4c): pristine refs for the namespace-based
+// dangerous-symbol check in `isDangerousCrossRealmSymbol`. Captured at module
+// load, before any sandbox code runs, so they cannot be redirected.
+const thisSymbolKeyFor = Symbol.keyFor;
+const thisStringPrototypeStartsWith = String.prototype.startsWith;
+const thisSymbolNodeJSUtilInspectCustom = Symbol.for('nodejs.util.inspect.custom');
+const thisSymbolNodeJSRejection = Symbol.for('nodejs.rejection');
+// SECURITY (post-GHSA-47x8 hardening): defense-in-depth — Node's util.promisify
+// uses Symbol.for('nodejs.util.promisify.custom') as a hook. If sandbox code
+// could ever provide a host-recognised version of this symbol on an object
+// passed to `util.promisify(...)`, Node would invoke the sandbox-defined
+// promisifier — likely with host-realm arguments. GHSA-m5q2-4fm3-vfqp later
+// turned this from a theoretical concern into a verified live exploit.
+const thisSymbolNodeJSUtilPromisifyCustom = Symbol.for('nodejs.util.promisify.custom');
+// SECURITY (GHSA-m5q2-4fm3-vfqp): the four stream brand symbols control Node's
+// duck typing for `Stream.is{Readable,Writable,Duplex,Transform}` checks; the
+// two webstream symbols expose internal hooks (closed-promise resolution and
+// controller error dispatch). Sandbox code installing any of these on a host
+// object steers host-side control flow. The setup-sandbox.js dangerous-symbol
+// set must stay in sync with this list.
+const thisSymbolNodeJSStreamReadable = Symbol.for('nodejs.stream.readable');
+const thisSymbolNodeJSStreamWritable = Symbol.for('nodejs.stream.writable');
+const thisSymbolNodeJSStreamDuplex = Symbol.for('nodejs.stream.duplex');
+const thisSymbolNodeJSStreamTransform = Symbol.for('nodejs.stream.transform');
+const thisSymbolNodeJSWebstreamIsClosedPromise = Symbol.for('nodejs.webstream.isClosedPromise');
+const thisSymbolNodeJSWebstreamControllerErrorFunction = Symbol.for('nodejs.webstream.controllerErrorFunction');
+// SECURITY (GHSA-jf8q-945g-9q4c): the `nodejs.stream.{disturbed,errored}` brand symbols hold a
+// stream's consumed/errored state. Node's `stream.Readable.isDisturbed(s)` and `isErrored(s)` read
+// them directly off the raw object. Sandbox code writing these onto a host stream (via the bridge
+// `set`/`defineProperty`/`Reflect.set` traps) flips host-side state checks — e.g. resetting a fully
+// consumed stream's `isDisturbed` from true back to false. Same class as the GHSA-m5q2 brand
+// symbols. Listing them by identity is now only regression documentation — the namespace check
+// in `isDangerousCrossRealmSymbol` below is the actual boundary, so the list going stale as Node
+// adds `nodejs.*` symbols is no longer a security gap.
+const thisSymbolNodeJSStreamDisturbed = Symbol.for('nodejs.stream.disturbed');
+const thisSymbolNodeJSStreamErrored = Symbol.for('nodejs.stream.errored');
+
+function isDangerousCrossRealmSymbol(key) {
+	if (typeof key !== 'symbol') return false;
+	// SECURITY (GHSA-jf8q-945g-9q4c): namespace-based catch-all, symmetric to the
+	// sandbox-side `Symbol.for` override and `isDangerousSymbol`. Any REGISTERED
+	// symbol whose global key is in the reserved `nodejs.` namespace is a Node
+	// internal brand and must never be installed on / read from a host object
+	// through the bridge, regardless of the explicit list below. `Symbol.keyFor`
+	// returns a string only for registered symbols, so well-known symbols and
+	// sandbox-local surrogates are unaffected. Closes the recurring "list goes
+	// stale as Node adds nodejs.* symbols" gap (jf8q after GHSA-m5q2).
+	const nsKey = thisSymbolKeyFor(key);
+	if (typeof nsKey === 'string' && thisReflectApply(thisStringPrototypeStartsWith, nsKey, ['nodejs.'])) return true;
+	return (
+		key === thisSymbolNodeJSUtilInspectCustom ||
+		key === thisSymbolNodeJSRejection ||
+		key === thisSymbolNodeJSUtilPromisifyCustom ||
+		key === thisSymbolNodeJSStreamReadable ||
+		key === thisSymbolNodeJSStreamWritable ||
+		key === thisSymbolNodeJSStreamDuplex ||
+		key === thisSymbolNodeJSStreamTransform ||
+		key === thisSymbolNodeJSWebstreamIsClosedPromise ||
+		key === thisSymbolNodeJSWebstreamControllerErrorFunction ||
+		// SECURITY (GHSA-jf8q-945g-9q4c):
+		key === thisSymbolNodeJSStreamDisturbed ||
+		key === thisSymbolNodeJSStreamErrored
+	);
+}
+
+// Custom inspect function installed on every host-side proxy target so that
+// Node 26+ util.inspect produces useful output for bridged values. Starting
+// in Node 26, util.inspect formats proxies as `Proxy(target)` even with the
+// default `showProxy: false`, and reads `Symbol.for('nodejs.util.inspect.custom')`
+// directly off the raw target — bypassing the proxy `get` trap entirely. vm2's
+// proxy targets are intentionally empty `{}` / `[]` placeholders (real data
+// lives behind the trap), so without this function the user sees the literal
+// `Proxy(Proxy({}))`. Walking `this` (the outer proxy) with Reflect routes
+// every read through the bridge traps, so the rendered representation never
+// leaks anything more than the proxy already exposes.
+//
+// SECURITY: the proxy's `get`, `ownKeys`, and `getOwnPropertyDescriptor`
+// traps already strip `nodejs.util.inspect.custom` from any sandbox-visible
+// view (see `isDangerousCrossRealmSymbol`). The property is installed as
+// `configurable: true` so those traps may legitimately report it absent
+// without violating proxy invariants. Sandbox code therefore cannot reach
+// this function — only Node's host-side util.inspect, which obtains the raw
+// target via the `[[ProxyTarget]]` internal slot (a host capability).
+// Circular-reference guard for thisInspectProxyAsRepresentation. Node's
+// util.inspect tracks seen values across normal property walks, but does NOT
+// carry that tracking across `inspect.custom` calls — every fresh object the
+// callback returns starts a new "seen" frame. Without our own guard, a proxy
+// that references itself (e.g. `o.self = o`) would recurse until util.inspect's
+// depth limit, producing a deeply nested output instead of `[Circular]`.
+const thisInspectInFlight = new ThisWeakMap();
+function thisInspectProxyAsRepresentation(depth, opts, inspectFn) {
+	// `this` is the outer host-side proxy. Build a plain representation by
+	// walking own keys via Reflect — every access flows through the bridge,
+	// so the rendered view matches the sandbox-side object.
+	let isArr = false;
+	if (thisReflectApply(thisWeakMapHas, thisInspectInFlight, [this])) {
+		return '[Circular]';
+	}
+	thisReflectApply(thisWeakMapSet, thisInspectInFlight, [this, true]);
+	try {
+		isArr = thisArrayIsArray(this);
+		const repr = isArr ? [] : {};
+		const keys = thisReflectOwnKeys(this);
+		for (let i = 0; i < keys.length; i++) {
+			const key = keys[i];
+			// Defense in depth: never let our own marker symbol surface in the
+			// representation, even if a trap somehow returns it.
+			if (key === thisSymbolNodeJSUtilInspectCustom) continue;
+			let desc;
+			try {
+				desc = thisReflectGetOwnPropertyDescriptor(this, key);
+			} catch (e) {
+				continue;
+			}
+			if (!desc) continue;
+			// Strip the descriptor's prototype to avoid prototype pollution from
+			// attacker-tampered Object.prototype reaching defineProperty.
+			thisReflectSetPrototypeOf(desc, null);
+			try {
+				thisReflectDefineProperty(repr, key, desc);
+			} catch (e) {
+				// Skip keys that can't be defined on a plain object/array
+				// (e.g. invalid array indices on an object).
+			}
+		}
+		return inspectFn(repr, opts);
+	} catch (e) {
+		// Best-effort fallback: if anything in the proxy chain throws,
+		// fall through to a simple placeholder.
+		return isArr ? '[ ... ]' : '{ ... }';
+	} finally {
+		thisReflectApply(thisWeakMapDelete, thisInspectInFlight, [this]);
+	}
+}
+
+/**
+ * VMError.
+ *
+ * @public
+ * @extends {Error}
+ */
+class VMError extends Error {
+	/**
+	 * Create VMError instance.
+	 *
+	 * @public
+	 * @param {string} message - Error message.
+	 * @param {string} code - Error code.
+	 */
+	constructor(message, code) {
+		super(message);
+
+		this.name = 'VMError';
+		this.code = code;
+
+		thisErrorCaptureStackTrace(this, this.constructor);
+	}
+}
+
+thisGlobalPrototypes['VMError'] = VMError.prototype;
+
+function thisUnexpected() {
+	return new VMError('Unexpected');
+}
+
+if (!thisReflectSetPrototypeOf(exports, null)) throw thisUnexpected();
+
+function thisSafeGetOwnPropertyDescriptor(obj, key) {
+	const desc = thisReflectGetOwnPropertyDescriptor(obj, key);
+	if (!desc) return desc;
+	if (!thisReflectSetPrototypeOf(desc, null)) throw thisUnexpected();
+	return desc;
+}
+
+function thisThrowCallerCalleeArgumentsAccess(key) {
+	'use strict';
+	thisThrowCallerCalleeArgumentsAccess[key];
+	return thisUnexpected();
+}
+
+function thisIdMapping(factory, other) {
+	return other;
+}
+
+const thisThrowOnKeyAccessHandler = thisObjectFreeze({
+	__proto__: null,
+	get(target, key, receiver) {
+		if (key === 'isProxy') return true;
+		if (typeof key === 'symbol') {
+			key = thisReflectApply(thisSymbolToString, key, []);
+		} else if (key === 'href') {
+			// Fixes util.inspect in Node.js 22 that performs checks for URL by accessing the href property.
+			return undefined;
+		}
+		throw new VMError(`Unexpected access to key '${key}'`);
+	},
+});
+
+const emptyFrozenObject = thisObjectFreeze({
+	__proto__: null,
+});
+
+const thisThrowOnKeyAccess = new ThisProxy(emptyFrozenObject, thisThrowOnKeyAccessHandler);
+
+function SafeBase() {}
+
+if (
+	!thisReflectDefineProperty(SafeBase, 'prototype', {
+		__proto__: null,
+		value: thisThrowOnKeyAccess,
+	})
+)
+	throw thisUnexpected();
+
+function SHARED_FUNCTION() {}
+
+const TEST_PROXY_HANDLER = thisObjectFreeze({
+	__proto__: thisThrowOnKeyAccess,
+	construct() {
+		return this;
+	},
+});
+
+function thisIsConstructor(obj) {
+	// Note: obj@any(unsafe)
+	const Func = new ThisProxy(obj, TEST_PROXY_HANDLER);
+	try {
+		new Func();
+		return true;
+	} catch (e) {
+		return false;
+	}
+}
+
+function thisCreateTargetObject(obj, proto) {
+	// Note: obj@any(unsafe) proto@any(unsafe) returns@this(unsafe) throws@this(unsafe)
+	let base;
+	if (typeof obj === 'function') {
+		if (thisIsConstructor(obj)) {
+			// Bind the function since bound functions do not have a prototype property.
+			base = thisReflectApply(thisFunctionBind, SHARED_FUNCTION, [null]);
+		} else {
+			base = () => {};
+		}
+	} else if (thisArrayIsArray(obj)) {
+		base = [];
+	} else {
+		return { __proto__: proto };
+	}
+	if (!thisReflectSetPrototypeOf(base, proto)) throw thisUnexpected();
+	return base;
+}
+
+function createBridge(otherInit, registerProxy) {
+	const mappingOtherToThis = new ThisWeakMap();
+	const protoMappings = new ThisMap();
+	const protoName = new ThisMap();
+	// SECURITY (GHSA-v37h-5mfm-c47c): Module-local, unforgeable construction
+	// token. Every legitimate construction of a handler class must pass this
+	// Symbol as the first argument to the constructor. Sandbox code that
+	// leaks a handler via util.inspect+showProxy cannot read the token — it
+	// is closure-scoped and never assigned to any object reachable from a
+	// handler, a prototype, or the exported `result` bag. Any
+	// `new pp.constructor(...)`, `Reflect.construct(Handler, ...)`, or
+	// subclass instantiation from sandbox code will therefore fail the
+	// token check and throw `VMError(OPNA)`.
+	const constructionToken = Symbol('vm2 bridge handler construction');
+	// Store wrapped objects in a WeakMap keyed by handler instance.
+	// This prevents exposure of raw objects via util.inspect with showProxy:true,
+	// which can leak the handler's internal state.
+	const handlerToObject = new ThisWeakMap();
+	// Store factory functions in a WeakMap keyed by handler instance.
+	// This prevents exposure of factory functions via util.inspect with showProxy:true,
+	// which would allow attackers to create new handlers wrapping attacker-controlled objects.
+	const handlerToFactory = new ThisWeakMap();
+	// SECURITY (GHSA-qcp4-v2jj-fjx8): canonical proxy target keyed by handler.
+	// util.inspect(showProxy:true) leaks handlers to sandbox code; without this
+	// map a leaked handler can be invoked as a plain function with a forged
+	// `target` (e.g. handler.getPrototypeOf(Buffer)) to walk arbitrary host
+	// prototype chains. Trap methods that read `target` validate it against
+	// this map at entry; the Proxy machinery always supplies the canonical
+	// target so legitimate dispatch is unaffected.
+	const handlerToTarget = new ThisWeakMap();
+
+	// Closure-scoped function to retrieve the wrapped object from a handler.
+	// This is NOT a method on BaseHandler, so it cannot be called by attackers
+	// even if they obtain a reference to the handler via showProxy.
+	//
+	// SECURITY (GHSA-v37h-5mfm-c47c): If `handler` has no WeakMap entry it
+	// is not a real handler -- it may be a sandbox-forged object whose
+	// prototype is `BaseHandler.prototype` (e.g., via
+	// `Object.setPrototypeOf({}, pp)`) or a forged receiver passed via
+	// `pp.set.call(forged, ...)`. In that case every trap must refuse to
+	// operate, so we throw VMError immediately rather than returning
+	// `undefined` (which subtly causes `getOwnPropertyDescriptor(undefined, ...)`
+	// to blow up deeper inside a trap, with an unpredictable error type).
+	function getHandlerObject(handler) {
+		if (!thisReflectApply(thisWeakMapHas, handlerToObject, [handler])) {
+			throw new VMError(OPNA);
+		}
+		return thisReflectApply(thisWeakMapGet, handlerToObject, [handler]);
+	}
+
+	// SECURITY (GHSA-qcp4-v2jj-fjx8): enforce the invariant that a handler trap
+	// only operates on the proxy target it was paired with at construction time.
+	// Two distinct failure modes are caught:
+	//   - Forged `this` (handler not registered): WeakMap.has returns false.
+	//   - Forged `target` (registered handler, attacker-supplied target): the
+	//     stored target does not strict-equal the supplied one.
+	// Throws VMError(OPNA) on either, the same error used elsewhere for
+	// boundary violations, so attackers learn nothing about internal state.
+	function validateHandlerTarget(handler, target) {
+		if (!thisReflectApply(thisWeakMapHas, handlerToTarget, [handler])) throw new VMError(OPNA);
+		if (thisReflectApply(thisWeakMapGet, handlerToTarget, [handler]) !== target) throw new VMError(OPNA);
+	}
+
+	// Closure-scoped function to retrieve the factory from a handler.
+	// This is NOT a method on BaseHandler, so it cannot be called by attackers
+	// even if they obtain a reference to the handler via showProxy.
+	function getHandlerFactory(handler) {
+		return thisReflectApply(thisWeakMapGet, handlerToFactory, [handler]);
+	}
+
+	// Closure-scoped function to convert other-realm objects to this-realm with factory.
+	// This is NOT a method on BaseHandler, so it cannot be called by attackers
+	// even if they obtain a reference to the handler via showProxy.
+	function handlerFromOtherWithContext(handler, other) {
+		return thisFromOtherWithFactory(getHandlerFactory(handler), other);
+	}
+
+	// Closure-scoped function to prevent extensions on a proxy target.
+	// This is NOT a method on BaseHandler, so it cannot be called by attackers
+	// even if they obtain a reference to the handler via showProxy.
+	// Unlike other handler methods which use getHandlerObject(this), the old
+	// doPreventExtensions accepted `object` as a direct parameter, allowing
+	// attackers to pass crafted objects. Now it retrieves `object` from the WeakMap.
+	function doPreventExtensions(handler, target) {
+		// Note: handler@this(unsafe) target@this(unsafe) throws@this(unsafe)
+		const object = getHandlerObject(handler); // @other(unsafe)
+		let keys; // @other(safe-array-of-prim)
+		try {
+			keys = otherReflectOwnKeys(object);
+		} catch (e) {
+			// @other(unsafe)
+			throw thisFromOtherForThrow(e);
+		}
+		for (let i = 0; i < keys.length; i++) {
+			const key = keys[i]; // @prim
+			// Skip dangerous cross-realm symbols
+			if (isDangerousCrossRealmSymbol(key)) continue;
+			let desc;
+			try {
+				desc = otherSafeGetOwnPropertyDescriptor(object, key);
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			}
+			if (!desc) continue;
+			// SECURITY (GHSA-633r-hq9m-c4ff): route the copied descriptor through the
+			// same hook the getOwnPropertyDescriptor trap uses. For a read-only view
+			// that hook strips a non-configurable accessor's `set`; without routing it
+			// here, the trap reports the accessor with `set: undefined` while this
+			// function writes the live wrapped `set` onto the (now non-configurable)
+			// proxy target, and V8's proxy invariant check (trap result must be
+			// compatible with a non-configurable target property) throws a TypeError on
+			// the next getOwnPropertyDescriptor / isExtensible / Object.freeze of the
+			// proxy. Routing here keeps the target consistent with the trap for every
+			// handler variant (BaseHandler leaves `set` intact, so it is unaffected).
+			desc = handler.getOwnPropertyDescriptorDesc(target, key, desc);
+			if (!desc) continue;
+			if (!desc.configurable) {
+				const current = thisSafeGetOwnPropertyDescriptor(target, key);
+				if (current && !current.configurable) continue;
+				if (desc.get || desc.set) {
+					// Build a clean accessor descriptor. The hook may leave a stray
+					// `value` on function caller/arguments/callee accessors; passing a
+					// descriptor with both an accessor and a value to defineProperty
+					// throws, so construct a fresh accessor-only descriptor here.
+					desc = {
+						__proto__: null,
+						get: handlerFromOtherWithContext(handler, desc.get),
+						set: handlerFromOtherWithContext(handler, desc.set),
+						enumerable: desc.enumerable === true,
+						configurable: false,
+					};
+				} else if (
+					typeof object === 'function' &&
+					(key === 'caller' || key === 'callee' || key === 'arguments')
+				) {
+					desc.value = null;
+				} else {
+					desc.value = handlerFromOtherWithContext(handler, desc.value);
+				}
+			} else {
+				if (desc.get || desc.set) {
+					desc = {
+						__proto__: null,
+						configurable: true,
+						enumerable: desc.enumerable,
+						writable: true,
+						value: null,
+					};
+				} else {
+					desc.value = null;
+				}
+			}
+			if (!thisReflectDefineProperty(target, key, desc)) throw thisUnexpected();
+		}
+		if (!thisReflectPreventExtensions(target)) throw thisUnexpected();
+	}
+
+	// (Removed PR #563's `neutralizeArraySpecies` / `neutralizeArraySpeciesArgs`
+	// helpers — superseded by `neutralizeArraySpeciesOn` / `neutralizeArraySpeciesBatch`
+	// + `restoreArraySpeciesOn` / `restoreArraySpeciesBatch` defined below, which
+	// add restore-on-exit so host arrays' `constructor` isn't permanently mutated.
+	// The PR's set/defineProperty trap interception of `constructor` writes is
+	// preserved as a complementary defense layer.)
+
+	function thisAddProtoMapping(proto, other, name) {
+		// Note: proto@this(unsafe) other@other(unsafe) name@this(unsafe) throws@this(unsafe)
+		thisReflectApply(thisMapSet, protoMappings, [proto, thisIdMapping]);
+		thisReflectApply(thisMapSet, protoMappings, [
+			other,
+			(factory, object, preventUnwrap) => thisProxyOther(factory, object, proto, preventUnwrap),
+		]);
+		if (name) thisReflectApply(thisMapSet, protoName, [proto, name]);
+	}
+
+	function thisAddProtoMappingFactory(protoFactory, other, name) {
+		// Note: protoFactory@this(unsafe) other@other(unsafe) name@this(unsafe) throws@this(unsafe)
+		let proto;
+		thisReflectApply(thisMapSet, protoMappings, [
+			other,
+			(factory, object, preventUnwrap) => {
+				if (!proto) {
+					proto = protoFactory();
+					thisReflectApply(thisMapSet, protoMappings, [proto, thisIdMapping]);
+					if (name) thisReflectApply(thisMapSet, protoName, [proto, name]);
+				}
+				return thisProxyOther(factory, object, proto, preventUnwrap);
+			},
+		]);
+	}
+
+	const result = {
+		__proto__: null,
+		globalPrototypes: thisGlobalPrototypes,
+		// SECURITY (GHSA-j89j-5m6r-cr2q): expose THIS realm's global object so the
+		// OTHER bridge can identify it and refuse to wrap-and-deliver it across the
+		// boundary (see the `otherGlobal` denial in thisFromOtherWithFactory /
+		// thisEnsureThis / thisFromOtherForThrow).
+		global: thisRealmGlobal,
+		safeGetOwnPropertyDescriptor: thisSafeGetOwnPropertyDescriptor,
+		fromArguments: thisFromOtherArguments,
+		from: thisFromOther,
+		fromWithFactory: thisFromOtherWithFactory,
+		ensureThis: thisEnsureThis,
+		mapping: mappingOtherToThis,
+		connect: thisConnect,
+		reflectSet: thisReflectSet,
+		reflectGet: thisReflectGet,
+		reflectDefineProperty: thisReflectDefineProperty,
+		reflectDeleteProperty: thisReflectDeleteProperty,
+		reflectApply: thisReflectApply,
+		reflectConstruct: thisReflectConstruct,
+		reflectHas: thisReflectHas,
+		reflectOwnKeys: thisReflectOwnKeys,
+		reflectEnumerate: thisReflectEnumerate,
+		reflectGetPrototypeOf: thisReflectGetPrototypeOf,
+		// SECURITY (GHSA-v6mx-mf47-r5wg): expose so the *other* bridge can
+		// identify this host-realm function in its dangerous-proto-mutator set.
+		reflectSetPrototypeOf: thisReflectSetPrototypeOf,
+		reflectIsExtensible: thisReflectIsExtensible,
+		reflectPreventExtensions: thisReflectPreventExtensions,
+		objectHasOwnProperty: thisObjectHasOwnProperty,
+		weakMapSet: thisWeakMapSet,
+		addProtoMapping: thisAddProtoMapping,
+		addProtoMappingFactory: thisAddProtoMappingFactory,
+		defaultFactory,
+		protectedFactory,
+		readonlyFactory,
+		VMError,
+	};
+
+	const isHost = typeof otherInit !== 'object';
+
+	if (isHost) {
+		otherInit = otherInit(result, registerProxy);
+	}
+
+	result.other = otherInit;
+
+	const {
+		globalPrototypes: otherGlobalPrototypes,
+		// SECURITY (GHSA-j89j-5m6r-cr2q): the OTHER realm's global object. On the
+		// sandbox-side bridge (`!isHost`) this is the HOST global — the object V8
+		// substitutes for a sloppy host function's nullish `this`. Read-side
+		// chokepoints below refuse to deliver it into the sandbox.
+		global: otherGlobal,
+		safeGetOwnPropertyDescriptor: otherSafeGetOwnPropertyDescriptor,
+		fromArguments: otherFromThisArguments,
+		from: otherFromThis,
+		mapping: mappingThisToOther,
+		reflectSet: otherReflectSet,
+		reflectGet: otherReflectGet,
+		reflectDefineProperty: otherReflectDefineProperty,
+		reflectDeleteProperty: otherReflectDeleteProperty,
+		reflectApply: otherReflectApply,
+		reflectConstruct: otherReflectConstruct,
+		reflectHas: otherReflectHas,
+		reflectOwnKeys: otherReflectOwnKeys,
+		reflectEnumerate: otherReflectEnumerate,
+		reflectGetPrototypeOf: otherReflectGetPrototypeOf,
+		reflectIsExtensible: otherReflectIsExtensible,
+		reflectPreventExtensions: otherReflectPreventExtensions,
+		objectHasOwnProperty: otherObjectHasOwnProperty,
+		weakMapSet: otherWeakMapSet,
+	} = otherInit;
+
+	// SECURITY (GHSA-x6m4-chr9-cg97): the OTHER realm's Error.prototype. On the
+	// sandbox-side bridge (`!isHost`) OTHER is the host realm, so this is the
+	// host `Error.prototype`. Used to gate `.stack` redaction to genuine host
+	// errors — an ordinary bridge-crossing object that merely has a `stack`
+	// string property is left untouched.
+	const otherErrorPrototype = otherGlobalPrototypes ? otherGlobalPrototypes.Error : null;
+	// SECURITY (GHSA-x6m4-chr9-cg97): the OTHER realm's `Object.prototype.toString`.
+	// Object.prototype.toString reports "[object Error]" for any object carrying
+	// the V8-internal [[ErrorData]] slot, which is set at construction and is
+	// immune to prototype-chain severance (the v6mx / cfcw attack family can set
+	// `TypeError.prototype.__proto__ = null` host-side, defeating a pure
+	// proto-walk classifier — see the OR below). We combine both signals so
+	// neither severance (defeats the walk, caught by the brand) nor a
+	// `Symbol.toStringTag` override (defeats the brand, caught by the walk) can
+	// smuggle a host error's `.stack` past redaction.
+	let otherObjectToString = null;
+	try {
+		if (otherGlobalPrototypes && otherGlobalPrototypes.Object) {
+			const d = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Object, 'toString');
+			if (d && typeof d.value === 'function') otherObjectToString = d.value;
+		}
+	} catch (e) {
+		/* best effort — proto-walk remains as the fallback classifier */
+	}
+	function isOtherErrorObject(object) {
+		if (object === null || (typeof object !== 'object' && typeof object !== 'function')) return false;
+		// Signal 1: the [[ErrorData]] brand via Object.prototype.toString. Robust
+		// to prototype-chain severance; only defeatable by a Symbol.toStringTag
+		// override (covered by signal 2).
+		if (otherObjectToString) {
+			let tag;
+			try {
+				tag = otherReflectApply(otherObjectToString, object, []);
+			} catch (e) {
+				tag = null;
+			}
+			if (tag === '[object Error]') return true;
+		}
+		// Signal 2: prototype-chain walk to the host Error.prototype. Robust to a
+		// Symbol.toStringTag override; defeatable only by severance (covered by
+		// signal 1).
+		if (otherErrorPrototype) {
+			let proto;
+			try {
+				proto = otherReflectGetPrototypeOf(object);
+			} catch (e) {
+				return false;
+			}
+			let hops = 0;
+			while (proto !== null && hops < 100) {
+				if (proto === otherErrorPrototype) return true;
+				try {
+					proto = otherReflectGetPrototypeOf(proto);
+				} catch (e) {
+					return false;
+				}
+				hops++;
+			}
+		}
+		return false;
+	}
+
+	// SECURITY (GHSA-489w-w794-jq94): cached OTHER-realm binary-data intrinsics
+	// used to bound a host ArrayBufferView's backing store on delivery.
+	//
+	// Node serves small Buffer allocations out of ONE shared 64 KiB backing
+	// ArrayBuffer, so a host-produced Buffer (`zlib.deflateSync(...)`, an
+	// embedder-supplied `Buffer.from(secret)`, a callback argument, ...) is
+	// usually a small WINDOW into that pool. Delivering its `.buffer` verbatim
+	// hands the sandbox the entire pool — every other host-realm buffer living
+	// in it, readable AND writable. GHSA-fcqc-726x-5wfc closed the sandbox-side
+	// half of this (`depoolBuffer` in setup-sandbox.js); the host->sandbox
+	// direction has to be closed here, at the bridge, because no sandbox-side
+	// factory ever touches a buffer the host allocated.
+	//
+	// Every reference is captured at bridge init, before any sandbox code can
+	// run (CLAUDE.md principle 6), and each is independently feature-gated: a
+	// realm without `DataView` / `SharedArrayBuffer` simply leaves that slot
+	// null and the corresponding branch never runs.
+	let otherTypedArrayPrototype = null;
+	let otherDataViewPrototype = null;
+	let otherArrayBufferPrototype = null;
+	let otherSharedArrayBufferPrototype = null;
+	let otherTypedArrayBufferGetter = null;
+	let otherTypedArrayByteOffsetGetter = null;
+	let otherTypedArrayByteLengthGetter = null;
+	let otherDataViewBufferGetter = null;
+	let otherDataViewByteOffsetGetter = null;
+	let otherDataViewByteLengthGetter = null;
+	let otherArrayBufferByteLengthGetter = null;
+	let otherArrayBufferSlice = null;
+	let otherArrayBufferIsView = null;
+	let otherSharedArrayBufferByteLengthGetter = null;
+	let otherSharedArrayBufferSlice = null;
+	// SECURITY (GHSA-489w-w794-jq94): the legacy `Buffer.prototype.parent` /
+	// `Buffer.prototype.offset` getters (DEP0004). `parent` is a second name for
+	// the SAME backing store as `.buffer` and `offset` for the same value as
+	// `byteOffset`, so the rules below already cover both when the property is
+	// read; these references exist so the RAW getters can be denied delivery like
+	// the `.buffer` getters, closing the extraction route. Host `Buffer` is not in
+	// `otherGlobalPrototypes` (it is not a JS intrinsic), so it is resolved off the
+	// OTHER realm's global — feature-gated, since `Buffer` may be absent (a
+	// non-Node host) and either accessor may be dropped by a future Node.
+	let otherBufferParentGetter = null;
+	let otherBufferOffsetGetter = null;
+	function otherCacheAccessor(proto, key) {
+		// Note: proto@other(unsafe) key@prim -- read via the safe descriptor
+		// helper so no host getter is invoked here.
+		const desc = otherSafeGetOwnPropertyDescriptor(proto, key);
+		if (desc && typeof desc.get === 'function') return desc.get;
+		return null;
+	}
+	function otherCacheMethod(proto, key) {
+		const desc = otherSafeGetOwnPropertyDescriptor(proto, key);
+		if (desc && typeof desc.value === 'function') return desc.value;
+		return null;
+	}
+	function otherCacheObject(object, key) {
+		const desc = otherSafeGetOwnPropertyDescriptor(object, key);
+		if (desc && desc.value !== null && typeof desc.value === 'object') return desc.value;
+		return null;
+	}
+	try {
+		if (otherGlobalPrototypes) {
+			if (otherGlobalPrototypes.TypedArray) {
+				otherTypedArrayPrototype = otherGlobalPrototypes.TypedArray;
+				otherTypedArrayBufferGetter = otherCacheAccessor(otherTypedArrayPrototype, 'buffer');
+				otherTypedArrayByteOffsetGetter = otherCacheAccessor(otherTypedArrayPrototype, 'byteOffset');
+				otherTypedArrayByteLengthGetter = otherCacheAccessor(otherTypedArrayPrototype, 'byteLength');
+			}
+			if (otherGlobalPrototypes.DataView) {
+				otherDataViewPrototype = otherGlobalPrototypes.DataView;
+				otherDataViewBufferGetter = otherCacheAccessor(otherDataViewPrototype, 'buffer');
+				otherDataViewByteOffsetGetter = otherCacheAccessor(otherDataViewPrototype, 'byteOffset');
+				otherDataViewByteLengthGetter = otherCacheAccessor(otherDataViewPrototype, 'byteLength');
+			}
+			if (otherGlobalPrototypes.ArrayBuffer) {
+				otherArrayBufferPrototype = otherGlobalPrototypes.ArrayBuffer;
+				otherArrayBufferByteLengthGetter = otherCacheAccessor(otherArrayBufferPrototype, 'byteLength');
+				otherArrayBufferSlice = otherCacheMethod(otherArrayBufferPrototype, 'slice');
+				// `ArrayBuffer.isView` is a real internal-slot check — neither
+				// prototype severance nor a forged `Symbol.toStringTag` can fake it,
+				// and it cannot throw. It is the hot-path gate for the bounding below.
+				//
+				// SECURITY (GHSA-489w-w794-jq94): resolve it from the OTHER realm's
+				// GLOBAL `ArrayBuffer` first. Going through
+				// `ArrayBuffer.prototype.constructor` alone is not safe: a host app
+				// that shadows that one property before vm2 loads would leave this
+				// null and silently disable the whole defense. The `constructor`
+				// route stays only as a fallback for a realm that does not expose
+				// `ArrayBuffer` on its global, and a null result now fails CLOSED
+				// (see otherIsView / otherBoundedViewStore).
+				if (otherGlobal) {
+					const abGlobal = otherSafeGetOwnPropertyDescriptor(otherGlobal, 'ArrayBuffer');
+					if (abGlobal && typeof abGlobal.value === 'function') {
+						otherArrayBufferIsView = otherCacheMethod(abGlobal.value, 'isView');
+					}
+				}
+				if (otherArrayBufferIsView === null) {
+					const abCtor = otherCacheMethod(otherArrayBufferPrototype, 'constructor');
+					if (abCtor !== null) otherArrayBufferIsView = otherCacheMethod(abCtor, 'isView');
+				}
+			}
+			if (otherGlobalPrototypes.SharedArrayBuffer) {
+				otherSharedArrayBufferPrototype = otherGlobalPrototypes.SharedArrayBuffer;
+				otherSharedArrayBufferByteLengthGetter =
+					otherCacheAccessor(otherSharedArrayBufferPrototype, 'byteLength');
+				otherSharedArrayBufferSlice = otherCacheMethod(otherSharedArrayBufferPrototype, 'slice');
+			}
+		}
+		if (otherGlobal) {
+			// `Buffer` is exposed on Node's global object through a LAZY getter, not
+			// as a data property, so both descriptor shapes have to be handled. The
+			// getter is invoked once here, at bridge init, on the OTHER realm's own
+			// global — no sandbox-controlled input reaches it.
+			const bufferDesc = otherSafeGetOwnPropertyDescriptor(otherGlobal, 'Buffer');
+			let otherBufferCtor = null;
+			if (bufferDesc) {
+				if (typeof bufferDesc.value === 'function') {
+					otherBufferCtor = bufferDesc.value;
+				} else if (typeof bufferDesc.get === 'function') {
+					const lazy = otherReflectApply(bufferDesc.get, otherGlobal, []);
+					if (typeof lazy === 'function') otherBufferCtor = lazy;
+				}
+			}
+			if (otherBufferCtor !== null) {
+				const bufferProto = otherCacheObject(otherBufferCtor, 'prototype');
+				if (bufferProto !== null) {
+					otherBufferParentGetter = otherCacheAccessor(bufferProto, 'parent');
+					otherBufferOffsetGetter = otherCacheAccessor(bufferProto, 'offset');
+				}
+			}
+		}
+	} catch (e) {
+		/* best effort — an uncached slot leaves the bounding below inert */
+	}
+
+	// SECURITY (GHSA-489w-w794-jq94): does `object`'s OTHER-realm prototype chain
+	// pass through `proto`? Used only to pick the matching cached intrinsic
+	// getters for a host view / backing store, so no getter is ever invoked on a
+	// foreign receiver and no throw/catch brand probe is needed. Both prototypes
+	// live in `protectedHostObjects`, so sandbox code cannot sever the chain to
+	// dodge classification.
+	function otherProtoChainHas(object, proto) {
+		if (proto === null) return false;
+		let current = object;
+		for (let hops = 0; hops < 100; hops++) {
+			try {
+				current = otherReflectGetPrototypeOf(current);
+			} catch (e) {
+				return false;
+			}
+			if (current === null || current === undefined) return false;
+			if (current === proto) return true;
+		}
+		return false;
+	}
+
+	// SECURITY (GHSA-489w-w794-jq94): is `value` an OTHER-realm ArrayBufferView?
+	// `ArrayBuffer.isView` reads the internal slot, so neither prototype severance
+	// nor a forged `Symbol.toStringTag` can fake it, and it cannot throw. This is
+	// the hot-path gate: everything below runs only for genuine host views.
+	function otherIsView(value) {
+		if (value === null || typeof value !== 'object') return false;
+		if (otherArrayBufferIsView !== null) {
+			return otherReflectApply(otherArrayBufferIsView, undefined, [value]) === true;
+		}
+		// SECURITY (GHSA-489w-w794-jq94): the brand check is unavailable — the OTHER
+		// realm exposes neither a global `ArrayBuffer.isView` nor a usable
+		// `ArrayBuffer.prototype.constructor.isView`. Do NOT silently answer "not a
+		// view", which would disable the bounding for every host buffer. Fall back
+		// to prototype-chain classification so anything that walks to a host view
+		// prototype is still routed into `otherBoundedViewStore`, which refuses it.
+		return (
+			(otherDataViewPrototype !== null && otherProtoChainHas(value, otherDataViewPrototype)) ||
+			(otherTypedArrayPrototype !== null && otherProtoChainHas(value, otherTypedArrayPrototype))
+		);
+	}
+
+	// SECURITY (GHSA-489w-w794-jq94): the OTHER-realm view's backing store and its
+	// OWN extent within it, all read through the cached intrinsic getters. Returns
+	// null when the view cannot be classified or read — callers must treat that as
+	// "cannot prove bounded" and fail closed, not as "nothing to do".
+	function otherViewInfo(view) {
+		// Note: view@other(unsafe)
+		let bufferGetter = null;
+		let offsetGetter = null;
+		let lengthGetter = null;
+		if (otherDataViewPrototype !== null && otherProtoChainHas(view, otherDataViewPrototype)) {
+			bufferGetter = otherDataViewBufferGetter;
+			offsetGetter = otherDataViewByteOffsetGetter;
+			lengthGetter = otherDataViewByteLengthGetter;
+		} else if (otherTypedArrayPrototype !== null && otherProtoChainHas(view, otherTypedArrayPrototype)) {
+			bufferGetter = otherTypedArrayBufferGetter;
+			offsetGetter = otherTypedArrayByteOffsetGetter;
+			lengthGetter = otherTypedArrayByteLengthGetter;
+		}
+		if (bufferGetter === null || offsetGetter === null || lengthGetter === null) return null;
+		let store;
+		let byteOffset;
+		let byteLength;
+		try {
+			store = otherReflectApply(bufferGetter, view, []);
+			byteOffset = otherReflectApply(offsetGetter, view, []);
+			byteLength = otherReflectApply(lengthGetter, view, []);
+		} catch (e) {
+			// Only reachable for a DETACHED view on older V8 engines, where the
+			// getters throw instead of reporting 0.
+			return null;
+		}
+		if (typeof byteOffset !== 'number' || typeof byteLength !== 'number') return null;
+		return {__proto__: null, store: store, byteOffset: byteOffset, byteLength: byteLength};
+	}
+
+	// SECURITY (GHSA-489w-w794-jq94): the OTHER-realm backing store's size and
+	// the realm-correct `slice` used to copy out of it. Returns null when `value`
+	// is not a host ArrayBuffer / SharedArrayBuffer.
+	function otherBackingStoreInfo(value) {
+		// Note: value@other(unsafe)
+		if (value === null || typeof value !== 'object') return null;
+		let byteLengthGetter = null;
+		let slice = null;
+		if (otherArrayBufferPrototype !== null && otherProtoChainHas(value, otherArrayBufferPrototype)) {
+			byteLengthGetter = otherArrayBufferByteLengthGetter;
+			slice = otherArrayBufferSlice;
+		} else if (
+			otherSharedArrayBufferPrototype !== null &&
+			otherProtoChainHas(value, otherSharedArrayBufferPrototype)
+		) {
+			// SharedArrayBuffer-backed views are bounded exactly like plain ones:
+			// `SharedArrayBuffer.prototype.slice` returns a fresh SharedArrayBuffer
+			// holding only the view's bytes, so the wider shared store — and any
+			// host-realm view onto it — stops at the bridge.
+			byteLengthGetter = otherSharedArrayBufferByteLengthGetter;
+			slice = otherSharedArrayBufferSlice;
+		}
+		if (byteLengthGetter === null || slice === null) return null;
+		let byteLength;
+		try {
+			byteLength = otherReflectApply(byteLengthGetter, value, []);
+		} catch (e) {
+			return null;
+		}
+		if (typeof byteLength !== 'number') return null;
+		return {__proto__: null, byteLength: byteLength, slice: slice};
+	}
+
+	// SECURITY (GHSA-489w-w794-jq94): BACKING-STORE OWNERSHIP AT THE BRIDGE.
+	// `view` is a raw host ArrayBufferView (already brand-checked by the caller)
+	// and `value` a raw host value just read off one of its properties. The rule
+	// is by IDENTITY, not by property name: when `value` IS the view's backing
+	// store and the view does not own the whole store (`byteOffset !== 0 ||
+	// byteLength !== store.byteLength`), that store is SHARED — Node's 64 KiB
+	// Buffer pool in the canonical case — so we deliver a host-side copy of
+	// exactly the view's own bytes instead. Node exposes the same store under at
+	// least two names (`%TypedArray%.prototype.buffer` and the legacy
+	// `Buffer.prototype.parent`, DEP0004); keying on identity rather than on a
+	// name list covers both and any future alias. This extends the
+	// GHSA-fcqc-726x-5wfc rule to the host->sandbox direction.
+	//
+	// Consequence for a pooled host buffer: `hostBuf.buffer !== hostBuf.buffer`
+	// (a fresh copy per read) and writes through it are not host-visible. A host
+	// buffer that owns its store is untouched — same object, identity-stable,
+	// still shared — which is the only case where writing through `.buffer` ever
+	// had defined host-visible meaning.
+	function otherBoundedViewStore(view, value) {
+		// Note: view@other(unsafe) value@other(unsafe)
+		// SECURITY (GHSA-489w-w794-jq94): FAIL CLOSED when the `ArrayBuffer.isView`
+		// brand check could not be cached at all in a realm that HAS view
+		// prototypes. Reaching here then means `otherIsView` fell back to a
+		// prototype-chain walk, which host-side prototype severance can defeat — so
+		// the bounding can no longer be trusted for any object-valued read off this
+		// object. That state requires a host app to have shadowed both the global
+		// `ArrayBuffer` and `ArrayBuffer.prototype.constructor`; refusing loudly
+		// beats silently handing out Node's shared pool.
+		if (
+			otherArrayBufferIsView === null &&
+			(otherTypedArrayPrototype !== null || otherDataViewPrototype !== null)
+		) {
+			throw new VMError(OPNA);
+		}
+		const info = otherViewInfo(view);
+		if (info === null) {
+			// FAIL CLOSED. `view` carries the ArrayBufferView internal slot, yet this
+			// bridge could not read its extent — a realm that exposes
+			// `%TypedArray%.prototype` without its `buffer`/`byteOffset`/`byteLength`
+			// accessors, or a detached view on an engine whose getters throw. We
+			// cannot prove the value is bounded, so an ArrayBuffer coming off such a
+			// view is refused outright; delivering it is exactly the vulnerability,
+			// and silently substituting an empty store would corrupt legitimate data
+			// flows without any diagnosable signal. Anything that is NOT a backing
+			// store still crosses normally, so ordinary property reads on the view
+			// keep working.
+			if (otherBackingStoreInfo(value) === null) return value;
+			throw new VMError(OPNA);
+		}
+		if (value !== info.store) {
+			// SECURITY (GHSA-489w-w794-jq94): defense in depth. A backing store read
+			// off a host view that is NOT that view's own store can only have been
+			// planted by the embedder — an own data property or accessor shadowing
+			// `buffer` / `parent` with some other ArrayBuffer. The bridge has no
+			// extent to bound it to, and it is very likely another pooled store, so
+			// refuse it instead of delivering it raw. One identity compare on a path
+			// already taken; any non-store value still crosses normally.
+			if (otherBackingStoreInfo(value) !== null) throw new VMError(OPNA);
+			return value;
+		}
+		const store = otherBackingStoreInfo(value);
+		if (store === null) return value;
+		if (info.byteOffset === 0 && info.byteLength === store.byteLength) return value;
+		try {
+			return otherReflectApply(store.slice, value, [
+				info.byteOffset,
+				info.byteOffset + info.byteLength,
+			]);
+		} catch (e) {
+			// Fail CLOSED: a shared backing store must never reach the sandbox.
+			throw new VMError(OPNA);
+		}
+	}
+
+	// SECURITY (GHSA-489w-w794-jq94): does this host view get its backing store
+	// bounded on delivery? Used to keep the (`store`, `byteOffset`, `length`)
+	// triple self-consistent: once the store the sandbox receives starts at the
+	// view's own first byte, the view's offset INTO that store is 0, so the
+	// standard Node re-view idiom `Buffer.from(v.buffer, v.byteOffset, v.length)`
+	// keeps working instead of throwing a RangeError.
+	function otherViewStoreIsBounded(view) {
+		const info = otherViewInfo(view);
+		if (info === null) return false;
+		const store = otherBackingStoreInfo(info.store);
+		if (store === null) return false;
+		return info.byteOffset !== 0 || info.byteLength !== store.byteLength;
+	}
+
+	// Cache the other realm's Function constructors to block them from crossing the bridge.
+	// This prevents sandbox escape via indirect access paths like
+	// Object.getOwnPropertyDescriptor(Function.prototype, 'constructor').value
+	// We block all code-executing constructors: Function, AsyncFunction, GeneratorFunction, AsyncGeneratorFunction
+	// IMPORTANT: We must get these from otherGlobalPrototypes (the OTHER realm), not from
+	// local function instances which would give us THIS realm's constructors.
+	let otherFunctionCtor;
+	let otherAsyncFunctionCtor;
+	let otherGeneratorFunctionCtor;
+	let otherAsyncGeneratorFunctionCtor;
+	try {
+		const desc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Function, 'constructor');
+		if (desc) otherFunctionCtor = desc.value;
+	} catch (e) {
+		// If we can't get it, the get trap's constructor case still provides protection
+	}
+	// Get AsyncFunction, GeneratorFunction, AsyncGeneratorFunction constructors from OTHER realm
+	try {
+		if (otherGlobalPrototypes.AsyncFunction) {
+			const desc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.AsyncFunction, 'constructor');
+			if (desc) otherAsyncFunctionCtor = desc.value;
+		}
+	} catch (e) {}
+	try {
+		if (otherGlobalPrototypes.GeneratorFunction) {
+			const desc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.GeneratorFunction, 'constructor');
+			if (desc) otherGeneratorFunctionCtor = desc.value;
+		}
+	} catch (e) {}
+	try {
+		if (otherGlobalPrototypes.AsyncGeneratorFunction) {
+			const desc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.AsyncGeneratorFunction, 'constructor');
+			if (desc) otherAsyncGeneratorFunctionCtor = desc.value;
+		}
+	} catch (e) {}
+
+	function isDangerousFunctionConstructor(value) {
+		return (
+			value === otherFunctionCtor ||
+			value === otherAsyncFunctionCtor ||
+			value === otherGeneratorFunctionCtor ||
+			(otherAsyncGeneratorFunctionCtor && value === otherAsyncGeneratorFunctionCtor)
+		); // AsyncGeneratorFunction is not available on Node < 10
+	}
+
+	// SECURITY (GHSA-55hx): Cache the OTHER realm's Promise.prototype methods so
+	// the apply trap can identify host-realm Promise methods and wrap callbacks.
+	let otherPromiseThen;
+	let otherPromiseCatch;
+	let otherPromiseFinally;
+	// SECURITY (GHSA-2v2p-6j97-cjg9): cache the OTHER realm's `Promise.prototype`
+	// itself so the delivery chokepoint can brand-check a host value as a genuine
+	// promise WITHOUT invoking `.then` on it (which would mean a throw/catch per
+	// non-promise object crossing the bridge). `Object.prototype` is cached
+	// alongside it so the same walk can tell a same-realm chain terminus from a
+	// foreign-realm one (a second host realm's promises match neither cached
+	// prototype) — see `isOtherPromise`.
+	let otherPromisePrototype;
+	let otherObjectPrototype;
+	// SECURITY (GHSA-647f-g98j-qq25): cache host `Function.prototype.call` /
+	// `Function.prototype.apply` *individually* (they are also in the shared
+	// `applyIndirectionPrimitives` weakmap). The promise-boundary normalizer
+	// needs to distinguish the two because their argument shapes differ —
+	// `call(this, ...args)` vs `apply(this, argsArray)` — so it knows whether
+	// the effective callbacks live in the same arg list (shifted) or inside a
+	// nested array. Populated in the primitive-registration block below.
+	let otherFunctionCall;
+	let otherFunctionApply;
+	// SECURITY (GHSA-6454-5x88-m6jw): host `Reflect.apply`, cached individually so
+	// the promise-boundary peel can unwind `Reflect.apply(then, p, args)`
+	// indirection the same way it unwinds `Function.prototype.call` / `.apply`.
+	// It already lives in the shared `reflectApplyPrimitives` weakmap (with
+	// `Reflect.construct`), but the peel needs to distinguish apply (whose arg
+	// shape is `(target, thisArg, argsArray)`) from construct, so it keys off
+	// this individual identity. Populated in the primitive-registration block.
+	let otherReflectApplyFn;
+	try {
+		if (otherGlobalPrototypes.Promise) {
+			otherPromisePrototype = otherGlobalPrototypes.Promise; // SECURITY (GHSA-2v2p-6j97-cjg9)
+			otherObjectPrototype = otherGlobalPrototypes.Object; // SECURITY (GHSA-2v2p-6j97-cjg9)
+			const dt = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Promise, 'then');
+			if (dt) otherPromiseThen = dt.value;
+			const dc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Promise, 'catch');
+			if (dc) otherPromiseCatch = dc.value;
+			const df = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Promise, 'finally');
+			if (df) otherPromiseFinally = df.value;
+		}
+	} catch (e) {
+		// Best effort — if we cannot read host Promise.prototype, the sandbox-side
+		// override remains the last line of defense for sandbox-realm promises.
+	}
+
+	// SECURITY (GHSA-vwrp-x96c-mhwq): Identity set of every host-realm object
+	// that the sandbox must never be able to mutate. Populated at bridge init
+	// with every cached intrinsic prototype + corresponding constructor.
+	//
+	// Sandbox code that walks `__proto__` via a Buffer.apply chain (or any
+	// similar primitive) can surface one of these host intrinsics as the
+	// wrapped object of a bridge proxy. The BaseHandler write traps would
+	// otherwise forward the mutation into the real host object via
+	// otherReflectSet / otherReflectDefineProperty / otherReflectDeleteProperty /
+	// otherReflectPreventExtensions, bleeding attacker-controlled state into
+	// every host-realm object of that class -- full prototype pollution plus
+	// host DoS via preventExtensions.
+	//
+	// Enforced only on the sandbox->host direction (`!isHost`).
+	const protectedHostObjects = new ThisWeakMap();
+	function addProtectedHostObject(value) {
+		if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return;
+		try {
+			thisReflectApply(thisWeakMapSet, protectedHostObjects, [value, true]);
+		} catch (e) {
+			/* best effort */
+		}
+	}
+	try {
+		const protoKeys = thisReflectOwnKeys(otherGlobalPrototypes);
+		for (let i = 0; i < protoKeys.length; i++) {
+			const p = otherGlobalPrototypes[protoKeys[i]];
+			addProtectedHostObject(p);
+			try {
+				const desc = otherSafeGetOwnPropertyDescriptor(p, 'constructor');
+				if (desc && !desc.get && !desc.set) addProtectedHostObject(desc.value);
+			} catch (e) {
+				/* best effort */
+			}
+		}
+	} catch (e) {
+		/* best effort */
+	}
+
+	function isProtectedHostObject(object) {
+		if (isHost) return false;
+		if (object === null || (typeof object !== 'object' && typeof object !== 'function')) return false;
+		try {
+			return thisReflectApply(thisWeakMapHas, protectedHostObjects, [object]) === true;
+		} catch (e) {
+			return false;
+		}
+	}
+
+	// SECURITY (GHSA-v6mx-mf47-r5wg): Identity set of every host-realm function
+	// whose invocation would mutate (or could install code that mutates) the
+	// [[Prototype]] of an arbitrary object. The bridge's `set` / `defineProperty`
+	// / `setPrototypeOf` proxy traps already block direct mutation of host
+	// objects from the sandbox, but the apply trap let sandbox code invoke these
+	// intrinsics *as functions* with a wrapped host object as `this`, which
+	// bypasses every write trap because the actual mutation happens inside the
+	// host-realm intrinsic, not through a proxy.
+	//
+	// Even non-protected host prototypes (Node-internal `NodeError.prototype`,
+	// per-instance `[[Prototype]]`s, etc.) being severed is enough to break
+	// downstream bridge invariants — once a host-realm chain is truncated,
+	// `thisFromOtherWithFactory`'s proto-walk no longer finds a registered
+	// mapping and the value can fall through unwrapped (see the read-side
+	// hardening in `thisEnsureThis` below). Closing the write side here is the
+	// upstream chokepoint that prevents the underlying primitive from being
+	// invoked at all.
+	//
+	// Intrinsics covered:
+	//   - host `Object.prototype.__proto__` setter
+	//     (PoC: `Buffer.call.call({}.__lookupSetter__, Buffer, "__proto__")`)
+	//   - host `Object.setPrototypeOf`
+	//   - host `Reflect.setPrototypeOf`
+	//   - host `Object.prototype.__defineSetter__` (would install a new __proto__
+	//     setter / data property on a host target, indirect mutation path)
+	//   - host `Object.prototype.__defineGetter__` (symmetric: redefines property
+	//     accessors on a host target)
+	const dangerousHostProtoMutators = new ThisWeakMap();
+	function addDangerousHostProtoMutator(value) {
+		if (value === null || typeof value !== 'function') return;
+		try {
+			thisReflectApply(thisWeakMapSet, dangerousHostProtoMutators, [value, true]);
+		} catch (e) {
+			/* best effort */
+		}
+	}
+	// SECURITY (GHSA-88hf-g992-jg85): Identity set of every host-realm function
+	// whose invocation READS the raw `[[Prototype]]` of an arbitrary host object.
+	// Symmetric to `dangerousHostProtoMutators` (which covers the write side).
+	//
+	// The bridge deliberately FLATTENS the host prototype chain: a wrapped host
+	// object appears (through the `getPrototypeOf` trap and the `.__proto__` /
+	// `Object.getPrototypeOf` read paths) to inherit directly from the sandbox
+	// `Object.prototype`, then null. Intermediate host builtin prototypes
+	// (Socket.prototype, Duplex.prototype, ... EventEmitter.prototype) are
+	// invisible to sandbox code — none of them is in `protectedHostObjects`, so
+	// if the sandbox could ever reach one as a bridge proxy it could write a
+	// callable onto it (`EventEmitter.prototype.emit = fn`) and later have the
+	// host invoke that function with a host `this` (RCE).
+	//
+	// The ONLY way to pierce the flattened view is to obtain a RAW host
+	// proto-reader and invoke it: `gP.call(x)` returns the true, un-flattened
+	// host `[[Prototype]]` of `x`, freshly wrapped, exposing the intermediate
+	// prototypes one hop at a time. The canonical PoC extracts the host
+	// `Object.prototype.__proto__` getter via
+	// `Buffer.call.call(({}).__lookupGetter__, 67, '__proto__')`. We therefore
+	// refuse to ever DELIVER any of these raw host readers into the sandbox
+	// (they collapse to `emptyFrozenObject` at the delivery chokepoints, whose
+	// `.call` is undefined). Legitimate prototype reads keep working: the
+	// sandbox's OWN `Object.getPrototypeOf` / `.__proto__` on a bridge proxy go
+	// through the `getPrototypeOf` trap and return the flattened wrapped proto —
+	// they never extract or invoke the raw host reader.
+	//
+	// Readers covered:
+	//   - host `Object.prototype.__proto__` getter (the PoC primitive)
+	//   - host `Object.getPrototypeOf`
+	//   - host `Reflect.getPrototypeOf`
+	const dangerousHostProtoReaders = new ThisWeakMap();
+	function addDangerousHostProtoReader(value) {
+		if (value === null || typeof value !== 'function') return;
+		try {
+			thisReflectApply(thisWeakMapSet, dangerousHostProtoReaders, [value, true]);
+		} catch (e) {
+			/* best effort */
+		}
+	}
+	// SECURITY (GHSA-88hf-g992-jg85): independent PAYOFF-side layer. Identity set
+	// of raw host objects that are host `[[Prototype]]` objects (some other host
+	// object inherits from them), e.g. EventEmitter.prototype and the whole
+	// Socket→Duplex→Readable→Stream→EventEmitter chain. Such prototypes are NOT
+	// JS intrinsics, so they are NOT in `protectedHostObjects`; their bridge
+	// wrapper is a plain BaseHandler. `BaseHandler.set` / `defineProperty` divert
+	// sandbox FUNCTION / accessor writes away from marked objects: installing a
+	// sandbox callable on a shared host prototype would let a later host-side
+	// call (`process.emit(...)`) invoke it with `this` = a foreign host object
+	// the sandbox was never handed → RCE. This layer holds even if some future
+	// read path (other than the readers denied above) surfaces a host prototype.
+	//
+	// Membership is decided STRUCTURALLY (`looksLikeHostPrototype`) and recorded
+	// EAGERLY at delivery time (see `thisProxyOther`), before sandbox code can
+	// run any write — independent of apply-trap indirection and persistent
+	// against later self-`constructor` corruption. Leaf host objects explicitly
+	// exposed to the sandbox have no own `constructor` backlink, so they are
+	// NEVER marked and keep the documented "sandbox may set properties the host
+	// observes" contract (test/vm.js `freeze, protect > without freeze`).
+	const hostObjectsUsedAsPrototype = new ThisWeakMap();
+	function markHostObjectUsedAsPrototype(object) {
+		if (object === null || (typeof object !== 'object' && typeof object !== 'function')) return;
+		try {
+			thisReflectApply(thisWeakMapSet, hostObjectsUsedAsPrototype, [object, true]);
+		} catch (e) {
+			/* best effort */
+		}
+	}
+	function isHostObjectUsedAsPrototype(object) {
+		if (isHost) return false;
+		if (object === null || (typeof object !== 'object' && typeof object !== 'function')) return false;
+		try {
+			return thisReflectApply(thisWeakMapHas, hostObjectsUsedAsPrototype, [object]) === true;
+		} catch (e) {
+			return false;
+		}
+	}
+	// SECURITY (GHSA-88hf-g992-jg85): structural test for "is this raw host
+	// object serving as a `[[Prototype]]`?" — it owns a data `constructor`
+	// property that is a function whose own `prototype` points back at the
+	// object (`object.constructor.prototype === object`). This is the defining
+	// shape of every standard builtin prototype (EventEmitter.prototype, Stream.
+	// prototype, ...). Read exclusively via `otherSafeGetOwnPropertyDescriptor`
+	// so no host getter is triggered, and require an OWN constructor so ordinary
+	// host instances/data objects (whose `constructor` is inherited) are not
+	// misclassified. Never throws.
+	function looksLikeHostPrototype(object) {
+		if (object === null || (typeof object !== 'object' && typeof object !== 'function')) return false;
+		try {
+			const ctorDesc = otherSafeGetOwnPropertyDescriptor(object, 'constructor');
+			if (!ctorDesc || ctorDesc.get || ctorDesc.set) return false;
+			const ctor = ctorDesc.value;
+			if (typeof ctor !== 'function') return false;
+			const protoDesc = otherSafeGetOwnPropertyDescriptor(ctor, 'prototype');
+			if (!protoDesc || protoDesc.get || protoDesc.set) return false;
+			return protoDesc.value === object;
+		} catch (e) {
+			return false;
+		}
+	}
+	// SECURITY (GHSA-v6mx-mf47-r5wg): host `Function.prototype.call` /
+	// `Function.prototype.apply` / `Function.prototype.bind` — the canonical
+	// indirection primitives. When the apply-trap target is one of these,
+	// `context` is the *underlying* function being applied, and `args[0]` (for
+	// .call) / `args[0]` (for .apply, as a list) is its `this`. We need to
+	// inspect `context` to determine whether the underlying call is dangerous.
+	const applyIndirectionPrimitives = new ThisWeakMap();
+	function addApplyIndirectionPrimitive(value) {
+		if (value === null || typeof value !== 'function') return;
+		try {
+			thisReflectApply(thisWeakMapSet, applyIndirectionPrimitives, [value, true]);
+		} catch (e) {
+			/* best effort */
+		}
+	}
+	function isApplyIndirectionPrimitive(value) {
+		if (value === null || typeof value !== 'function') return false;
+		try {
+			return thisReflectApply(thisWeakMapHas, applyIndirectionPrimitives, [value]) === true;
+		} catch (e) {
+			return false;
+		}
+	}
+	// host `Reflect.apply` / `Reflect.construct` — same idea but the underlying
+	// function is `args[0]` rather than `context`.
+	const reflectApplyPrimitives = new ThisWeakMap();
+	function addReflectApplyPrimitive(value) {
+		if (value === null || typeof value !== 'function') return;
+		try {
+			thisReflectApply(thisWeakMapSet, reflectApplyPrimitives, [value, true]);
+		} catch (e) {
+			/* best effort */
+		}
+	}
+	function isReflectApplyPrimitive(value) {
+		if (value === null || typeof value !== 'function') return false;
+		try {
+			return thisReflectApply(thisWeakMapHas, reflectApplyPrimitives, [value]) === true;
+		} catch (e) {
+			return false;
+		}
+	}
+	try {
+		// host Object.prototype.__proto__ setter
+		const protoDesc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Object, '__proto__');
+		if (protoDesc) {
+			addDangerousHostProtoMutator(protoDesc.set);
+			// SECURITY (GHSA-88hf-g992-jg85): classify the host `__proto__` GETTER
+			// as dangerous-to-DELIVER (not dangerous-to-invoke). Extracting the raw
+			// host getter and calling `gP.call(x)` pierces the bridge's flattened
+			// prototype view and hands the sandbox the true intermediate host
+			// builtin prototypes (EventEmitter.prototype, etc.), which are writable.
+			// We do NOT add it to the mutator set (which THROWS in the apply trap
+			// and would break legitimate `instanceof` / inspection that internally
+			// walk prototypes); instead we deny its DELIVERY at the read-side
+			// chokepoints so the sandbox can never hold the raw reader to invoke.
+			addDangerousHostProtoReader(protoDesc.get);
+		}
+		// Cache host `Function.prototype.call` / `Function.prototype.apply` as
+		// the canonical indirection primitives. The canonical PoC reaches host
+		// `__proto__` setter via `setProto.call(tp, null)`, where the apply
+		// trap target is `Function.prototype.call` (sandbox-side `.call` is
+		// `connect()`ed to host's). Tracking these lets us peel one indirection
+		// layer in the apply trap and inspect the *underlying* function for
+		// dangerousness.
+		if (otherGlobalPrototypes.Function) {
+			const callDesc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Function, 'call');
+			if (callDesc && callDesc.value) {
+				addApplyIndirectionPrimitive(callDesc.value);
+				otherFunctionCall = callDesc.value; // SECURITY (GHSA-647f-g98j-qq25)
+			}
+			const applyDesc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Function, 'apply');
+			if (applyDesc && applyDesc.value) {
+				addApplyIndirectionPrimitive(applyDesc.value);
+				otherFunctionApply = applyDesc.value; // SECURITY (GHSA-647f-g98j-qq25)
+			}
+			const bindDesc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Function, 'bind');
+			if (bindDesc && bindDesc.value) addApplyIndirectionPrimitive(bindDesc.value);
+		}
+		// host Reflect.apply — `otherInit.reflectApply` (already exported).
+		if (typeof otherInit.reflectApply === 'function') {
+			addReflectApplyPrimitive(otherInit.reflectApply);
+			// SECURITY (GHSA-6454-5x88-m6jw): also cache it individually for the
+			// promise-boundary peel (see otherReflectApplyFn declaration).
+			otherReflectApplyFn = otherInit.reflectApply;
+		}
+		if (typeof otherInit.reflectConstruct === 'function') {
+			addReflectApplyPrimitive(otherInit.reflectConstruct);
+		}
+		// host Object.prototype.__defineSetter__ / __defineGetter__
+		const defSetterDesc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Object, '__defineSetter__');
+		if (defSetterDesc && defSetterDesc.value) addDangerousHostProtoMutator(defSetterDesc.value);
+		const defGetterDesc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Object, '__defineGetter__');
+		if (defGetterDesc && defGetterDesc.value) addDangerousHostProtoMutator(defGetterDesc.value);
+		// host Object.setPrototypeOf — reach via otherGlobalPrototypes.Object.constructor
+		// (which is host `Object`).
+		const ctorDesc = otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Object, 'constructor');
+		if (ctorDesc && ctorDesc.value) {
+			const hostObjectCtor = ctorDesc.value;
+			const ospDesc = otherSafeGetOwnPropertyDescriptor(hostObjectCtor, 'setPrototypeOf');
+			if (ospDesc && ospDesc.value) addDangerousHostProtoMutator(ospDesc.value);
+			// host Object.defineProperty / defineProperties — used to install a
+			// new __proto__ accessor on a host target. Same write-side concern
+			// as Object.setPrototypeOf when the first argument unwraps to a
+			// host-realm object.
+			const dpDesc = otherSafeGetOwnPropertyDescriptor(hostObjectCtor, 'defineProperty');
+			if (dpDesc && dpDesc.value) addDangerousHostProtoMutator(dpDesc.value);
+			const dpsDesc = otherSafeGetOwnPropertyDescriptor(hostObjectCtor, 'defineProperties');
+			if (dpsDesc && dpsDesc.value) addDangerousHostProtoMutator(dpsDesc.value);
+			// SECURITY (GHSA-88hf-g992-jg85): host `Object.getPrototypeOf` — the
+			// data-property analog of the `__proto__` getter. If the sandbox ever
+			// obtained this raw host reference and invoked it host-side (e.g. via a
+			// map/bind laundering applicator) it would receive the true un-flattened
+			// host prototype, climbing the raw chain a hop at a time. Deny delivery.
+			const gpoDesc = otherSafeGetOwnPropertyDescriptor(hostObjectCtor, 'getPrototypeOf');
+			if (gpoDesc && gpoDesc.value) addDangerousHostProtoReader(gpoDesc.value);
+		}
+		// host Reflect.setPrototypeOf — the bridge result already exposes the
+		// host-side Reflect helpers via `otherInit.reflectGetPrototypeOf` etc.
+		// Host `Reflect.setPrototypeOf` is `otherInit.reflectSetPrototypeOf`
+		// when exported (added by this fix). Fall back to nothing if the host
+		// bridge build is older than this fix.
+		if (typeof otherInit.reflectSetPrototypeOf === 'function') {
+			addDangerousHostProtoMutator(otherInit.reflectSetPrototypeOf);
+		}
+		// host Reflect.defineProperty — analogous to Object.defineProperty.
+		if (typeof otherInit.reflectDefineProperty === 'function') {
+			addDangerousHostProtoMutator(otherInit.reflectDefineProperty);
+		}
+		// SECURITY (GHSA-88hf-g992-jg85): host `Reflect.getPrototypeOf` — the
+		// Reflect analog of the raw proto readers above. Deny delivery.
+		if (typeof otherInit.reflectGetPrototypeOf === 'function') {
+			addDangerousHostProtoReader(otherInit.reflectGetPrototypeOf);
+		}
+		// SECURITY (GHSA-489w-w794-jq94): the raw host `%TypedArray%.prototype
+		// .buffer`, `DataView.prototype.buffer` and legacy `Buffer.prototype
+		// .parent` (DEP0004) getters read an internal slot the bridge cannot
+		// intercept — invoking one with a host view as receiver returns the
+		// UNBOUNDED backing store (Node's shared 64 KiB Buffer pool) and sidesteps
+		// the bounding applied by the `get` trap. The canonical extraction shape is
+		// the Category 30/37 one,
+		// `Buffer.call.call(({}).__lookupGetter__, hostBuf, 'buffer')`.
+		//
+		// They are registered in the same identity set as the raw proto readers
+		// because the required treatment is identical and already vetted: DENY
+		// DELIVERY at the three read-side chokepoints (the sandbox never holds
+		// the raw getter, so no invocation shape — direct, `Function.prototype
+		// .call`/`.apply`/`.bind`, `Reflect.apply`/`construct` — can reach it) and
+		// REFUSE invocation in the apply trap as defense in depth. Legitimate
+		// `.buffer` reads are unaffected: they go through the `get` trap, which
+		// invokes the host getter internally and returns a bounded store.
+		if (otherTypedArrayBufferGetter !== null) addDangerousHostProtoReader(otherTypedArrayBufferGetter);
+		if (otherDataViewBufferGetter !== null) addDangerousHostProtoReader(otherDataViewBufferGetter);
+		if (otherBufferParentGetter !== null) addDangerousHostProtoReader(otherBufferParentGetter);
+		// SECURITY (GHSA-489w-w794-jq94): the matching raw OFFSET getters. The `get`
+		// trap reports a bounded view's offset into its store as 0 so the (store,
+		// offset, length) triple stays consistent; an extracted raw getter would
+		// otherwise still report the view's true offset inside the shared pool,
+		// contradicting the delivered store and leaking a host memory-layout detail.
+		// Deny their delivery so the two views of the same fact cannot disagree.
+		if (otherTypedArrayByteOffsetGetter !== null) addDangerousHostProtoReader(otherTypedArrayByteOffsetGetter);
+		if (otherDataViewByteOffsetGetter !== null) addDangerousHostProtoReader(otherDataViewByteOffsetGetter);
+		if (otherBufferOffsetGetter !== null) addDangerousHostProtoReader(otherBufferOffsetGetter);
+	} catch (e) {
+		/* best effort */
+	}
+
+	function isDangerousHostProtoMutator(value) {
+		if (isHost) return false;
+		if (value === null || typeof value !== 'function') return false;
+		try {
+			return thisReflectApply(thisWeakMapHas, dangerousHostProtoMutators, [value]) === true;
+		} catch (e) {
+			return false;
+		}
+	}
+
+	// SECURITY (GHSA-88hf-g992-jg85): predicate for the raw host proto-READERS.
+	function isDangerousHostProtoReader(value) {
+		if (isHost) return false;
+		if (value === null || typeof value !== 'function') return false;
+		try {
+			return thisReflectApply(thisWeakMapHas, dangerousHostProtoReaders, [value]) === true;
+		} catch (e) {
+			return false;
+		}
+	}
+
+	function isHostPromiseThen(value) {
+		return otherPromiseThen !== undefined && value === otherPromiseThen;
+	}
+
+	function isHostPromiseCatch(value) {
+		return otherPromiseCatch !== undefined && value === otherPromiseCatch;
+	}
+
+	function isHostPromiseFinally(value) {
+		// .finally callbacks receive no value, but the chained promise it returns
+		// will propagate the parent's rejection. We do not need to wrap the
+		// onFinally itself, only ensure the returned promise's chained .then/.catch
+		// (also intercepted here) are wrapped.
+		return otherPromiseFinally !== undefined && value === otherPromiseFinally;
+	}
+
+	// SECURITY (GHSA-647f-g98j-qq25): host `Function.prototype.call` / `.apply`
+	// identity checks used by the promise-boundary normalizer to peel indirection.
+	function isHostFunctionCall(value) {
+		return otherFunctionCall !== undefined && value === otherFunctionCall;
+	}
+
+	function isHostFunctionApply(value) {
+		return otherFunctionApply !== undefined && value === otherFunctionApply;
+	}
+
+	// SECURITY (GHSA-6454-5x88-m6jw): host `Reflect.apply` identity check used by
+	// the promise-boundary peel to unwind `Reflect.apply(then, p, args)`.
+	function isHostReflectApply(value) {
+		return otherReflectApplyFn !== undefined && value === otherReflectApplyFn;
+	}
+
+	// SECURITY (GHSA-55hx): sanitizer hooks installed by setup-sandbox.js via
+	// thisSetHostPromiseSanitizers(handleException, ensureThis).
+	let hostPromiseSanitizeReject = null;
+	let hostPromiseSanitizeFulfill = null;
+
+	// SECURITY (GHSA-647f-g98j-qq25 / GHSA-m283 / GHSA-55hx): build a sandbox
+	// wrapper that routes an incoming Promise callback value through the m283
+	// rebuild (`hostPromiseSanitizeReject` for rejections,
+	// `hostPromiseSanitizeFulfill` for fulfillments) before the original
+	// sandbox callback runs. `cb` and the returned wrapper are this(sandbox)-realm.
+	function makeSanitizedPromiseCallback(cb, isReject) {
+		if (isReject) {
+			return function sanitizedOnRejected(error) {
+				error = hostPromiseSanitizeReject(error);
+				return thisReflectApply(cb, this, [error]);
+			};
+		}
+		return function sanitizedOnFulfilled(value) {
+			value = hostPromiseSanitizeFulfill(value);
+			return thisReflectApply(cb, this, [value]);
+		};
+	}
+
+	// Read one indexed slot from a this(sandbox)-realm array-like. Returns
+	// undefined on failure — callers treat undefined as "no callback here".
+	function readPromiseSlot(container, index) {
+		try {
+			return thisReflectGet(container, index);
+		} catch (e) {
+			return undefined;
+		}
+	}
+
+	// Write one indexed slot as a plain, getter-free data property. `container`
+	// is always trap-owned (the top-level safe-array) or a fresh copy we made —
+	// never a raw sandbox object — so this is safe and cannot re-trigger getters.
+	function writePromiseSlot(container, index, value) {
+		thisReflectDefineProperty(container, index, {
+			__proto__: null,
+			value: value,
+			writable: true,
+			enumerable: true,
+			configurable: true,
+		});
+	}
+
+	// Wrap the callback occupying `container[index]` in place, if it is a
+	// function. `isReject` selects the reject vs fulfill sanitizer.
+	function wrapPromiseSlot(container, index, isReject) {
+		const v = readPromiseSlot(container, index);
+		if (typeof v !== 'function') return; // undefined / null / non-callable -> nothing to wrap
+		writePromiseSlot(container, index, makeSanitizedPromiseCallback(v, isReject));
+	}
+
+	// Materialize a this(sandbox)-realm array-like into a fresh, trap-owned,
+	// getter-free array. Used when peeling a `.apply` layer: the callbacks live
+	// inside the caller's argument array, and we must not mutate that sandbox
+	// array in place (nor re-read its getters), so we snapshot it once. Returns
+	// null if it cannot be materialized or is implausibly large (a call that
+	// large throws in the host anyway, so bailing is escape-safe).
+	function copyPromiseArgArray(inner) {
+		if (inner === null || (typeof inner !== 'object' && typeof inner !== 'function')) return null;
+		let len;
+		try {
+			len = thisReflectGet(inner, 'length');
+		} catch (e) {
+			return null;
+		}
+		len = len >>> 0; // ToUint32 — arg arrays are tiny; host apply would reject anything larger
+		if (len > 65535) return null; // beyond V8's applied-arg ceiling; host apply would throw
+		const out = [];
+		for (let i = 0; i < len; i++) {
+			writePromiseSlot(out, i, readPromiseSlot(inner, i));
+		}
+		return out;
+	}
+
+	// SECURITY (GHSA-647f-g98j-qq25): promise-boundary normalizer.
+	//
+	// Invariant: every sandbox callback bound to a host Promise's then/catch
+	// must have its incoming value routed through the m283 rebuild, regardless
+	// of HOW then/catch was invoked — direct (`p.then(f)`), via
+	// `Function.prototype.call` / `.apply`, or via stacked indirection
+	// (`p.then.call.call(...)`).
+	//
+	// The apply trap is the single chokepoint every host-function invocation
+	// from the sandbox passes through, so we normalize here. Starting from the
+	// trap's (object, context, args), we unwind `.call` / `.apply` indirection
+	// in a bounded loop to find the *effective applied function* and the
+	// *effective callback slots*:
+	//   * host `.call`:  effective fn = unwrap(this); effective this = args[0];
+	//                    effective args = args[1..]  (same container, shifted).
+	//   * host `.apply`: effective fn = unwrap(this); effective this = args[0];
+	//                    effective args = elements of args[1] (a nested array) —
+	//                    snapshotted into a fresh container so writes land in
+	//                    getter-free storage.
+	// If the effective function is host `.then` / `.catch`, we wrap the exact
+	// callback slots in place so the rebuild runs. `object` (the actual apply
+	// target) is never changed — we only rewrite `args`.
+	//
+	// TOCTOU-safe: the then/catch decision is made purely on cached function
+	// identity via `otherFromThis` (never by reading an attacker getter), and
+	// wrapped callbacks are written into trap-owned / freshly-copied storage so
+	// the host machinery cannot observe a different value than the one we vetted.
+	const MAX_PROMISE_PEEL = 64; // bound stacked-indirection unwinding (see NOTES)
+	function isRelevantPromisePeelFn(fn) {
+		// `.finally` is included so `p.finally.call(p, cb)` indirection peels
+		// through to the finally receiver — needed for the GHSA-6454 species
+		// neutralization below (finally itself has no callback to wrap).
+		return isHostPromiseThen(fn) || isHostPromiseCatch(fn) || isHostPromiseFinally(fn) ||
+			isHostFunctionCall(fn) || isHostFunctionApply(fn) || isHostReflectApply(fn);
+	}
+
+	// Unwind `.call` / `.apply` indirection (including stacked forms) from the
+	// apply trap's (object, context, args) to the *effective* host Promise
+	// method and its *effective* receiver + callback slots. Returns
+	// `{ kind, container, base, receiver }` where:
+	//   * kind:      'then' | 'catch' | 'finally' (or `null` if the effective
+	//                function is not a host promise method).
+	//   * container/base: locate the effective callback args (container[base+i]).
+	//   * receiver:  the @this(sandbox-realm) receiver of the effective method —
+	//                i.e. the promise `.then/.catch/.finally` is invoked on.
+	// The peel writes freshly-copied inner arrays into trap-owned storage so the
+	// host machinery cannot observe a value other than the one we vetted.
+	function peelEffectivePromiseCall(object, context, args) {
+		let curFn = object;    // @other(host-realm) function actually being applied
+		let curThis = context; // @this(sandbox-realm) `this` for curFn
+		let container = args;  // @this current effective-arg container (trap-owned or a fresh copy)
+		let base = 0;          // effective args live at container[base + i]
+
+		let guard = 0;
+		while (true) {
+			if (guard++ >= MAX_PROMISE_PEEL) {
+				// A pathologically deep stacked-indirection chain. We cannot have
+				// confirmed the callbacks were wrapped (nor the species channel
+				// neutralized), so deny rather than let a raw host rejection
+				// through. Legitimate code never stacks call/apply this deep.
+				throw new VMError(OPNA);
+			}
+			if (isHostPromiseThen(curFn)) return { __proto__: null, kind: 'then', container, base, receiver: curThis };
+			if (isHostPromiseCatch(curFn)) return { __proto__: null, kind: 'catch', container, base, receiver: curThis };
+			if (isHostPromiseFinally(curFn)) return { __proto__: null, kind: 'finally', container, base, receiver: curThis };
+			if (isHostFunctionCall(curFn)) {
+				// `f.call(thisArg, ...cbArgs)`: the real callee is `curThis`,
+				// its `this` is container[base], its args are container[base+1..].
+				let underlying;
+				try { underlying = otherFromThis(curThis); } catch (e) { return null; }
+				if (!isRelevantPromisePeelFn(underlying)) return null;
+				curThis = readPromiseSlot(container, base);
+				curFn = underlying;
+				base = base + 1;
+				continue;
+			}
+			if (isHostFunctionApply(curFn)) {
+				// `f.apply(thisArg, cbArgsArray)`: the real callee is `curThis`,
+				// its `this` is container[base], its args are the ELEMENTS of the
+				// nested array container[base+1].
+				let underlying;
+				try { underlying = otherFromThis(curThis); } catch (e) { return null; }
+				if (!isRelevantPromisePeelFn(underlying)) return null;
+				const nextThis = readPromiseSlot(container, base);
+				const inner = readPromiseSlot(container, base + 1);
+				const freshInner = copyPromiseArgArray(inner);
+				if (freshInner === null) return null; // unusable inner -> leave call untouched
+				writePromiseSlot(container, base + 1, freshInner);
+				container = freshInner;
+				base = 0;
+				curThis = nextThis;
+				curFn = underlying;
+				continue;
+			}
+			if (isHostReflectApply(curFn)) {
+				// SECURITY (GHSA-6454-5x88-m6jw): `Reflect.apply(target, thisArg,
+				// argsArray)` — the real callee is `container[base]`, its `this` is
+				// `container[base+1]`, and its args are the ELEMENTS of the nested
+				// array `container[base+2]`. Without this branch, a sandbox that can
+				// reach host `Reflect.apply` invokes host then/catch/finally with an
+				// `object` the peel does not recognize, so neither the m283 callback
+				// wrapping nor the @@species neutralization fires -> the missing-
+				// handler species escape (and the m283 rebuild) are bypassed.
+				let underlying;
+				try { underlying = otherFromThis(readPromiseSlot(container, base)); } catch (e) { return null; }
+				if (!isRelevantPromisePeelFn(underlying)) return null;
+				const nextThis = readPromiseSlot(container, base + 1);
+				const inner = readPromiseSlot(container, base + 2);
+				const freshInner = copyPromiseArgArray(inner);
+				if (freshInner === null) return null; // unusable inner -> leave call untouched
+				writePromiseSlot(container, base + 2, freshInner);
+				container = freshInner;
+				base = 0;
+				curThis = nextThis;
+				curFn = underlying;
+				continue;
+			}
+			// Effective fn is not a host promise method and not a call/apply/
+			// Reflect.apply indirection primitive — nothing for this defense to do.
+			return null;
+		}
+	}
+
+	// Wrap the sandbox callbacks bound to a host Promise's then/catch (m283
+	// rebuild) and return the @this(sandbox-realm) receiver of the effective
+	// host promise method (or `undefined`). The caller neutralizes that
+	// receiver's @@species/constructor channel across the host call — see
+	// neutralizeHostPromiseSpeciesOn (GHSA-6454-5x88-m6jw).
+	function normalizeHostPromiseCallbacks(object, context, args) {
+		// Only sandbox->host, and only once the m283 sanitizers are installed.
+		if (isHost || hostPromiseSanitizeReject === null) return undefined;
+		const info = peelEffectivePromiseCall(object, context, args);
+		if (info === null) return undefined;
+		if (info.kind === 'then') {
+			wrapPromiseSlot(info.container, info.base, false);    // onFulfilled
+			wrapPromiseSlot(info.container, info.base + 1, true);  // onRejected
+		} else if (info.kind === 'catch') {
+			wrapPromiseSlot(info.container, info.base, true);      // onRejected
+		}
+		// 'finally': no callback to wrap (its callback receives no settlement
+		// value), but we still return the receiver so its species channel is
+		// neutralized — `finally` reads SpeciesConstructor internally.
+		return info.receiver;
+	}
+
+	// SECURITY (GHSA-6454-5x88-m6jw): host-Promise @@species / constructor
+	// neutralization — an INDEPENDENT second layer for the missing-handler
+	// escape, at the SpeciesConstructor chokepoint rather than the reaction slot.
+	//
+	// WHY: When the sandbox invokes a host `Promise.prototype.then/catch/finally`,
+	// V8 runs the builtin on the RAW host promise (the receiver, unwrapped by
+	// otherFromThis). PerformPromiseThen computes the result capability's
+	// constructor as `SpeciesConstructor(promise, %Promise%)`, which reads
+	// `promise.constructor` and `constructor[@@species]` DIRECTLY off the raw
+	// host object — bypassing every bridge trap. A sandbox that did
+	// `p.constructor = Evil` (Evil a sandbox class with a species getter) steers
+	// V8 into `new Evil(GetCapabilitiesExecutor)`, capturing the capability's
+	// resolve/reject functions. With a MISSING onRejected, V8's internal Thrower
+	// then delivers the rejection reason to that hijacked capability WITHOUT the
+	// m283 rebuild that a real (wrapped) onRejected would apply — so a reason
+	// carrying a hidden host reference (`err.detail = process`) reaches sandbox
+	// code and yields RCE. This is orthogonal to the reaction-slot wrapping:
+	// there is no callback slot to wrap when the handler is absent.
+	//
+	// FIX: across the host then/catch/finally call, install `constructor =
+	// undefined` as an own data property on the raw host promise. V8's
+	// SpeciesConstructor treats an undefined `constructor` as "use the default"
+	// (%Promise% of the host realm), so the result capability is a genuine host
+	// promise — never an attacker sandbox construct. The raw settlement then
+	// flows into a host promise; the sandbox can only observe it by attaching a
+	// fresh .then/.catch to the returned (proxied) promise, which re-enters this
+	// same trap and IS m283-sanitized. Restore the original `constructor` in a
+	// finally so legitimate `p.constructor` reads are unaffected.
+	//
+	// This mirrors neutralizeArraySpeciesOn (ArraySpeciesCreate defense) and
+	// resetPromiseSpecies (setup-sandbox.js, sandbox-side). It is scoped to the
+	// host then/catch/finally identity gate (peelEffectivePromiseCall), so it
+	// never touches SANDBOX-realm promises: those route through localPromise's
+	// own `.then` in-sandbox and never reach a host Promise.prototype method.
+	const PROMISE_SPECIES_NEUTRALIZED = { __proto__: null };
+	function neutralizeHostPromiseSpeciesOn(obj) {
+		// Only raw host objects reach here (receiver already unwrapped via
+		// otherFromThis). A non-object receiver makes the host builtin throw on
+		// its own [[PromiseState]] check — nothing for us to neutralize.
+		if (obj === null || (typeof obj !== 'object' && typeof obj !== 'function')) return null;
+
+		let originalDesc;
+		try {
+			originalDesc = otherSafeGetOwnPropertyDescriptor(obj, 'constructor');
+		} catch (e) {
+			// @other(unsafe)
+			throw thisFromOtherForThrow(e);
+		}
+
+		// A pre-installed non-configurable `constructor` cannot be shadowed for
+		// the duration of the call. The only benign shape is an already-inert
+		// `constructor === undefined`; anything else is an attack — reject.
+		if (originalDesc && originalDesc.configurable === false) {
+			if (!(originalDesc.value === undefined && originalDesc.writable === false)) {
+				throw new VMError('Unsafe host promise constructor cannot be neutralized');
+			}
+			return null; // already safely neutralized
+		}
+
+		// Non-extensible with no own `constructor` slot: we cannot install our
+		// shadow, and an attacker may have shadowed the inherited constructor via
+		// the prototype chain. Reject rather than proceed with a live species.
+		let isExt;
+		try {
+			isExt = otherReflectIsExtensible(obj);
+		} catch (e) {
+			throw thisFromOtherForThrow(e);
+		}
+		if (!isExt && !originalDesc) {
+			throw new VMError('Unsafe non-extensible host promise passed across bridge');
+		}
+
+		let defined;
+		try {
+			defined = otherReflectDefineProperty(obj, 'constructor', {
+				__proto__: null,
+				value: undefined,
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			});
+		} catch (e) {
+			throw thisFromOtherForThrow(e);
+		}
+		if (!defined) {
+			throw new VMError('Unsafe host promise state; cannot neutralize species');
+		}
+
+		return {
+			__proto__: null,
+			obj: obj,
+			originalDesc: originalDesc,
+			marker: PROMISE_SPECIES_NEUTRALIZED,
+		};
+	}
+
+	// SECURITY: restore the raw host promise's `constructor` after the guarded
+	// then/catch/finally call. Called from a `finally`; must not throw.
+	function restoreHostPromiseSpeciesOn(saved) {
+		if (!saved || saved.marker !== PROMISE_SPECIES_NEUTRALIZED) return;
+		const obj = saved.obj;
+		const originalDesc = saved.originalDesc;
+		try {
+			if (originalDesc) {
+				otherReflectDefineProperty(obj, 'constructor', originalDesc);
+			} else {
+				otherReflectDeleteProperty(obj, 'constructor');
+			}
+		} catch (e) {
+			// Leaving an inert `constructor === undefined` is strictly safer than
+			// an unrestored throw; never mask the primary error from the finally.
+		}
+	}
+
+	// SECURITY (GHSA-gjq8-xm47-88rc): When a host function called from the sandbox
+	// (apply trap, isHost===false) RETURNS a host Promise, the bridge hands the
+	// sandbox a wrapped/proxied promise but the UNDERLYING host promise has no
+	// rejection reaction of its own. If the sandbox never attaches .then/.catch
+	// (or attaches only after a microtask turn), Node's default
+	// unhandledRejection policy sees the raw host promise reject with no handler
+	// and TERMINATES THE HOST PROCESS — a sandbox-triggered host DoS.
+	//
+	// Attach a benign no-op reaction to the host promise itself, on the host
+	// side, at the boundary. This marks the host promise "handled" for Node's
+	// bookkeeping without consuming the rejection for the sandbox: promises
+	// multicast, so the sandbox's own (GHSA-55hx-sanitized) .then/.catch reaction
+	// still fires and still observes the sanitized rejection value independently.
+	// The no-op onRejected returns undefined, so the derived promise from this
+	// .then(noop, noop) fulfills — it never creates a NEW unhandled rejection.
+	//
+	// The no-op never touches the rejection value, so no raw host error leaks.
+	// We call the CACHED host Promise.prototype.then via otherReflectApply, so a
+	// tampered own `.then` on the returned object cannot redirect us; the built-in
+	// requires the [[PromiseState]] internal slot and throws on non-promises, so
+	// this is a no-op for anything that is not a genuine host promise.
+	function hostPromiseBenignNoop() {}
+	function markHostPromiseHandled(value) {
+		if (isHost) return;
+		if (otherPromiseThen === undefined) return;
+		if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return;
+		try {
+			otherReflectApply(otherPromiseThen, value, [hostPromiseBenignNoop, hostPromiseBenignNoop]);
+		} catch (e) {
+			// Not a genuine host promise (no [[PromiseState]] slot) — nothing to do.
+		}
+	}
+
+	// SECURITY (GHSA-2v2p-6j97-cjg9): cheap brand check — is this host value a
+	// promise? Used to gate the delivery-side mark below so we never invoke
+	// `.then` on the (overwhelmingly common) non-promise host object: that would
+	// throw, and a per-object throw/catch on the hot host->sandbox delivery path
+	// is unacceptable. Walking the OTHER realm's prototype chain to the cached
+	// host `Promise.prototype` covers native promises and promise subclasses
+	// alike, reads no attacker-reachable property, and cannot invoke sandbox
+	// code. `Object.prototype.toString` is deliberately NOT used as the brand:
+	// it reads `Symbol.toStringTag` off the value and so fires host `get` traps
+	// and accessors — a host `Proxy` with a `get` trap returning a fresh rejected
+	// promise would then be crashed by the brand check itself.
+	//
+	// A promise minted in a SECOND host realm (`vm.runInNewContext`, nested
+	// contextify) never matches the cached `Promise.prototype`, so a chain that
+	// terminates at a non-null object which is NOT the cached host
+	// `Object.prototype` is treated as a possible promise: it belongs to a
+	// foreign realm, whose `Promise.prototype` we can never have cached.
+	// `markHostPromiseHandled` then settles it — the built-in
+	// `Promise.prototype.then` brand-checks the `[[PromiseState]]` slot, which is
+	// realm-independent, so a cross-realm promise gets marked and a cross-realm
+	// non-promise or thenable never has its own `then` invoked. Same-realm
+	// objects (chain ends at the cached `Object.prototype`) and null-prototype
+	// objects never reach that branch, so the hot path keeps its no-throw
+	// property. Still conservative by design: a host promise whose chain was
+	// manipulated host-side so the walk stops early is not recognized, which is
+	// why `apply` and `construct` keep their unconditional mark.
+	const OTHER_PROMISE_PROTO_WALK_LIMIT = 100;
+	function isOtherPromise(value) {
+		if (otherPromisePrototype === undefined) return false;
+		if (value === null || typeof value !== 'object') return false;
+		let last = null;
+		try {
+			let proto = otherReflectGetPrototypeOf(value);
+			// SECURITY (GHSA-2v2p-6j97-cjg9): bounded walk. An embedder-authored
+			// Proxy whose `getPrototypeOf` returns a fresh Proxy every time would
+			// otherwise spin here forever; a chain this long is never a promise.
+			for (let i = 0; i < OTHER_PROMISE_PROTO_WALK_LIMIT; i++) {
+				// SECURITY (GHSA-2v2p-6j97-cjg9): the foreign-realm terminus test is
+				// only meaningful when we hold this realm's `Object.prototype`; if we
+				// never captured it, fall back to "not a promise" rather than sending
+				// every plain host object through the throwing mark.
+				if (!proto) return otherObjectPrototype !== undefined && last !== null && last !== otherObjectPrototype;
+				if (proto === otherPromisePrototype) return true;
+				last = proto;
+				proto = otherReflectGetPrototypeOf(proto);
+			}
+		} catch (e) {
+			return false;
+		}
+		return false;
+	}
+
+	function thisSetHostPromiseSanitizers(sanitizeReject, sanitizeFulfill) {
+		if (typeof sanitizeReject !== 'function' || typeof sanitizeFulfill !== 'function') {
+			throw new VMError('setHostPromiseSanitizers requires two functions');
+		}
+		hostPromiseSanitizeReject = sanitizeReject;
+		hostPromiseSanitizeFulfill = sanitizeFulfill;
+	}
+
+	// Check if an object's own property descriptors contain a dangerous function
+	// constructor (data value or accessor get/set). Shallow — does NOT recurse
+	// into nested object values; each nested host object that crosses the
+	// bridge gets its own shallow check at that layer. Layered descriptor-
+	// extraction attacks (e.g. getOwnPropertyDescriptor on
+	// getOwnPropertyDescriptors result) are caught at the layer where the
+	// Function constructor is exposed at depth 1. (origin/main commit 8dd0591.)
+	function containsDangerousConstructor(obj) {
+		if (obj === null || typeof obj !== 'object') return false;
+
+		let keys;
+		try {
+			keys = otherReflectOwnKeys(obj);
+		} catch (e) {
+			return false;
+		}
+
+		for (let i = 0; i < keys.length; i++) {
+			let desc;
+			try {
+				desc = otherSafeGetOwnPropertyDescriptor(obj, keys[i]);
+			} catch (e) {
+				continue;
+			}
+			if (!desc) continue;
+
+			if (desc.get || desc.set) {
+				if (isDangerousFunctionConstructor(desc.get) || isDangerousFunctionConstructor(desc.set)) return true;
+			} else if (isDangerousFunctionConstructor(desc.value)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	function thisOtherHasOwnProperty(object, key) {
+		// Note: object@other(safe) key@prim throws@this(unsafe)
+		try {
+			return otherReflectApply(otherObjectHasOwnProperty, object, [key]) === true;
+		} catch (e) {
+			// @other(unsafe)
+			throw thisFromOtherForThrow(e);
+		}
+	}
+
+	// SECURITY (GHSA-grj5-jjm8-h35p): Array species self-return escape defense.
+	//
+	// INVARIANT: When the bridge invokes a host function, no host-realm array used as
+	// `this` (context) or as an argument may have an attacker-controlled `constructor`
+	// property visible to V8's internal ArraySpeciesCreate during the call.
+	//
+	// WHY: V8's ArraySpeciesCreate (used by Array#map/filter/slice/concat/splice and
+	// TypedArray equivalents) reads `this.constructor[Symbol.species]` DIRECTLY on the
+	// raw host object, completely bypassing our proxy traps. If an attacker can install
+	// a sandbox function `x` with `x[Symbol.species] = x` as the host array's constructor,
+	// then call `r.map(f)` through the bridge, V8 will call `new x(len)` (returning `r`
+	// itself) and store mapped values directly into `r` via CreateDataPropertyOrThrow,
+	// bypassing the bridge entirely -- the attacker reads them back from `r`.
+	//
+	// The prior fixes (ebcfe94, 9084cd6) blocked the Function-constructor exfiltration
+	// chain that this primitive was originally composed with, but the primitive itself
+	// -- writing raw host values into a sandbox-visible slot -- remained a bridge bypass.
+	// This defense closes the class.
+	//
+	// Strategy:
+	//   1. Before every sandbox->host function invocation (apply/construct traps), walk
+	//      `context` and each element of `args`. For every host array found, neutralize
+	//      its species state by installing `constructor = undefined` as a data own
+	//      property. An own-property `undefined` shadows any own or inherited ctor, and
+	//      ArraySpeciesCreate treats undefined as "use the default %Array% constructor"
+	//      (spec ES2024 23.1.3.1 step 3), producing a fresh plain array.
+	//   2. After the call completes (finally), restore the original state: if the array
+	//      had an own `constructor` descriptor before, re-install it; otherwise delete
+	//      our shadow.
+	//   3. If any host array is non-extensible or has a non-configurable `constructor`
+	//      that isn't already `undefined`, reject the call with VMError rather than
+	//      proceeding with an un-neutralizable species channel.
+	//
+	// This neutralize-on-entry/restore-on-exit pattern is analogous to resetPromiseSpecies
+	// in setup-sandbox.js, which defends the same V8-internal-bypass class for Promises.
+
+	// SECURITY: Sentinel used to tag saved-state records. Using a unique module-local
+	// object ensures we never confuse attacker-installed state with our own.
+	const SPECIES_NEUTRALIZED = { __proto__: null };
+
+	// SECURITY: Neutralize the ArraySpeciesCreate channel on a single host array.
+	// Returns an opaque saved-state record to be passed to restoreArraySpeciesOn,
+	// or null if `arr` did not need neutralization (not an array / not host-realm).
+	// Throws VMError if the array's species state cannot be safely neutralized
+	// (non-configurable attacker-installed constructor, non-extensible with a
+	// constructor own property, etc.).
+	function neutralizeArraySpeciesOn(arr) {
+		// SECURITY: only host-realm raw arrays need neutralization. Sandbox arrays
+		// that cross back are already fresh objects produced by thisFromOtherArguments
+		// (which creates them with thisReflectDefineProperty in the local realm) --
+		// V8 internal reads on those happen in the local realm too, and the
+		// local-realm Array.prototype.constructor is not attacker-controlled.
+		if (arr === null || typeof arr !== 'object') return null;
+		let isHostArray;
+		try {
+			// SECURITY: thisArrayIsArray works cross-realm -- Array.isArray returns
+			// true for any ECMAScript Array exotic object regardless of realm.
+			isHostArray = thisArrayIsArray(arr);
+		} catch (e) {
+			return null;
+		}
+		if (!isHostArray) return null;
+
+		// SECURITY: capture original own descriptor (if any) before mutating.
+		let originalDesc;
+		try {
+			originalDesc = otherSafeGetOwnPropertyDescriptor(arr, 'constructor');
+		} catch (e) {
+			// @other(unsafe)
+			throw thisFromOtherForThrow(e);
+		}
+
+		// SECURITY: if attacker pre-installed a non-configurable `constructor`, we
+		// cannot safely remove or shadow it for the duration of the call. Reject.
+		if (originalDesc && originalDesc.configurable === false) {
+			// An existing non-configurable `constructor === undefined` data property
+			// is the already-neutralized shape we want. Anything else is an attack.
+			if (!(originalDesc.value === undefined && originalDesc.writable === false)) {
+				throw new VMError('Unsafe array constructor cannot be neutralized');
+			}
+			// Already safely neutralized; no-op.
+			return null;
+		}
+
+		// SECURITY: if array is non-extensible and has no own `constructor` slot, we
+		// cannot install our shadow. The inherited Array.prototype.constructor value
+		// is benign (host %Array%), but an attacker may have shadowed it via the
+		// prototype chain (setPrototypeOf to an intermediate proto). Reject.
+		let isExt;
+		try {
+			isExt = otherReflectIsExtensible(arr);
+		} catch (e) {
+			throw thisFromOtherForThrow(e);
+		}
+		if (!isExt && !originalDesc) {
+			throw new VMError('Unsafe non-extensible array passed across bridge');
+		}
+
+		// SECURITY: install `constructor = undefined` as a data own property. This
+		// shadows any inherited or attacker-installed constructor; V8's
+		// ArraySpeciesCreate treats undefined as "use %Array%", producing a fresh
+		// plain array that is NOT the attacker's target.
+		let defined;
+		try {
+			defined = otherReflectDefineProperty(arr, 'constructor', {
+				__proto__: null,
+				value: undefined,
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			});
+		} catch (e) {
+			// @other(unsafe)
+			throw thisFromOtherForThrow(e);
+		}
+		if (!defined) {
+			// SECURITY: defineProperty returned false (e.g., frozen object). Reject.
+			throw new VMError('Unsafe array state; cannot neutralize species');
+		}
+
+		return {
+			__proto__: null,
+			arr: arr,
+			originalDesc: originalDesc,
+			marker: SPECIES_NEUTRALIZED,
+		};
+	}
+
+	// SECURITY: Restore the original `constructor` state on a host array after the
+	// guarded host call completes. Called from a `finally` block so that errors in
+	// the host call do not leave the array in a neutralized state.
+	function restoreArraySpeciesOn(saved) {
+		if (!saved || saved.marker !== SPECIES_NEUTRALIZED) return;
+		const { arr, originalDesc } = saved;
+		try {
+			if (originalDesc) {
+				// SECURITY: put back exactly what was there before (including any
+				// non-writable/non-enumerable flags). originalDesc has __proto__ null
+				// already (via otherSafeGetOwnPropertyDescriptor).
+				otherReflectDefineProperty(arr, 'constructor', originalDesc);
+			} else {
+				// SECURITY: no prior own property -- remove our shadow so inherited
+				// constructor becomes visible again (preserves legitimate API semantics).
+				otherReflectDeleteProperty(arr, 'constructor');
+			}
+		} catch (e) {
+			// SECURITY: swallow restore errors -- the array is in an inert (undefined
+			// constructor) state, which is strictly safer than leaving it unrestored
+			// if there were an exception. We intentionally do NOT re-throw because
+			// this runs in a finally that must not mask the primary error.
+		}
+	}
+
+	// SECURITY: Walk `context` and every element of `args`, neutralize species on
+	// each host array found, return a flat list of saved-state records. Used by the
+	// apply/construct traps. The returned list must be passed to restoreArraySpeciesBatch
+	// in a `finally` block.
+	function neutralizeArraySpeciesBatch(context, args) {
+		// SECURITY (GHSA-9qj6-qjgg-37qq): `saved` is a fresh sandbox-realm Array
+		// in the sandbox-side bridge closure (and host-realm in the host-side),
+		// so its prototype chain is attacker-reachable from the sandbox. A naive
+		// `saved[saved.length] = c` triggers any setter installed on
+		// Array.prototype[N], handing `c` (whose `arr` field references the
+		// host-realm proxy of the argument array) to attacker-controlled code
+		// before we ever return. Use thisReflectDefineProperty to install entries
+		// as own data properties — this bypasses the prototype-chain setter and
+		// keeps every saved record in the bridge's exclusive custody.
+		const saved = [];
+		let savedLen = 0;
+		const c = neutralizeArraySpeciesOn(context);
+		if (c) {
+			thisReflectDefineProperty(saved, savedLen, {
+				__proto__: null,
+				value: c,
+				writable: true,
+				enumerable: true,
+				configurable: true,
+			});
+			savedLen++;
+		}
+		if (args) {
+			// SECURITY: args is @other(safe-array) produced by otherFromThisArguments,
+			// length/index access is safe. We defensively use a cached length to
+			// avoid accidental getter invocation.
+			const len = args.length | 0;
+			for (let i = 0; i < len; i++) {
+				const s = neutralizeArraySpeciesOn(args[i]);
+				if (s) {
+					thisReflectDefineProperty(saved, savedLen, {
+						__proto__: null,
+						value: s,
+						writable: true,
+						enumerable: true,
+						configurable: true,
+					});
+					savedLen++;
+				}
+			}
+		}
+		return saved;
+	}
+
+	// SECURITY: Restore every host array in a saved list. Must not throw.
+	function restoreArraySpeciesBatch(savedList) {
+		if (!savedList) return;
+		// SECURITY (GHSA-9qj6-qjgg-37qq): `savedList` was built by
+		// neutralizeArraySpeciesBatch using thisReflectDefineProperty, so every
+		// entry is an own data property. Indexed reads here therefore land on
+		// own data slots and never traverse Array.prototype, which means a
+		// sandbox-installed getter on Array.prototype[N] cannot intercept,
+		// substitute, or mutate the saved-state record between neutralize and
+		// restore.
+		const len = savedList.length | 0;
+		for (let i = 0; i < len; i++) {
+			restoreArraySpeciesOn(savedList[i]);
+		}
+	}
+
+	// SECURITY (GHSA-47x8-96vw-5wg6): Host-side scrub for values returned to the
+	// sandbox by any host->sandbox `apply` call. The per-value symbol filter in
+	// thisFromOtherWithFactory handles primitives that transit one at a time, but
+	// it does NOT remove a dangerous symbol sitting as an element of a returned
+	// host array or as a key of a returned host descriptor object -- the bridge
+	// wraps those containers, and the filter fires only at the moment a specific
+	// element is read. Defense-in-depth: scrub the raw host container before it
+	// is ever wrapped, so any further path that would enumerate it (internal
+	// algorithms, direct `Reflect.*` calls, prototype-walk re-entry) sees no
+	// dangerous symbol to begin with.
+	//
+	// Only acts on sandbox-side bridge (isHost === false) and only touches the
+	// result directly; never walks into nested host objects.
+	function stripDangerousSymbolsFromHostResult(ret) {
+		if (isHost) return;
+		if (ret === null || (typeof ret !== 'object' && typeof ret !== 'function')) return;
+		let isArr;
+		try {
+			isArr = thisArrayIsArray(ret);
+		} catch (e) {
+			return;
+		}
+		if (isArr) {
+			// Array: drop any element that is a dangerous cross-realm symbol.
+			// We splice by re-indexing via otherReflectDefineProperty into a
+			// compact range, then trim length. Using otherReflect* keeps us on
+			// the host realm's own property machinery.
+			let len;
+			try {
+				len = ret.length | 0;
+			} catch (e) {
+				return;
+			}
+			let w = 0;
+			for (let r = 0; r < len; r++) {
+				let v;
+				try {
+					v = otherReflectGet(ret, r);
+				} catch (e) {
+					return;
+				}
+				if (typeof v === 'symbol' && isDangerousCrossRealmSymbol(v)) continue;
+				if (w !== r) {
+					try {
+						otherReflectDefineProperty(ret, w, {
+							__proto__: null,
+							value: v,
+							writable: true,
+							enumerable: true,
+							configurable: true,
+						});
+					} catch (e) {
+						return;
+					}
+				}
+				w++;
+			}
+			if (w !== len) {
+				for (let i = w; i < len; i++) {
+					try {
+						otherReflectDeleteProperty(ret, i);
+					} catch (e) {
+						/* best effort */
+					}
+				}
+				try {
+					otherReflectDefineProperty(ret, 'length', {
+						__proto__: null,
+						value: w,
+						writable: true,
+						enumerable: false,
+						configurable: false,
+					});
+				} catch (e) {
+					/* best effort: non-writable length arrays stay over-long, per-element filter still strips */
+				}
+			}
+			return;
+		}
+		// Non-array object (e.g. Object.getOwnPropertyDescriptors return): delete
+		// any own property keyed by a dangerous cross-realm symbol. Using the
+		// host's Reflect.deleteProperty avoids any proxy invariants that apply
+		// to the sandbox-local descriptor filter.
+		// SECURITY (GHSA-m5q2-4fm3-vfqp): scrub every known dangerous nodejs.*
+		// symbol. Iterate the cached list so adding a new symbol to
+		// isDangerousCrossRealmSymbol automatically extends this scrub.
+		const dangerousSyms = [
+			thisSymbolNodeJSUtilInspectCustom,
+			thisSymbolNodeJSRejection,
+			thisSymbolNodeJSUtilPromisifyCustom,
+			thisSymbolNodeJSStreamReadable,
+			thisSymbolNodeJSStreamWritable,
+			thisSymbolNodeJSStreamDuplex,
+			thisSymbolNodeJSStreamTransform,
+			thisSymbolNodeJSWebstreamIsClosedPromise,
+			thisSymbolNodeJSWebstreamControllerErrorFunction,
+		];
+		for (let i = 0; i < dangerousSyms.length; i++) {
+			try {
+				otherReflectDeleteProperty(ret, dangerousSyms[i]);
+			} catch (e) {
+				/* best effort */
+			}
+		}
+	}
+
+	function thisDefaultGet(handler, object, key, desc) {
+		// Note: object@other(unsafe) key@prim desc@other(safe)
+		let ret; // @other(unsafe)
+		if (desc.get || desc.set) {
+			const getter = desc.get;
+			if (!getter) return undefined;
+			try {
+				ret = otherReflectApply(getter, object, [key]);
+			} catch (e) {
+				throw thisFromOtherForThrow(e);
+			}
+		} else {
+			ret = desc.value;
+		}
+		return handlerFromOtherWithContext(handler, ret);
+	}
+
+	function otherFromThisIfAvailable(to, from, key) {
+		// Note: to@other(safe) from@this(safe) key@prim throws@this(unsafe)
+		if (!thisReflectApply(thisObjectHasOwnProperty, from, [key])) return false;
+		try {
+			to[key] = otherFromThis(from[key]);
+		} catch (e) {
+			// @other(unsafe)
+			throw thisFromOtherForThrow(e);
+		}
+		return true;
+	}
+
+	class BaseHandler extends SafeBase {
+		constructor(token, object) {
+			// Note: token@this(unsafe) object@other(unsafe) throws@this(unsafe)
+			// SECURITY (GHSA-v37h-5mfm-c47c): Require the module-local
+			// construction token. Attackers who reach BaseHandler via the
+			// prototype of a leaked handler (e.g., through util.inspect
+			// showProxy) cannot read this Symbol -- it lives only in the
+			// closure of createBridge. Any direct `new BaseHandler(...)`,
+			// `Reflect.construct(...)`, or subclass instantiation from
+			// sandbox code therefore throws before the WeakMap registration
+			// runs, so `getHandlerObject(this)` throws VMError later and no
+			// trap method can operate on the forged instance.
+			if (token !== constructionToken) throw new VMError(OPNA);
+			super();
+			// Store the object in a WeakMap instead of as an instance property.
+			// This prevents leaking the raw object via util.inspect with showProxy:true,
+			// which exposes proxy handlers and their properties.
+			// NOTE: There is intentionally NO getObject() method on this class.
+			// The object is retrieved via the closure-scoped getHandlerObject() function,
+			// which is not accessible to attackers even if they obtain a handler reference.
+			thisReflectApply(thisWeakMapSet, handlerToObject, [this, object]);
+			// Store the factory in a WeakMap instead of as a method.
+			// NOTE: There is intentionally NO getFactory() method on this class.
+			// The factory is retrieved via the closure-scoped getHandlerFactory() function,
+			// which is not accessible to attackers even if they obtain a handler reference.
+			// Subclass constructors override this with their specific factory.
+			thisReflectApply(thisWeakMapSet, handlerToFactory, [this, defaultFactory]);
+		}
+
+		get(target, key, receiver) {
+			if (key === 'isProxy') return true;
+			// Note: target@this(unsafe) key@prim receiver@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			switch (key) {
+				case 'constructor': {
+					// SECURITY (GHSA-grj5-jjm8-h35p): If the underlying object is a
+					// host-realm array, ALWAYS return the sandbox-realm Array constructor
+					// (via the target's prototype). This neutralizes the species channel
+					// that V8's ArraySpeciesCreate reads via `this.constructor` during
+					// Array.prototype.{map,filter,slice,concat,splice,...}. Attackers
+					// who install a malicious `constructor` (directly, via defineProperty,
+					// via Object.assign, or via prototype injection) cannot leak it back
+					// into V8's species resolution, because this trap short-circuits to
+					// the safe sandbox Array. Sandbox-originated arrays are unaffected
+					// -- their target prototype is sandbox Array.prototype, and its
+					// .constructor is sandbox Array (the same return value).
+					//
+					// This covers the case where sandbox Array.prototype.map runs on
+					// a host-backed proxy and reads `r.constructor` via this proxy.get
+					// trap. The apply-trap-based neutralize (below) covers the case
+					// where a host Array.prototype.map runs in the host realm on the
+					// raw array directly (via otherReflectApply).
+					let isArr = false;
+					try {
+						isArr = thisArrayIsArray(target);
+					} catch (e) {}
+					if (isArr) {
+						// SECURITY: return the cached this-realm Array constructor.
+						// Do NOT read via `proto.constructor` -- that's vulnerable to
+						// prototype pollution (Array.prototype.constructor = attackerFn).
+						// thisArrayCtor is captured at module load time before any
+						// sandbox code can execute, so it is immutable from the
+						// attacker's perspective.
+						return thisArrayCtor;
+					}
+					const desc = otherSafeGetOwnPropertyDescriptor(object, key);
+					if (desc) {
+						if (desc.value && isDangerousFunctionConstructor(desc.value)) return {};
+						return thisDefaultGet(this, object, key, desc);
+					}
+					const proto = thisReflectGetPrototypeOf(target);
+					if (proto === null) return undefined;
+					const ctor = proto.constructor;
+					// Defense in depth: block this-realm dangerous function constructors.
+					// Normally handler methods are only called by the proxy mechanism
+					// which handles return values safely, but if the handler is exposed
+					// (e.g., via util.inspect showProxy), attackers can call get()
+					// directly with a forged target, leaking raw host constructors.
+					if (isThisDangerousFunctionConstructor(ctor)) return {};
+					return ctor;
+				}
+				case '__proto__': {
+					const desc = otherSafeGetOwnPropertyDescriptor(object, key);
+					if (desc) return thisDefaultGet(this, object, key, desc);
+					return thisReflectGetPrototypeOf(target);
+				}
+				case thisSymbolToStringTag:
+					if (!thisOtherHasOwnProperty(object, thisSymbolToStringTag)) {
+						const proto = thisReflectGetPrototypeOf(target);
+						const name = thisReflectApply(thisMapGet, protoName, [proto]);
+						if (name) return name;
+					}
+					break;
+				case 'arguments':
+				case 'caller':
+				case 'callee':
+					if (typeof object === 'function' && thisOtherHasOwnProperty(object, key)) {
+						throw thisThrowCallerCalleeArgumentsAccess(key);
+					}
+					break;
+			}
+			let ret; // @other(unsafe)
+			try {
+				ret = otherReflectGet(object, key);
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			}
+			// SECURITY (GHSA-x6m4-chr9-cg97): a HOST-realm Error's `.stack` is
+			// formatted host-side (absolute host paths, `node:` / `internal/`
+			// frames) and would otherwise cross to the sandbox verbatim through
+			// this trap — the v27g sandbox-realm stack formatter never ran on it.
+			// Redact host frames from the string before it leaves the bridge.
+			// This is the value-crossing chokepoint: it also covers the
+			// handleException rebuild path (sanitizeHostOwnProps reads
+			// `hostErr.stack` through THIS trap before carrying it onto the
+			// rebuilt sandbox error). Gated to genuine host errors + a string
+			// `.stack` so no other bridge-crossing value is touched, and to
+			// `!isHost` so host code inspecting a sandbox error is unaffected.
+			if (!isHost && key === 'stack' && typeof ret === 'string' && isOtherErrorObject(object)) {
+				return redactHostStack(ret);
+			}
+			// SECURITY (GHSA-489w-w794-jq94): a HOST ArrayBufferView's backing store
+			// is usually a WINDOW into Node's shared 64 KiB Buffer pool, so
+			// delivering it verbatim would hand the sandbox every other host-realm
+			// buffer in that pool (readable and writable). Bound it to the view's
+			// own bytes. The test is by IDENTITY (`ret` IS the view's store), not by
+			// property name, so `.buffer`, the legacy `.parent` (DEP0004) and any
+			// future alias are covered by one rule. The number branch keeps the
+			// (store, offset, length) triple self-consistent once a store has been
+			// bounded. The raw store getters are denied delivery above, so they
+			// cannot be extracted and invoked to bypass this.
+			if (
+				!isHost &&
+				(
+					(ret !== null && typeof ret === 'object') ||
+					(typeof ret === 'number' && ret !== 0 && (key === 'byteOffset' || key === 'offset'))
+				) &&
+				otherIsView(object)
+			) {
+				if (typeof ret === 'number') {
+					if (otherViewStoreIsBounded(object)) ret = 0;
+				} else {
+					ret = otherBoundedViewStore(object, ret);
+				}
+			}
+			return handlerFromOtherWithContext(this, ret);
+		}
+
+		set(target, key, value, receiver) {
+			// Note: target@this(unsafe) key@prim value@this(unsafe) receiver@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			// SECURITY (GHSA-vwrp-x96c-mhwq): refuse sandbox-originated writes
+			// targeting any host-realm intrinsic prototype or constructor.
+			// Covers C1 (plain assignment), C2 (Reflect.set), and C5
+			// (Object.assign) because all of them funnel through this trap.
+			if (isProtectedHostObject(object)) throw new VMError(OPNA);
+			// SECURITY (GHSA-m5q2-4fm3-vfqp): refuse sandbox-originated writes
+			// whose key is a known dangerous Node.js cross-realm symbol. Even
+			// if the read-direction filter (thisFromOtherWithFactory) and the
+			// sandbox-side Symbol.for override should both prevent the sandbox
+			// from ever surfacing such a symbol primitive, this trap is the
+			// structural last line of defense. Without this check, a future
+			// extraction-path bypass would let the sandbox install host-side
+			// hooks (util.promisify, stream brand, webstream controller, ...)
+			// on any non-protected host object exposed to it.
+			if (!isHost && typeof key === 'symbol' && isDangerousCrossRealmSymbol(key)) {
+				throw new VMError(OPNA);
+			}
+			if (key === '__proto__' && !thisOtherHasOwnProperty(object, key)) {
+				return this.setPrototypeOf(target, value);
+			}
+			// Intercept constructor writes to host arrays.
+			// V8's ArraySpeciesCreate reads constructor[Symbol.species] on the raw
+			// host object, bypassing proxy traps. If an attacker sets constructor
+			// to a species-returning function, map/filter/etc. store raw host values
+			// directly, bypassing bridge sanitization.
+			// Store the value on the proxy target (this-realm) instead of the host array.
+			if (key === 'constructor' && thisArrayIsArray(object)) {
+				thisReflectSet(target, key, value);
+				return true;
+			}
+			// SECURITY (GHSA-c4cf-2hgv-2qv6): honour ECMA-262 9.5.9 [[Set]]
+			// receiver semantics. When sandbox writes via an object that
+			// *inherits* from this proxy (e.g. `Object.create(proxy).x = v`)
+			// or supplies a forged receiver (`Reflect.set(proxy, k, v, child)`),
+			// V8 invokes this trap with `receiver` set to the child — not the
+			// proxy itself. The pre-fix trap ignored `receiver` and wrote
+			// through to the host object, letting attacker-controlled writes
+			// silently land on host-side properties the sandbox should never
+			// reach. Mirror ReadOnlyHandler.set's install-on-receiver shape,
+			// gated on receiver !== canonical proxy so the legitimate direct
+			// `proxy.x = v` write path (embedder contract) remains unchanged.
+			// `mappingOtherToThis` already stores the canonical sandbox-facing
+			// proxy per host object (populated in thisProxyOther for both the
+			// !isHost inner-proxy and isHost outer-proxy2 branches).
+			const canonicalProxy = thisReflectApply(thisWeakMapGet, mappingOtherToThis, [object]);
+			if (receiver !== canonicalProxy) {
+				return thisReflectDefineProperty(receiver, key, {
+					__proto__: null,
+					value: value,
+					writable: true,
+					enumerable: true,
+					configurable: true,
+				}) === true;
+			}
+			// SECURITY (GHSA-88hf-g992-jg85): never install a sandbox FUNCTION
+			// onto a raw host object that the sandbox obtained as a host
+			// `[[Prototype]]` (a plain BaseHandler wraps non-intrinsic host
+			// builtin prototypes such as EventEmitter.prototype, which are NOT in
+			// `protectedHostObjects`, so the isProtectedHostObject guard above
+			// does not fire for them). Without this, the write below
+			// (otherReflectSet) forwards the sandbox function straight onto the
+			// shared host prototype; a later host-side `process.emit(...)` then
+			// invokes it with `this === host process` → RCE. Divert the function
+			// onto the sandbox-side proxy `target` (NOT `receiver`: for
+			// BaseHandler `receiver` is the proxy itself, so defining on it would
+			// re-enter this trap and forward to the host again). Leaf host objects
+			// handed to the sandbox are not marked (no own `constructor`
+			// backlink), so both function and data writes still reach them —
+			// preserving the embedder contract. Data writes are always allowed
+			// through; only sandbox callables on marked prototypes are diverted.
+			if (!isHost && typeof value === 'function' && isHostObjectUsedAsPrototype(object)) {
+				thisReflectSet(target, key, value);
+				return true;
+			}
+			try {
+				value = otherFromThis(value);
+				return otherReflectSet(object, key, value) === true;
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			}
+		}
+
+		getPrototypeOf(target) {
+			// Note: target@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			return thisReflectGetPrototypeOf(target);
+		}
+
+		setPrototypeOf(target, value) {
+			// Note: target@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			throw new VMError(OPNA);
+		}
+
+		apply(target, context, args) {
+			// Note: target@this(unsafe) context@this(unsafe) args@this(safe-array) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			// SECURITY (GHSA-v6mx-mf47-r5wg): Invariant A — sandbox-applied host
+			// functions must not mutate any host-realm object's prototype chain
+			// via the bridge. The `set` / `defineProperty` / `setPrototypeOf`
+			// proxy traps already block direct mutation of host-realm objects
+			// (see `isProtectedHostObject`), but if sandbox code obtains a
+			// reference to a host-realm prototype-mutating intrinsic and applies
+			// it directly (e.g.
+			// `Buffer.call.call({}.__lookupSetter__, Buffer, "__proto__")` →
+			// host `Object.prototype.__proto__` setter), the actual prototype
+			// mutation happens inside the intrinsic with `this` = an unwrapped
+			// host object, bypassing every write trap. Refuse the call upstream.
+			//
+			// We refuse before unwrapping `context` / `args` so the host
+			// intrinsic is never reached with attacker-controlled inputs. The
+			// VMError mirrors the response from `isProtectedHostObject` callers
+			// (set/defineProperty/deleteProperty/preventExtensions).
+			if (!isHost) {
+				// SECURITY (GHSA-v6mx-mf47-r5wg): direct invocation check.
+				if (isDangerousHostProtoMutator(object)) throw new VMError(OPNA);
+				// SECURITY (GHSA-88hf-g992-jg85): defense-in-depth — refuse to
+				// invoke a raw host prototype-READER even if one ever reaches the
+				// apply trap (the primary defense denies its delivery, so the
+				// sandbox should never hold it; this closes the invocation path too).
+				if (isDangerousHostProtoReader(object)) throw new VMError(OPNA);
+				// SECURITY (GHSA-v6mx-mf47-r5wg): peel one indirection layer.
+				// When the apply target is host `Function.prototype.call` /
+				// `Function.prototype.apply` / `Function.prototype.bind`,
+				// `context` is the *underlying* function. The canonical PoC
+				// reaches host `__proto__` setter via
+				// `setProto.call(tp, null)`, where the apply target is
+				// `Function.prototype.call` (sandbox `.call` is `connect()`ed
+				// to host's), `context` is `setProto`, and `args = [tp, null]`.
+				// Unwrap `context` first (it may be a sandbox proxy of the
+				// host setter) and check the underlying.
+				if (isApplyIndirectionPrimitive(object)) {
+					let underlying;
+					try { underlying = otherFromThis(context); } catch (e) {}
+					if (isDangerousHostProtoMutator(underlying)) throw new VMError(OPNA);
+					// SECURITY (GHSA-88hf-g992-jg85): peeled reader (defense-in-depth).
+					if (isDangerousHostProtoReader(underlying)) throw new VMError(OPNA);
+				}
+				// When the apply target is host `Reflect.apply` /
+				// `Reflect.construct`, the underlying function is `args[0]`.
+				if (isReflectApplyPrimitive(object)) {
+					if (args && args.length > 0) {
+						let underlying;
+						try { underlying = otherFromThis(args[0]); } catch (e) {}
+						if (isDangerousHostProtoMutator(underlying)) throw new VMError(OPNA);
+						// SECURITY (GHSA-88hf-g992-jg85): reader (defense-in-depth).
+						if (isDangerousHostProtoReader(underlying)) throw new VMError(OPNA);
+					}
+				}
+			}
+			// SECURITY (GHSA-55hx): if the host function being applied is one of
+			// host's Promise.prototype.then/catch/finally, wrap the sandbox-supplied
+			// callbacks so their argument values flow through handleException /
+			// ensureThis before the user code runs. Without this, host promise
+			// machinery delivers raw rejection values whose nested fields (e.g.
+			// SuppressedError.error) escape recursive sandbox-side sanitization.
+			// SECURITY (GHSA-647f-g98j-qq25, patch bypass of GHSA-m283 fix): route
+			// every sandbox callback bound to a host Promise then/catch through the
+			// m283 rebuild, no matter how then/catch was invoked. The normalizer
+			// handles the direct form (`object` IS host then/catch) as well as
+			// `Function.prototype.call` / `.apply` indirection and stacked
+			// variants (`p.then.call.call(...)`) that the old direct-target-only
+			// gate missed. `.finally` needs no callback wrapping (its callback
+			// receives no value); downstream chained then/catch on the returned
+			// promise are intercepted recursively when they are invoked.
+			// SECURITY (GHSA-6454-5x88-m6jw): normalize returns the sandbox-realm
+			// receiver of the effective host then/catch/finally (or undefined), so
+			// we can neutralize that promise's @@species/constructor channel below.
+			const promiseSpeciesReceiver = normalizeHostPromiseCallbacks(object, context, args);
+			let ret; // @other(unsafe)
+			let savedSpecies = null; // SECURITY: GHSA-grj5-jjm8-h35p -- see neutralizeArraySpeciesBatch
+			let promiseSpeciesSaved = null; // SECURITY: GHSA-6454-5x88-m6jw
+			try {
+				context = otherFromThis(context);
+				args = otherFromThisArguments(args);
+				// SECURITY (GHSA-grj5-jjm8-h35p): Before invoking the host function,
+				// neutralize any attacker-installed `constructor`/Symbol.species channel
+				// on every host-realm array reachable as `context` or as a top-level
+				// argument. V8's ArraySpeciesCreate reads these properties on the raw
+				// object and will store raw host values into a sandbox-visible array,
+				// bypassing the bridge, unless we shadow them here. This batch+restore
+				// design supersedes the no-restore neutralize from #563 — that variant
+				// permanently mutated host arrays' `constructor` to undefined, which
+				// breaks legitimate downstream reads of `arr.constructor`.
+				//
+				// Only the sandbox→host direction is at risk: the species attack
+				// requires V8 to operate on a *raw* host array directly. In the
+				// host→sandbox direction (isHost=true, apply trap invoked when host
+				// calls a sandbox-realm callback), the invoked function runs in the
+				// sandbox realm and only sees bridge proxies — V8's ArraySpeciesCreate
+				// goes through the proxy's `get` trap and returns the safe sandbox
+				// Array constructor (see `BaseHandler.get` `constructor` branch).
+				// Skipping the neutralize there avoids fighting bridge proxies that
+				// legitimately refuse `defineProperty('constructor', ...)` — e.g.
+				// ReadOnly proxies created by `vm.freeze()` arriving as the third
+				// callback argument to `host_array.map(sandboxCb)` (issue #567).
+				if (!isHost) {
+					savedSpecies = neutralizeArraySpeciesBatch(context, args);
+					// SECURITY (GHSA-6454-5x88-m6jw): if this call is a host
+					// then/catch/finally, force its result-capability constructor to
+					// the realm-correct host %Promise% by neutralizing the raw host
+					// promise's @@species/constructor channel for the duration of the
+					// call. Blocks the missing-handler escape at the SpeciesConstructor
+					// chokepoint, independently of the reaction-slot wrapping above.
+					if (promiseSpeciesReceiver !== undefined) {
+						promiseSpeciesSaved = neutralizeHostPromiseSpeciesOn(otherFromThis(promiseSpeciesReceiver));
+					}
+				}
+				ret = otherReflectApply(object, context, args);
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			} finally {
+				// SECURITY: restore the pre-call species state even if the host call
+				// threw. Both restores are guaranteed not to throw.
+				restoreArraySpeciesBatch(savedSpecies);
+				restoreHostPromiseSpeciesOn(promiseSpeciesSaved);
+			}
+			// SECURITY (GHSA-47x8-96vw-5wg6): Defense-in-depth scrub on host-produced
+			// container results (arrays or plain objects) before wrapping. The
+			// per-element symbol filter in thisFromOtherWithFactory covers the common
+			// read path, but stripping the raw host container closes bypasses that
+			// enumerate the result through paths the bridge cannot intercept (e.g.
+			// a host method using an extracted host Reflect/Object reference).
+			stripDangerousSymbolsFromHostResult(ret);
+			// SECURITY (GHSA-gjq8-xm47-88rc): a host function invoked from the
+			// sandbox may return a host promise (e.g. an async host function, or
+			// events.once). Mark the underlying host promise handled so an
+			// ignored rejection cannot abort the host process. Idempotent and
+			// independent of the sandbox's own reaction — see markHostPromiseHandled.
+			markHostPromiseHandled(ret);
+			return thisFromOther(ret);
+		}
+
+		construct(target, args, newTarget) {
+			// Note: target@this(unsafe) args@this(safe-array) newTarget@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			let ret; // @other(unsafe)
+			let savedSpecies = null; // SECURITY: GHSA-grj5-jjm8-h35p
+			try {
+				args = otherFromThisArguments(args);
+				// SECURITY (GHSA-grj5-jjm8-h35p): constructors can internally invoke
+				// ArraySpeciesCreate on argument arrays (e.g., Array(arr) copies, typed
+				// array constructors, Promise.all on an iterable), so neutralize args
+				// before the call as well. Same isHost asymmetry as `apply` above —
+				// only the sandbox→host construct direction touches raw host arrays.
+				if (!isHost) {
+					savedSpecies = neutralizeArraySpeciesBatch(null, args);
+				}
+				ret = otherReflectConstruct(object, args);
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			} finally {
+				restoreArraySpeciesBatch(savedSpecies);
+			}
+			// SECURITY (GHSA-47x8-96vw-5wg6): see apply() counterpart. Constructors
+			// that wrap arrays (e.g. TypedArray from iterable) may return containers
+			// with dangerous symbol elements/keys; strip before wrapping.
+			stripDangerousSymbolsFromHostResult(ret);
+			// SECURITY (GHSA-2v2p-6j97-cjg9): a host constructor may RETURN a host
+			// promise (an explicit object return overrides `this`), which the
+			// sandbox can drop unhandled — the `apply` counterpart of this call
+			// (GHSA-gjq8-xm47-88rc) never saw it. Unconditional, mirroring `apply`:
+			// it covers even a host promise whose prototype chain was detached
+			// host-side, which the brand-gated delivery mark in `thisProxyOther`
+			// deliberately does not recognize.
+			markHostPromiseHandled(ret);
+			return thisFromOtherWithFactory(getHandlerFactory(this), ret, thisFromOther(object));
+		}
+
+		getOwnPropertyDescriptorDesc(target, prop, desc) {
+			// Note: target@this(unsafe) prop@prim desc@other{safe} throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			if (
+				desc &&
+				typeof object === 'function' &&
+				(prop === 'arguments' || prop === 'caller' || prop === 'callee')
+			)
+				desc.value = null;
+			// Block sandbox access to host's Function constructor via getOwnPropertyDescriptor.
+			// This mirrors the protection in the get() trap at the 'constructor' case.
+			// Only block when sandbox (!isHost) accesses host objects, not when host inspects sandbox.
+			if (!isHost && desc && prop === 'constructor' && desc.value && isDangerousFunctionConstructor(desc.value)) {
+				return undefined;
+			}
+			// SECURITY (GHSA-x6m4-chr9-cg97): `Object.getOwnPropertyDescriptor(
+			// hostErr, 'stack')` is a second read path for the host-formatted
+			// stack string (the `get` trap is the first). Redact host frames here
+			// too so both paths deliver the same v27g-consistent value. Gating:
+			// sandbox→host direction only, and a genuine host error.
+			//
+			// Two descriptor shapes, both must be covered. Up to Node 20, V8 gives
+			// the error an own DATA property `stack`. From Node 22 (V8 12.x) it is
+			// an own ACCESSOR: the descriptor carries no `value`, and handing the
+			// getter to the sandbox would let `desc.get.call(err)` pull the raw,
+			// host-formatted string straight through the apply trap — the leak this
+			// advisory closes. Collapse the accessor to a redacted data descriptor
+			// so no unredacted read path survives; the paired setter is dropped with
+			// it, which only removes the sandbox's ability to rewrite a host error's
+			// stack (never a capability it needed).
+			if (!isHost && desc && prop === 'stack' && isOtherErrorObject(object)) {
+				if (!desc.get && !desc.set) {
+					if (typeof desc.value === 'string') desc.value = redactHostStack(desc.value);
+				} else {
+					let raw;
+					try {
+						raw = desc.get ? otherReflectApply(desc.get, object, []) : undefined;
+					} catch (e) {
+						raw = undefined;
+					}
+					// Fail closed: a throwing or non-string getter yields no stack at all.
+					desc = {
+						__proto__: null,
+						value: typeof raw === 'string' ? redactHostStack(raw) : undefined,
+						writable: true,
+						enumerable: desc.enumerable === true,
+						configurable: desc.configurable === true,
+					};
+				}
+			}
+			return desc;
+		}
+
+		getOwnPropertyDescriptor(target, prop) {
+			// Note: target@this(unsafe) prop@prim throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			// Filter dangerous cross-realm symbols to prevent extraction
+			if (isDangerousCrossRealmSymbol(prop)) return undefined;
+			const object = getHandlerObject(this); // @other(unsafe)
+			let desc; // @other(safe)
+			try {
+				desc = otherSafeGetOwnPropertyDescriptor(object, prop);
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			}
+
+			desc = this.getOwnPropertyDescriptorDesc(target, prop, desc);
+
+			if (!desc) return undefined;
+
+			// SECURITY (GHSA-489w-w794-jq94): defense in depth for the descriptor
+			// path. On a genuine host view the backing store is reached through an
+			// accessor inherited from `%TypedArray%.prototype` / `DataView.prototype`
+			// / `Buffer.prototype`, so it never surfaces here as an own data
+			// property — but a host-side `defineProperty` could shadow it with one,
+			// and a raw data descriptor would otherwise carry the unbounded store
+			// past the `get` trap. Same identity-based rule, no property-name list.
+			if (
+				!isHost && !desc.get && !desc.set &&
+				desc.value !== null && typeof desc.value === 'object' &&
+				otherIsView(object)
+			) {
+				desc.value = otherBoundedViewStore(object, desc.value);
+			}
+
+			let thisDesc;
+			if (desc.get || desc.set) {
+				let thisGet = handlerFromOtherWithContext(this, desc.get);
+				let thisSet = handlerFromOtherWithContext(this, desc.set);
+				// SECURITY (GHSA-489w-w794-jq94): an accessor the bridge refuses to
+				// deliver (a raw host backing-store getter such as
+				// `Buffer.prototype.parent`, or a raw prototype reader) comes back as
+				// the non-callable sentinel. An accessor descriptor may only carry a
+				// function or `undefined`, so surface the refusal as "no accessor"
+				// — otherwise `Object.defineProperty` rejects the whole descriptor
+				// with "Getter must be a function" and an ordinary
+				// `Object.getOwnPropertyDescriptor` on a host prototype throws.
+				// Reachable only for host prototypes that are NOT proto-mapped to a
+				// sandbox intrinsic (host `Buffer.prototype` is the case in point).
+				if (thisGet !== undefined && typeof thisGet !== 'function') thisGet = undefined;
+				if (thisSet !== undefined && typeof thisSet !== 'function') thisSet = undefined;
+				thisDesc = {
+					__proto__: null,
+					get: thisGet,
+					set: thisSet,
+					enumerable: desc.enumerable === true,
+					configurable: desc.configurable === true,
+				};
+			} else {
+				thisDesc = {
+					__proto__: null,
+					value: handlerFromOtherWithContext(this, desc.value),
+					writable: desc.writable === true,
+					enumerable: desc.enumerable === true,
+					configurable: desc.configurable === true,
+				};
+			}
+			if (!thisDesc.configurable) {
+				const oldDesc = thisSafeGetOwnPropertyDescriptor(target, prop);
+				if (!oldDesc || oldDesc.configurable || oldDesc.writable !== thisDesc.writable) {
+					if (!thisReflectDefineProperty(target, prop, thisDesc)) throw thisUnexpected();
+				}
+			}
+			return thisDesc;
+		}
+
+		definePropertyDesc(target, prop, desc) {
+			// Note: target@this(unsafe) prop@prim desc@this(safe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			return desc;
+		}
+
+		defineProperty(target, prop, desc) {
+			// Note: target@this(unsafe) prop@prim desc@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			// SECURITY (GHSA-vwrp-x96c-mhwq): refuse sandbox-originated
+			// defineProperty calls targeting any host-realm intrinsic
+			// prototype or constructor. Covers C3 (Object.defineProperty).
+			if (isProtectedHostObject(object)) throw new VMError(OPNA);
+			// SECURITY (GHSA-m5q2-4fm3-vfqp): mirror the set trap — refuse
+			// dangerous-symbol-keyed property installation on any host object.
+			if (!isHost && typeof prop === 'symbol' && isDangerousCrossRealmSymbol(prop)) {
+				throw new VMError(OPNA);
+			}
+			if (!thisReflectSetPrototypeOf(desc, null)) throw thisUnexpected();
+
+			// Intercept defineProperty for constructor on host arrays.
+			// Same rationale as the set trap: prevent ArraySpeciesCreate manipulation.
+			if (prop === 'constructor' && thisArrayIsArray(object)) {
+				thisReflectDefineProperty(target, prop, desc);
+				return true;
+			}
+
+			desc = this.definePropertyDesc(target, prop, desc);
+
+			if (!desc) return false;
+
+			// SECURITY (GHSA-88hf-g992-jg85): defineProperty counterpart of the
+			// set-trap defense above. `Object.defineProperty(hostProto, k,
+			// {value: fn})` or `{get(){...}}` / `{set(){...}}` is an equivalent
+			// vector for planting a sandbox-invokable callable on a host object
+			// the sandbox obtained as a `[[Prototype]]` (e.g. the non-protected
+			// EventEmitter.prototype). When `object` is a marked host prototype,
+			// install the function-valued or accessor descriptor on the
+			// sandbox-side proxy `target` instead of forwarding it to the host.
+			// Data-only descriptors always reach the host, and leaf host objects
+			// (unmarked) keep the embedder contract for both value and accessor
+			// writes.
+			if (!isHost && isHostObjectUsedAsPrototype(object) && (desc.get || desc.set || typeof desc.value === 'function')) {
+				thisReflectDefineProperty(target, prop, desc);
+				return true;
+			}
+
+			let otherDesc = { __proto__: null };
+			let hasFunc = true;
+			let hasValue = true;
+			let hasBasic = true;
+			hasFunc &= otherFromThisIfAvailable(otherDesc, desc, 'get');
+			hasFunc &= otherFromThisIfAvailable(otherDesc, desc, 'set');
+			hasValue &= otherFromThisIfAvailable(otherDesc, desc, 'value');
+			hasValue &= otherFromThisIfAvailable(otherDesc, desc, 'writable');
+			hasBasic &= otherFromThisIfAvailable(otherDesc, desc, 'enumerable');
+			hasBasic &= otherFromThisIfAvailable(otherDesc, desc, 'configurable');
+
+			try {
+				if (!otherReflectDefineProperty(object, prop, otherDesc)) return false;
+				if (otherDesc.configurable !== true && (!hasBasic || !(hasFunc || hasValue))) {
+					otherDesc = otherSafeGetOwnPropertyDescriptor(object, prop);
+				}
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			}
+
+			if (!otherDesc.configurable) {
+				let thisDesc;
+				if (otherDesc.get || otherDesc.set) {
+					thisDesc = {
+						__proto__: null,
+						get: handlerFromOtherWithContext(this, otherDesc.get),
+						set: handlerFromOtherWithContext(this, otherDesc.set),
+						enumerable: otherDesc.enumerable,
+						configurable: otherDesc.configurable,
+					};
+				} else {
+					thisDesc = {
+						__proto__: null,
+						value: handlerFromOtherWithContext(this, otherDesc.value),
+						writable: otherDesc.writable,
+						enumerable: otherDesc.enumerable,
+						configurable: otherDesc.configurable,
+					};
+				}
+				if (!thisReflectDefineProperty(target, prop, thisDesc)) throw thisUnexpected();
+			}
+			return true;
+		}
+
+		deleteProperty(target, prop) {
+			// Note: target@this(unsafe) prop@prim throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			// SECURITY (GHSA-vwrp-x96c-mhwq): refuse sandbox-originated
+			// property deletion targeting any host-realm intrinsic prototype
+			// or constructor. Covers C4 (delete hostProto.prop), which could
+			// otherwise remove `hasOwnProperty`, `toString`, etc. from every
+			// host object of that class.
+			if (isProtectedHostObject(object)) throw new VMError(OPNA);
+			// SECURITY (GHSA-m5q2-4fm3-vfqp): refuse sandbox-originated
+			// deletes whose key is a dangerous cross-realm symbol. Without
+			// this, sandbox code can strip host-set hooks (e.g. delete a
+			// Node-installed `nodejs.util.inspect.custom` from a host object)
+			// and substitute its own behavior or break host code that relies
+			// on the host-set property.
+			if (!isHost && typeof prop === 'symbol' && isDangerousCrossRealmSymbol(prop)) {
+				throw new VMError(OPNA);
+			}
+			try {
+				return otherReflectDeleteProperty(object, prop) === true;
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			}
+		}
+
+		has(target, key) {
+			// Note: target@this(unsafe) key@prim throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			// Filter dangerous cross-realm symbols
+			if (isDangerousCrossRealmSymbol(key)) return false;
+			const object = getHandlerObject(this); // @other(unsafe)
+			try {
+				return otherReflectHas(object, key) === true;
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			}
+		}
+
+		isExtensible(target) {
+			// Note: target@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			try {
+				if (otherReflectIsExtensible(object)) return true;
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			}
+			if (thisReflectIsExtensible(target)) {
+				doPreventExtensions(this, target);
+			}
+			return false;
+		}
+
+		ownKeys(target) {
+			// Note: target@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			let res; // @other(unsafe)
+			try {
+				res = otherReflectOwnKeys(object);
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			}
+			// SECURITY (GHSA-47x8-96vw-5wg6): Iterate the raw host result directly via
+			// otherReflectGet instead of wrapping it with thisFromOther first. Wrapping
+			// makes per-element reads transit thisFromOtherWithFactory's 'symbol' branch,
+			// which returns `undefined` for dangerous cross-realm symbols. That undefined
+			// would then survive the dangerous-symbol check below and be pushed into the
+			// ownKeys result -- a Proxy invariant violation (property keys must be string
+			// or symbol, never undefined). Reading directly gives us the raw symbol so we
+			// can detect and drop it instead of re-emitting an invalid key.
+			const filtered = [];
+			let len;
+			try {
+				len = res.length | 0;
+			} catch (e) {
+				len = 0;
+			}
+			for (let i = 0; i < len; i++) {
+				let key;
+				try {
+					key = otherReflectGet(res, i);
+				} catch (e) {
+					continue;
+				}
+				if (typeof key !== 'string' && typeof key !== 'symbol') continue;
+				if (typeof key === 'symbol' && isDangerousCrossRealmSymbol(key)) continue;
+				thisReflectDefineProperty(filtered, filtered.length, {
+					__proto__: null,
+					value: key,
+					writable: true,
+					enumerable: true,
+					configurable: true,
+				});
+			}
+			return filtered;
+		}
+
+		preventExtensions(target) {
+			// Note: target@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			// SECURITY (GHSA-vwrp-x96c-mhwq): refuse sandbox-originated
+			// preventExtensions on any host-realm intrinsic prototype or
+			// constructor. Without this the sandbox could permanently freeze
+			// host prototypes, breaking every subsequent host-side attempt
+			// to install or adjust properties on them -- a durable host DoS.
+			if (isProtectedHostObject(object)) throw new VMError(OPNA);
+			try {
+				if (!otherReflectPreventExtensions(object)) return false;
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			}
+			if (thisReflectIsExtensible(target)) {
+				doPreventExtensions(this, target);
+			}
+			return true;
+		}
+
+		enumerate(target) {
+			// Note: target@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			let res; // @other(unsafe)
+			try {
+				res = otherReflectEnumerate(object);
+			} catch (e) {
+				// @other(unsafe)
+				throw thisFromOtherForThrow(e);
+			}
+			return handlerFromOtherWithContext(this, res);
+		}
+	}
+
+	BaseHandler.prototype[thisSymbolNodeJSUtilInspectCustom] = undefined;
+	BaseHandler.prototype[thisSymbolToStringTag] = 'VM2 Wrapper';
+	BaseHandler.prototype[thisSymbolIterator] = undefined;
+
+	function defaultFactory(object) {
+		// Note: other@other(unsafe) returns@this(unsafe) throws@this(unsafe)
+		// SECURITY (GHSA-v37h-5mfm-c47c): pass the closure-scoped
+		// construction token. This is the only trusted construction site
+		// for BaseHandler.
+		return new BaseHandler(constructionToken, object);
+	}
+
+	class ProtectedHandler extends BaseHandler {
+		constructor(token, object) {
+			// SECURITY (GHSA-v37h-5mfm-c47c): forward the token through
+			// super(). If `token` is wrong the super() call throws before
+			// the factory WeakMap is touched.
+			super(token, object);
+			thisReflectApply(thisWeakMapSet, handlerToFactory, [this, protectedFactory]);
+		}
+
+		set(target, key, value, receiver) {
+			// Note: target@this(unsafe) key@prim value@this(unsafe) receiver@this(unsafe) throws@this(unsafe)
+			// SECURITY (GHSA-v37h-5mfm-c47c, GHSA-qcp4-v2jj-fjx8):
+			// validateHandlerTarget catches both forged-this (handler not
+			// registered) and forged-target (registered handler, attacker
+			// target); subsumes the earlier getHandlerObject(this) guard.
+			validateHandlerTarget(this, target);
+			if (typeof value === 'function') {
+				return (
+					thisReflectDefineProperty(receiver, key, {
+						__proto__: null,
+						value: value,
+						writable: true,
+						enumerable: true,
+						configurable: true,
+					}) === true
+				);
+			}
+			return super.set(target, key, value, receiver);
+		}
+
+		definePropertyDesc(target, prop, desc) {
+			// Note: target@this(unsafe) prop@prim desc@this(safe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			if (desc && (desc.set || desc.get || typeof desc.value === 'function')) return undefined;
+			return desc;
+		}
+	}
+
+	function protectedFactory(object) {
+		// Note: other@other(unsafe) returns@this(unsafe) throws@this(unsafe)
+		// SECURITY (GHSA-v37h-5mfm-c47c): pass token, see defaultFactory.
+		return new ProtectedHandler(constructionToken, object);
+	}
+
+	class ReadOnlyHandler extends BaseHandler {
+		constructor(token, object) {
+			// SECURITY (GHSA-v37h-5mfm-c47c): forward the token, see
+			// ProtectedHandler for rationale.
+			super(token, object);
+			thisReflectApply(thisWeakMapSet, handlerToFactory, [this, readonlyFactory]);
+		}
+
+		set(target, key, value, receiver) {
+			// Note: target@this(unsafe) key@prim value@this(unsafe) receiver@this(unsafe) throws@this(unsafe)
+			// SECURITY (GHSA-v37h-5mfm-c47c, GHSA-qcp4-v2jj-fjx8):
+			// validateHandlerTarget subsumes the earlier getHandlerObject(this)
+			// guard and additionally rejects attacker-supplied targets.
+			validateHandlerTarget(this, target);
+			return thisReflectDefineProperty(receiver, key, {
+				__proto__: null,
+				value: value,
+				writable: true,
+				enumerable: true,
+				configurable: true,
+			});
+		}
+
+		setPrototypeOf(target, value) {
+			// Note: target@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			return false;
+		}
+
+		defineProperty(target, prop, desc) {
+			// Note: target@this(unsafe) prop@prim desc@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			return false;
+		}
+
+		deleteProperty(target, prop) {
+			// Note: target@this(unsafe) prop@prim throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			return false;
+		}
+
+		getOwnPropertyDescriptorDesc(target, prop, desc) {
+			// Note: target@this(unsafe) prop@prim desc@other{safe} throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			desc = super.getOwnPropertyDescriptorDesc(target, prop, desc); // SECURITY (GHSA-633r-hq9m-c4ff)
+			// SECURITY (GHSA-633r-hq9m-c4ff): a read-only view (vm.freeze) must
+			// never hand the sandbox an operative host setter. The set/
+			// defineProperty/deleteProperty traps are already inert, but
+			// getOwnPropertyDescriptor / __lookupSetter__ /
+			// Reflect.getOwnPropertyDescriptor / Object.getOwnPropertyDescriptors
+			// all read the accessor's `set`, which BaseHandler otherwise wraps
+			// into a live, host-mutating function whose call lands in
+			// BaseHandler.apply on the raw host object -- bypassing every write
+			// trap. Drop `set` here (before it is wrapped) so only the getter (a
+			// read, which the read-only contract permits) survives; every
+			// descriptor-based write channel becomes inert. Only tighten on the
+			// sandbox->host direction (!isHost); host inspection is unchanged.
+			if (!isHost && desc && desc.set) {
+				desc.set = undefined; // SECURITY (GHSA-633r-hq9m-c4ff)
+			}
+			return desc;
+		}
+
+		isExtensible(target) {
+			// Note: target@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			// Align proxy-target extensibility with the trap result. ReadOnly
+			// proxies always report non-extensible, but the underlying proxy
+			// target is created extensible. Without this alignment V8 raises
+			// `'isExtensible' on proxy: trap result does not reflect
+			// extensibility of proxy target` whenever anything calls
+			// Reflect.isExtensible on the proxy -- including the bridge's own
+			// species-attack defense (GHSA-grj5-jjm8-h35p) when a host array is
+			// passed back into the sandbox as a callback argument from
+			// Array.prototype.{map,forEach,...}. See issue #567.
+			if (thisReflectIsExtensible(target)) {
+				doPreventExtensions(this, target);
+			}
+			return false;
+		}
+
+		preventExtensions(target) {
+			// Note: target@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			// ReadOnly proxies are conceptually non-extensible already; mark
+			// the target accordingly so the trap can honestly report success
+			// and the proxy invariant stays consistent with `isExtensible`.
+			if (thisReflectIsExtensible(target)) {
+				doPreventExtensions(this, target);
+			}
+			return true;
+		}
+	}
+
+	function readonlyFactory(object) {
+		// Note: other@other(unsafe) returns@this(unsafe) throws@this(unsafe)
+		// SECURITY (GHSA-v37h-5mfm-c47c): pass token, see defaultFactory.
+		return new ReadOnlyHandler(constructionToken, object);
+	}
+
+	class ReadOnlyMockHandler extends ReadOnlyHandler {
+		constructor(token, object, mock) {
+			// Note: object@other(unsafe) mock:this(unsafe) throws@this(unsafe)
+			// SECURITY (GHSA-v37h-5mfm-c47c): forward the token.
+			super(token, object);
+			this.mock = mock;
+		}
+
+		get(target, key, receiver) {
+			if (key === 'isProxy') return true;
+			// Note: target@this(unsafe) key@prim receiver@this(unsafe) throws@this(unsafe)
+			validateHandlerTarget(this, target); // SECURITY (GHSA-qcp4-v2jj-fjx8)
+			const object = getHandlerObject(this); // @other(unsafe)
+			const mock = this.mock;
+			if (thisReflectApply(thisObjectHasOwnProperty, mock, key) && !thisOtherHasOwnProperty(object, key)) {
+				return mock[key];
+			}
+			return super.get(target, key, receiver);
+		}
+	}
+
+	function thisFromOther(other) {
+		// Note: other@other(unsafe) returns@this(unsafe) throws@this(unsafe)
+		return thisFromOtherWithFactory(defaultFactory, other);
+	}
+
+	function thisProxyOther(factory, other, proto, preventUnwrap) {
+		const target = thisCreateTargetObject(other, proto);
+		// Install nodejs.util.inspect.custom on host-side proxy targets so
+		// console.log / util.inspect on bridged values render the underlying
+		// shape instead of `Proxy(Proxy({}))` on Node 26+. Only host-side
+		// targets receive the marker: the sandbox-side proxy target is unsafe
+		// to expose any host-realm function reference on, and sandbox util
+		// machinery (when granted) walks its own proxies via the sandbox-side
+		// handler. Functions are skipped because their default formatting
+		// (`[Function: name]`) is already what users expect.
+		if (isHost && typeof other !== 'function' && target !== other) {
+			thisReflectDefineProperty(target, thisSymbolNodeJSUtilInspectCustom, {
+				__proto__: null,
+				value: thisInspectProxyAsRepresentation,
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			});
+		}
+		const handler = factory(other);
+		// SECURITY (GHSA-qcp4-v2jj-fjx8): pair this handler with its canonical
+		// proxy target so trap methods can reject forged targets supplied via
+		// a leaked handler reference. Every BaseHandler/ProtectedHandler/
+		// ReadOnlyHandler/ReadOnlyMockHandler instance is created through this
+		// function, so registration here is sufficient.
+		thisReflectApply(thisWeakMapSet, handlerToTarget, [handler, target]);
+		const proxy = new ThisProxy(target, handler);
+		try {
+			if (!preventUnwrap) {
+				otherReflectApply(otherWeakMapSet, mappingThisToOther, [proxy, other]);
+			}
+			registerProxy(proxy, handler);
+		} catch (e) {
+			throw new VMError('Unexpected error');
+		}
+		if (!isHost) {
+			// SECURITY (GHSA-88hf-g992-jg85): eagerly mark host `[[Prototype]]`
+			// objects the moment they cross into the sandbox, so a later sandbox
+			// FUNCTION/accessor write to them is diverted (set/defineProperty
+			// traps) rather than forwarded onto the shared host prototype (→ RCE).
+			// Marking at delivery — before any sandbox write can run — makes the
+			// defense independent of how the prototype was obtained and
+			// persistent against later self-`constructor` corruption. Leaf host
+			// objects handed to the sandbox are not prototypes (no own
+			// `constructor` backlink) and stay writable.
+			if (looksLikeHostPrototype(other)) markHostObjectUsedAsPrototype(other);
+			thisReflectApply(thisWeakMapSet, mappingOtherToThis, [other, proxy]);
+			// SECURITY (GHSA-2v2p-6j97-cjg9): every host promise handed to the
+			// sandbox carries a benign rejection reaction before sandbox code can
+			// ignore it. GHSA-gjq8-xm47-88rc marked only the `apply` trap's return
+			// value; a host promise also reaches the sandbox as a `construct`
+			// result, as an accessor/`get` value, and as an argument to a sandbox
+			// callback. `thisProxyOther` is the single place a host object is
+			// given its sandbox proxy — every one of those routes funnels through
+			// here — so marking at this delivery chokepoint closes the class
+			// rather than one route. Runs exactly once per host object (later
+			// deliveries hit the `mappingOtherToThis` cache), so an ignored
+			// rejection can never trip Node's unhandledRejection policy and tear
+			// down the host process. Idempotent: promises multicast, so the
+			// sandbox's own (GHSA-55hx-sanitized) reaction still observes the
+			// rejection independently. Placed AFTER the `mappingOtherToThis` write:
+			// the walk and `then` can run embedder host code (a `getPrototypeOf`
+			// trap; `SpeciesConstructor` reading `constructor`/`@@species`), and a
+			// re-entrant read of the same host object must find this proxy in the
+			// cache rather than mint a second one.
+			if (isOtherPromise(other)) markHostPromiseHandled(other);
+			return proxy;
+		}
+		const proxy2 = new ThisProxy(proxy, emptyFrozenObject);
+		try {
+			otherReflectApply(otherWeakMapSet, mappingThisToOther, [proxy2, other]);
+			registerProxy(proxy2, handler);
+		} catch (e) {
+			throw new VMError('Unexpected error');
+		}
+		thisReflectApply(thisWeakMapSet, mappingOtherToThis, [other, proxy2]);
+		return proxy2;
+	}
+
+	function thisEnsureThis(other) {
+		const type = typeof other;
+		switch (type) {
+			case 'object':
+				if (other === null) {
+					return null;
+				}
+			// fallthrough
+			case 'function':
+				// SECURITY (GHSA-j89j-5m6r-cr2q): symmetric denial on the re-entry
+				// chokepoint. thisEnsureThis coerces host values into the sandbox on
+				// catch bindings / `this`-coercion sites; the host global must never
+				// surface here either. Delivered as `undefined`, matching
+				// thisFromOtherWithFactory. Placed before the cache lookup.
+				if (!isHost && other === otherGlobal) {
+					return undefined;
+				}
+				// SECURITY (GHSA-v6mx-mf47-r5wg): Invariant B — no host-realm
+				// object reaches sandbox code unwrapped. Cache check FIRST,
+				// before the proto-chain walk: if `other` has ever crossed the
+				// bridge as a host-realm value (`mappingOtherToThis` tracks
+				// every host-realm value the bridge has wrapped), return the
+				// existing proxy. This catches host-realm values whose
+				// prototype chain was subsequently tampered with — the cache
+				// lookup is independent of the prototype chain and so cannot
+				// be defeated by mutating it.
+				//
+				// Note: we deliberately do NOT wrap on the fall-through paths
+				// below (null proto, or walked-off the chain without finding a
+				// mapping). Wrapping there would re-introduce GHSA-9vg3-4rfj-wgcm
+				// — a sandbox-realm `{__proto__: null}` value passed to
+				// handleException would be turned into a host-treating proxy
+				// whose `set` trap unwraps sandbox-side proxies of host
+				// references onto the underlying object, recreating the very
+				// escape that fix closed. The write-side defense in the apply
+				// trap above (Invariant A) prevents the canonical attack from
+				// reaching a state where a fresh, never-bridged host object
+				// surfaces here through a tampered proto chain.
+				const ensureCached = thisReflectApply(thisWeakMapGet, mappingOtherToThis, [other]);
+				if (ensureCached) return ensureCached;
+				// SECURITY (GHSA-cfcw-xp6x-25gj): Defense-in-depth — never surface a
+				// raw host prototype mutator through ensureThis. ensureThis is the
+				// re-entry chokepoint used for sandbox catch bindings and other
+				// `this`-coercion sites. Placed after the cache check so
+				// `connect()`-registered surrogates still flow through. Returning
+				// emptyFrozenObject is consistent with the dangerous-Function-ctor
+				// handling in thisFromOtherWithFactory.
+				if (!isHost && isDangerousHostProtoMutator(other)) {
+					return emptyFrozenObject;
+				}
+				// SECURITY (GHSA-88hf-g992-jg85): symmetric read-side denial on the
+				// re-entry chokepoint (catch bindings / `this`-coercion). See
+				// thisFromOtherWithFactory. After the cache check so surrogates flow.
+				if (!isHost && isDangerousHostProtoReader(other)) {
+					return emptyFrozenObject;
+				}
+				let proto = thisReflectGetPrototypeOf(other);
+				if (!proto) {
+					return other;
+				}
+				// SECURITY (GHSA-cfcw-xp6x-25gj): track whether the prototype walk
+				// passes through the sandbox-realm `Object.prototype`. Every genuine
+				// sandbox-realm object (plain `{}`, sandbox Error, class instance,
+				// etc.) has it in its chain, so such values always hit a protoMapping
+				// (sandbox intrinsics are registered) or terminate via it. A value
+				// that walks its whole chain to null WITHOUT a mapping AND without
+				// ever seeing the sandbox Object.prototype is anomalous: it is a
+				// host-realm object whose prototype chain was severed host-side. The
+				// map/bind laundering bypass (apply.bind(call,call) over a genuine
+				// host array's `.map`) sets a Node-internal error prototype's
+				// `[[Prototype]]` to null host-side, so the walk falls off before
+				// reaching the registered host TypeError.prototype mapping. Returning
+				// such an object raw lets `e.constructor.constructor` reach host
+				// `Function`. Mechanism-independent payoff defense — it does not
+				// matter HOW the chain was severed.
+				let sawSandboxObjectProto = false;
+				while (proto) {
+					if (proto === thisObjectPrototype) sawSandboxObjectProto = true; // SECURITY (GHSA-cfcw-xp6x-25gj)
+					const mapping = thisReflectApply(thisMapGet, protoMappings, [proto]);
+					if (mapping) {
+						const mapped = thisReflectApply(thisWeakMapGet, mappingOtherToThis, [other]);
+						if (mapped) return mapped;
+						return mapping(defaultFactory, other);
+					}
+					proto = thisReflectGetPrototypeOf(proto);
+				}
+				// SECURITY (GHSA-cfcw-xp6x-25gj): walked the entire chain to null with
+				// no protoMapping. If the chain never included the sandbox
+				// Object.prototype, the value is a host-realm object with a
+				// severed/foreign chain — refuse to surface it raw. `emptyFrozenObject`
+				// mirrors the dangerous-Function-constructor / dangerous-mutator
+				// sentinel used elsewhere; its `.constructor.constructor` is the
+				// harmless sandbox Function. The immediate-null-proto branch above
+				// (GHSA-9vg3-4rfj-wgcm sandbox `{__proto__:null}`) returns before
+				// entering this walk and is unaffected.
+				if (!isHost && !sawSandboxObjectProto) {
+					return emptyFrozenObject;
+				}
+				return other;
+			case 'symbol':
+				// SECURITY (GHSA-47x8-96vw-5wg6): Strip dangerous cross-realm symbols when a
+				// host value is coerced into this-realm here. thisEnsureThis sits on re-entry
+				// paths where a host-wrapped `this` binding may funnel a symbol primitive back
+				// into the sandbox. Keeping this case in lock-step with thisFromOtherWithFactory
+				// ensures no boundary path leaks a raw cross-realm inspect-custom / rejection
+				// symbol regardless of the call shape.
+				if (!isHost && isDangerousCrossRealmSymbol(other)) return undefined;
+				return other;
+			case 'undefined':
+			case 'string':
+			case 'number':
+			case 'boolean':
+			case 'bigint':
+				return other;
+
+			default: // new, unknown types can be dangerous
+				throw new VMError(`Unknown type '${type}'`);
+		}
+	}
+
+	function thisFromOtherForThrow(other) {
+		for (let loop = 0; loop < 10; loop++) {
+			const type = typeof other;
+			switch (type) {
+				case 'object':
+					if (other === null) {
+						return null;
+					}
+				// fallthrough
+				case 'function':
+					// SECURITY (GHSA-j89j-5m6r-cr2q): symmetric denial on the throw
+					// path. A host function invoked from the sandbox could throw the
+					// host global (or a value carrying it); it must never reach a
+					// sandbox catch binding. Delivered as `undefined`, matching the
+					// read chokepoints. Placed before the cache lookup.
+					if (!isHost && other === otherGlobal) {
+						return undefined;
+					}
+					const mapped = thisReflectApply(thisWeakMapGet, mappingOtherToThis, [other]);
+					if (mapped) return mapped;
+					// SECURITY (GHSA-cfcw-xp6x-25gj): Defense-in-depth — even on the
+					// throw path, never deliver a raw reference to a host prototype
+					// mutator into sandbox catch handlers. Mirrors the filter in
+					// thisFromOtherWithFactory so a host throw value that happens to
+					// be one of these intrinsics (e.g. if attacker manages to stuff
+					// it into a rejection) is collapsed to a safe sentinel. Placed
+					// AFTER the cache check so `connect()`-registered safe sandbox
+					// surrogates still flow through normally.
+					if (!isHost && isDangerousHostProtoMutator(other)) {
+						return emptyFrozenObject;
+					}
+					// SECURITY (GHSA-88hf-g992-jg85): symmetric read-side denial on the
+					// throw path. See thisFromOtherWithFactory. After the cache check.
+					if (!isHost && isDangerousHostProtoReader(other)) {
+						return emptyFrozenObject;
+					}
+					let proto;
+					try {
+						proto = otherReflectGetPrototypeOf(other);
+					} catch (e) {
+						// @other(unsafe)
+						other = e;
+						break;
+					}
+					if (!proto) {
+						return thisProxyOther(defaultFactory, other, null);
+					}
+					for (;;) {
+						const mapping = thisReflectApply(thisMapGet, protoMappings, [proto]);
+						if (mapping) return mapping(defaultFactory, other);
+						try {
+							proto = otherReflectGetPrototypeOf(proto);
+						} catch (e) {
+							// @other(unsafe)
+							other = e;
+							break;
+						}
+						if (!proto) return thisProxyOther(defaultFactory, other, thisObjectPrototype);
+					}
+					break;
+				case 'symbol':
+					// SECURITY (GHSA-47x8-96vw-5wg6): Strip dangerous cross-realm symbols when
+					// they surface from a host-realm throw path. A host function could throw a
+					// raw symbol as the rejection value; without this filter the sandbox's
+					// transformer-instrumented catch block would bind a real host cross-realm
+					// symbol and the attacker could reuse it as a computed property key.
+					if (!isHost && isDangerousCrossRealmSymbol(other)) return undefined;
+					return other;
+				case 'undefined':
+				case 'string':
+				case 'number':
+				case 'boolean':
+				case 'bigint':
+					return other;
+
+				default: // new, unknown types can be dangerous
+					throw new VMError(`Unknown type '${type}'`);
+			}
+		}
+		throw new VMError('Exception recursion depth');
+	}
+
+	function thisFromOtherWithFactory(factory, other, proto) {
+		const type = typeof other;
+		switch (type) {
+			case 'object':
+				if (other === null) {
+					return null;
+				}
+			// fallthrough
+			case 'function':
+				// SECURITY (GHSA-j89j-5m6r-cr2q): the host realm's global object must
+				// NEVER be wrapped and delivered into the sandbox. When sandbox code
+				// invokes a sloppy-mode host function with a nullish receiver, V8's
+				// OrdinaryCallBindThis substitutes the host global for the function's
+				// `this`; the value then surfaces here as a return value, as a value
+				// written into a sandbox object (stashed `this`), or as an explicit
+				// `return globalThis`. Delivering it would hand the sandbox a live
+				// proxy of the host global → `this.process.getBuiltinModule(...)` RCE.
+				// Return `undefined` (not a proxy sentinel) so the sandbox observes
+				// the same `this` a strict/ESM host function already exposes — this is
+				// the single chokepoint covering every host→sandbox delivery path
+				// (apply-trap return, set-into-sandbox-object, callback argument),
+				// while strict functions are untouched because their `this` stays
+				// undefined and never reaches the global. Placed BEFORE the cache
+				// lookup: the host global must not be delivered even if some path had
+				// previously registered a proxy for it.
+				if (!isHost && other === otherGlobal) {
+					return undefined;
+				}
+				// Block the other realm's Function constructors from crossing the bridge.
+				if (!isHost && isDangerousFunctionConstructor(other)) {
+					return emptyFrozenObject;
+				}
+				// Cache check first — if already proxied, return existing proxy.
+				// Safe because: cached proxies were created under the same preventUnwrap
+				// rules, and an attacker can't retroactively add Function constructors
+				// to a host object's properties from the sandbox (chicken-and-egg).
+				const mapped = thisReflectApply(thisWeakMapGet, mappingOtherToThis, [other]);
+				if (mapped) return mapped;
+				// SECURITY (GHSA-cfcw-xp6x-25gj): Defense-in-depth layer independent
+				// of the v6mx apply-trap peel. Refuse to ever DELIVER a raw reference
+				// to a host-realm prototype-mutating intrinsic into the sandbox.
+				// The primary v6mx fix blocks INVOCATION of these mutators in the
+				// apply trap by peeling `Function.prototype.call/apply/bind`
+				// indirection one layer deep. However, an attacker can stack
+				// multiple layers (PoC: `Buffer.call.call(Buffer.call, setProto,
+				// target, null)` — two `Function.prototype.call` wrappers) so the
+				// peel never reaches the underlying dangerous function. The
+				// cleanest fix is to deny the underlying *reference* from ever
+				// crossing into the sandbox at all — any host return path
+				// (`__lookupSetter__` result, descriptor `.set` / `.get`,
+				// `Reflect.get` on a host object, etc.) funnels through this
+				// chokepoint. Returning `emptyFrozenObject` mirrors the response
+				// for dangerous Function constructors above and breaks every
+				// composition attack at the root, because the sandbox can no
+				// longer hold the function value to apply through any number of
+				// indirection wrappers.
+				//
+				// We deliberately place this AFTER the cache check: `connect()`
+				// already registered safe sandbox-realm surrogates for
+				// `Object.prototype.__defineGetter__` / `__defineSetter__` (see
+				// `localObject.prototype.__defineGetter__` etc. in
+				// setup-sandbox.js). Those surrogates are themselves safe — they
+				// route through the bridge's `set`/`defineProperty` traps, which
+				// block host-target mutation. A cache hit here returns the
+				// surrogate, preserving the legitimate sandbox API. Only the
+				// uncached, raw host references (the dangerous primitives the
+				// attacker actually needs) are filtered.
+				if (!isHost && isDangerousHostProtoMutator(other)) {
+					return emptyFrozenObject;
+				}
+				// SECURITY (GHSA-88hf-g992-jg85): symmetric read-side denial. Never
+				// deliver a raw host prototype-READER (the host `__proto__` getter,
+				// `Object.getPrototypeOf`, `Reflect.getPrototypeOf`) into the
+				// sandbox. This is the primary chokepoint that closes the getter
+				// PoC: `Buffer.call.call(({}).__lookupGetter__, 67, '__proto__')`
+				// funnels the extracted host getter through here, so it collapses to
+				// `emptyFrozenObject` (a non-callable), and the sandbox can never
+				// invoke it to pierce the bridge's flattened prototype view. Placed
+				// AFTER the cache check so any `connect()`-registered sandbox
+				// surrogate short-circuits first (cache-hit-first ordering).
+				if (!isHost && isDangerousHostProtoReader(other)) {
+					return emptyFrozenObject;
+				}
+				// For objects on sandbox side, check for nested dangerous constructors.
+				// If found, proxy WITHOUT unwrap registration (mappingThisToOther), so
+				// the proxy cannot be unwrapped when passed back to host functions.
+				// The proxy's get trap already sanitizes dangerous values on read.
+				const dangerous = !isHost && containsDangerousConstructor(other);
+				if (proto) {
+					return thisProxyOther(factory, other, proto, dangerous);
+				}
+				try {
+					proto = otherReflectGetPrototypeOf(other);
+				} catch (e) {
+					// @other(unsafe)
+					throw thisFromOtherForThrow(e);
+				}
+				if (!proto) {
+					return thisProxyOther(factory, other, null, dangerous);
+				}
+				do {
+					const mapping = thisReflectApply(thisMapGet, protoMappings, [proto]);
+					if (mapping) return mapping(factory, other, dangerous);
+					try {
+						proto = otherReflectGetPrototypeOf(proto);
+					} catch (e) {
+						// @other(unsafe)
+						throw thisFromOtherForThrow(e);
+					}
+				} while (proto);
+				return thisProxyOther(factory, other, thisObjectPrototype, dangerous);
+			case 'symbol':
+				// SECURITY (GHSA-47x8-96vw-5wg6): Strip dangerous cross-realm symbols returned
+				// from host-side calls. thisFromOtherWithFactory is the chokepoint for every
+				// host-produced value crossing into the sandbox: direct call results (apply
+				// trap), property reads (get trap via handlerFromOtherWithContext), iterator
+				// yields on wrapped host arrays, and descriptor getter returns (thisDefaultGet).
+				// Symbol primitives bypass proxy traps, so the per-call filtering lives here.
+				// Attack path (reports GHSA-47x8-96vw-5wg6 / -qcp4-v2jj-fjx8 / -f539-x546-3726):
+				// the attacker reaches host `Object.getOwnPropertySymbols(Buffer.prototype)` and
+				// reads the resulting host array; each symbol element transits this branch.
+				// Returning undefined (rather than a sandbox-local surrogate) is deliberate:
+				// an undefined computed key on a subsequent `{[sym]: fn}` coerces to the string
+				// 'undefined' and so never installs a handler under the real cross-realm symbol.
+				if (!isHost && isDangerousCrossRealmSymbol(other)) return undefined;
+				return other;
+			case 'undefined':
+			case 'string':
+			case 'number':
+			case 'boolean':
+			case 'bigint':
+				return other;
+
+			default: // new, unknown types can be dangerous
+				throw new VMError(`Unknown type '${type}'`);
+		}
+	}
+
+	function thisFromOtherArguments(args) {
+		// Note: args@other(safe-array) returns@this(safe-array) throws@this(unsafe)
+		const arr = [];
+		for (let i = 0; i < args.length; i++) {
+			const value = thisFromOther(args[i]);
+			thisReflectDefineProperty(arr, i, {
+				__proto__: null,
+				value: value,
+				writable: true,
+				enumerable: true,
+				configurable: true,
+			});
+		}
+		return arr;
+	}
+
+	function thisConnect(obj, other) {
+		// Note: obj@this(unsafe) other@other(unsafe) throws@this(unsafe)
+		try {
+			otherReflectApply(otherWeakMapSet, mappingThisToOther, [obj, other]);
+		} catch (e) {
+			throw new VMError('Unexpected error');
+		}
+		thisReflectApply(thisWeakMapSet, mappingOtherToThis, [other, obj]);
+	}
+
+	thisAddProtoMapping(thisGlobalPrototypes.Object, otherGlobalPrototypes.Object);
+	thisAddProtoMapping(thisGlobalPrototypes.Array, otherGlobalPrototypes.Array);
+
+	for (let i = 0; i < globalsList.length; i++) {
+		const key = globalsList[i];
+		const tp = thisGlobalPrototypes[key];
+		const op = otherGlobalPrototypes[key];
+		if (tp && op) thisAddProtoMapping(tp, op, key);
+	}
+
+	// SECURITY (GHSA-3vgf-8m4q-q4qr): proto-map the abstract intrinsic prototypes
+	// (%TypedArray%, iterator prototypes) that have no named global, so host
+	// values inheriting from them are recognized and wrapped like other host
+	// intrinsics rather than only via the Object.prototype fall-through.
+	for (let i = 0; i < nonGlobalProtoKeys.length; i++) {
+		const key = nonGlobalProtoKeys[i];
+		const tp = thisGlobalPrototypes[key];
+		const op = otherGlobalPrototypes[key];
+		if (tp && op) thisAddProtoMapping(tp, op, key);
+	}
+
+	for (let i = 0; i < errorsList.length; i++) {
+		const key = errorsList[i];
+		const tp = thisGlobalPrototypes[key];
+		const op = otherGlobalPrototypes[key];
+		if (tp && op) thisAddProtoMapping(tp, op, 'Error');
+	}
+
+	thisAddProtoMapping(thisGlobalPrototypes.VMError, otherGlobalPrototypes.VMError, 'Error');
+
+	// SECURITY (GHSA-47x8-96vw-5wg6): Structural identity collapse for host
+	// built-in intrinsics. The proto-mapping wiring above only rewrites the
+	// proto-chain of *instances* of a built-in (e.g., a host `[]` is wrapped
+	// with sandbox `Array.prototype` as its proto). It does NOT rewrite the
+	// identity of the prototype object itself (host `Array.prototype`) or of
+	// the constructor (host `Array`). Without that, any path that surfaces
+	// one of these intrinsics back into the sandbox -- chiefly proto-walks
+	// terminating at `Object.prototype` / `Function.prototype` via
+	// `__lookupGetter__('__proto__')`, `Reflect.getPrototypeOf`, `__proto__`
+	// getter calls, or `o.constructor` reads -- yields a wrapped host value
+	// whose identity differs from the sandbox-realm intrinsic. That breaks
+	// the invariant that "no host built-in is ever directly reachable from
+	// sandbox code", which the symbol-filter patch (commit 67bc511) relied
+	// on to keep canonical RCE payloads off-limits.
+	//
+	// The fix: pre-populate `mappingOtherToThis` (and its host-side mirror
+	// `mappingThisToOther`) with `[hostIntrinsic, sandboxIntrinsic]` for
+	// every well-known built-in. The cache lookup in
+	// `thisFromOtherWithFactory` (line ~1600), `thisFromOtherForThrow`, and
+	// `thisEnsureThis` short-circuits *before* any wrapping logic, so the
+	// host value is collapsed to the sandbox-realm equivalent the moment it
+	// crosses the boundary.
+	//
+	// We deliberately skip Function / AsyncFunction / GeneratorFunction /
+	// AsyncGeneratorFunction CONSTRUCTORS: those remain blocked by
+	// `isDangerousFunctionConstructor` -> `emptyFrozenObject` (checked in
+	// `thisFromOtherWithFactory` *before* the cache lookup, so the sentinel
+	// fires regardless of pre-caching). The Function PROTOTYPE, however, is
+	// safe and necessary to map -- it's the proto-walk landing pad for
+	// every host-realm function.
+	function thisAddIdentityMapping(thisProto, otherProto) {
+		// SECURITY (GHSA-47x8): Skip if either prototype is missing
+		// (e.g., Node version lacks AsyncGeneratorFunction).
+		if (!thisProto || !otherProto) return;
+		// SECURITY (GHSA-47x8): Map the prototype object itself. Without
+		// this, a host prototype reaching the sandbox is wrapped (its
+		// identity becomes a fresh proxy whose proto is the sandbox
+		// equivalent), so `o === Object.prototype` is false even though
+		// it should be the same object from the sandbox's view.
+		thisReflectApply(thisWeakMapSet, mappingOtherToThis, [otherProto, thisProto]);
+		try {
+			// SECURITY (GHSA-47x8): Mirror the mapping on the host side
+			// so round-tripped sandbox prototypes also collapse to host
+			// intrinsics. `connect`-style symmetry — same semantics as
+			// `thisConnect`, just inlined to avoid the extra throw on
+			// host-side weakmap failure (we want best-effort, since a
+			// failure here only affects round-trip identity, not the
+			// security invariant).
+			otherReflectApply(otherWeakMapSet, mappingThisToOther, [thisProto, otherProto]);
+		} catch (e) {
+			/* host-side mapping is best-effort */
+		}
+		// SECURITY (GHSA-47x8): Read the constructor via descriptor
+		// (not direct property access) so we never trigger a sandbox-realm
+		// getter. Both sides are pristine intrinsics at bridge-init time,
+		// so this is safe; we still wrap in try/catch for defense in depth.
+		let thisCtor;
+		let otherCtor;
+		try {
+			const td = thisSafeGetOwnPropertyDescriptor(thisProto, 'constructor');
+			if (td) thisCtor = td.value;
+		} catch (e) {
+			return;
+		}
+		try {
+			const od = otherSafeGetOwnPropertyDescriptor(otherProto, 'constructor');
+			if (od) otherCtor = od.value;
+		} catch (e) {
+			return;
+		}
+		if (typeof thisCtor !== 'function' || typeof otherCtor !== 'function') return;
+		// SECURITY (GHSA-47x8): Function-family constructors stay blocked.
+		// `isThisDangerousFunctionConstructor` covers this realm (Function,
+		// AsyncFunction, GeneratorFunction, AsyncGeneratorFunction); the
+		// host-realm equivalent is filtered by `isDangerousFunctionConstructor`
+		// in `thisFromOtherWithFactory` BEFORE the cache lookup, so even if
+		// we accidentally cached one the dangerous check would still fire.
+		// Belt and suspenders: skip the cache write here too.
+		if (isThisDangerousFunctionConstructor(thisCtor)) return;
+		if (isDangerousFunctionConstructor(otherCtor)) return;
+		// SECURITY (GHSA-47x8): Map the constructor itself. Without this,
+		// `o.constructor` reads on a wrapped host prototype (or anywhere
+		// the host constructor surfaces) yield a wrapped host function
+		// rather than the sandbox-realm intrinsic.
+		thisReflectApply(thisWeakMapSet, mappingOtherToThis, [otherCtor, thisCtor]);
+		try {
+			otherReflectApply(otherWeakMapSet, mappingThisToOther, [thisCtor, otherCtor]);
+		} catch (e) {
+			/* host-side mapping is best-effort */
+		}
+	}
+
+	// SECURITY (GHSA-47x8): Apply identity mapping to every well-known
+	// intrinsic EXCEPT the Function-family prototypes.
+	//
+	// We deliberately skip Function / AsyncFunction / GeneratorFunction /
+	// AsyncGeneratorFunction PROTOTYPES (and therefore their constructors).
+	// Reason: those prototypes are the proto-walk landing pad for any host
+	// function that reaches the sandbox. If we collapse `host Function.prototype`
+	// to `sandbox Function.prototype`, then `fp.constructor` (where `fp`
+	// arrived via proto-walk) reads the sandbox-realm Function constructor as
+	// a regular property of the sandbox prototype — bypassing the
+	// `isDangerousFunctionConstructor` -> `emptyFrozenObject` defense, which
+	// only fires when the *host* Function constructor crosses the bridge.
+	// The same logic applies to AsyncFunction / GeneratorFunction /
+	// AsyncGeneratorFunction.prototype, whose `.constructor` is dangerous.
+	//
+	// Concretely, an attacker chain
+	//     fp = host_Function_prototype  (reached via proto-walk)
+	//     fp.constructor                (read as own data property)
+	// must continue to yield `emptyFrozenObject`, not the sandbox Function.
+	// Leaving `Function.prototype` un-cached preserves the existing defense:
+	// `fp` stays a proxy whose get trap reads host `Function.prototype.constructor`
+	// = host Function, then routes through `thisFromOtherWithFactory` whose
+	// dangerous-constructor check returns `emptyFrozenObject`.
+	//
+	// This is consistent with the structural-leak test's "Function constructor
+	// block remains in force" case and with the existing
+	// `getOwnPropertyDescriptor Function constructor bypass attack` regression
+	// in test/vm.js.
+	thisAddIdentityMapping(thisGlobalPrototypes.Object, otherGlobalPrototypes.Object);
+	thisAddIdentityMapping(thisGlobalPrototypes.Array, otherGlobalPrototypes.Array);
+	for (let i = 0; i < globalsList.length; i++) {
+		const key = globalsList[i];
+		// SECURITY (GHSA-47x8): Skip Function — its prototype must stay
+		// un-cached so the dangerous-constructor sentinel keeps firing on
+		// `fp.constructor` reads through the proxy get trap.
+		if (key === 'Function') continue;
+		thisAddIdentityMapping(thisGlobalPrototypes[key], otherGlobalPrototypes[key]);
+	}
+	// SECURITY (GHSA-3vgf-8m4q-q4qr): identity-collapse the abstract intrinsic
+	// prototypes too, so a host `%TypedArray%.prototype.constructor` (or an
+	// iterator prototype's constructor) read through the bridge resolves to the
+	// sandbox realm instead of leaking the host constructor (GHSA-47x8 class).
+	for (let i = 0; i < nonGlobalProtoKeys.length; i++) {
+		const key = nonGlobalProtoKeys[i];
+		thisAddIdentityMapping(thisGlobalPrototypes[key], otherGlobalPrototypes[key]);
+	}
+	for (let i = 0; i < errorsList.length; i++) {
+		const key = errorsList[i];
+		thisAddIdentityMapping(thisGlobalPrototypes[key], otherGlobalPrototypes[key]);
+	}
+	// SECURITY (GHSA-47x8): AsyncFunction / GeneratorFunction /
+	// AsyncGeneratorFunction prototypes are intentionally NOT cached, see
+	// rationale above. Their constructors must remain blocked.
+
+	// SECURITY (GHSA-v37h-5mfm-c47c): Rebind `.constructor` on every handler
+	// class's prototype to a throw-always sentinel. Even if sandbox code
+	// reaches one of these prototypes via `Object.getPrototypeOf(leakedHandler)`,
+	// reading `.constructor` returns the sentinel -- not the real class --
+	// so `new pp.constructor(s)` fails before any Proxy handler is created.
+	// The real class references stay reachable only through closure-scoped
+	// factories below, which are the only legitimate construction sites.
+	function blockedHandlerConstructor() {
+		throw new VMError(OPNA);
+	}
+	// Keep `name` unset to avoid leaking class identity.
+	thisReflectDefineProperty(blockedHandlerConstructor, 'name', {
+		__proto__: null,
+		value: '',
+		writable: false,
+		enumerable: false,
+		configurable: true,
+	});
+	thisReflectDefineProperty(BaseHandler.prototype, 'constructor', {
+		__proto__: null,
+		value: blockedHandlerConstructor,
+		writable: false,
+		enumerable: false,
+		configurable: false,
+	});
+	thisReflectDefineProperty(ProtectedHandler.prototype, 'constructor', {
+		__proto__: null,
+		value: blockedHandlerConstructor,
+		writable: false,
+		enumerable: false,
+		configurable: false,
+	});
+	thisReflectDefineProperty(ReadOnlyHandler.prototype, 'constructor', {
+		__proto__: null,
+		value: blockedHandlerConstructor,
+		writable: false,
+		enumerable: false,
+		configurable: false,
+	});
+	thisReflectDefineProperty(ReadOnlyMockHandler.prototype, 'constructor', {
+		__proto__: null,
+		value: blockedHandlerConstructor,
+		writable: false,
+		enumerable: false,
+		configurable: false,
+	});
+
+	// SECURITY (GHSA-v37h-5mfm-c47c): We intentionally do NOT expose the raw
+	// handler classes on `result`. Callers that need to construct a handler
+	// must go through these closure-scoped factories, which capture the
+	// construction token. `setup-sandbox.js` uses
+	// `createReadOnlyMockHandler(obj, mock)` (for the `readonly` API) and
+	// `newBufferHandler(Subclass, obj)` (for the `BufferHandler extends
+	// ReadOnlyHandler` pattern). Neither helper exposes the token.
+	result.createReadOnlyMockHandler = function createReadOnlyMockHandler(object, mock) {
+		// SECURITY: the token is embedded in this closure; it is never
+		// assigned to any property of `result` or of the returned handler.
+		return new ReadOnlyMockHandler(constructionToken, object, mock);
+	};
+	result.newBufferHandler = function newBufferHandler(Subclass, object) {
+		// SECURITY: `Subclass` is attacker-influenceable only in the sense
+		// that a trusted caller (setup-sandbox.js) supplies it. The subclass
+		// constructor MUST forward `...args` to `super(...args)` so the
+		// token propagates up to BaseHandler.
+		return thisReflectConstruct(Subclass, [constructionToken, object]);
+	};
+	// SECURITY (post-GHSA-v37h hardening): expose the sentinel-rebind helper
+	// so that handler subclasses defined in setup-sandbox.js (e.g.
+	// BufferHandler) can also have their `.constructor` slot replaced with
+	// the throw-always sentinel. Without this, `Object.getPrototypeOf(handler).constructor`
+	// on a BufferHandler instance returned the real BufferHandler class (its
+	// `prototype.constructor` was the default `writable: true, configurable: true`
+	// data property) — Layer 1 (token check) compensated, but Layer 3 was
+	// narrower than advertised. This helper closes that gap.
+	result.rebindHandlerConstructor = function rebindHandlerConstructor(HandlerClass) {
+		thisReflectDefineProperty(HandlerClass.prototype, 'constructor', {
+			__proto__: null,
+			value: blockedHandlerConstructor,
+			writable: false,
+			enumerable: false,
+			configurable: false,
+		});
+	};
+	// SECURITY (GHSA-v37h-5mfm-c47c): We still expose ReadOnlyHandler as a
+	// superclass symbol so that setup-sandbox can declare
+	// `class BufferHandler extends ReadOnlyHandler`. The class reference
+	// itself is harmless -- any attempt to construct it (directly or via a
+	// subclass that does not forward the token) fails the token check.
+	result.ReadOnlyHandler = ReadOnlyHandler;
+	// SECURITY (GHSA-55hx): expose the sanitizer registration on the bridge so
+	// that setup-sandbox.js can install handleException / ensureThis as the
+	// host-promise interception hooks once they are constructed.
+	// (ReadOnlyMockHandler is intentionally NOT exposed — GHSA-v37h forces
+	// construction through createReadOnlyMockHandler with a token.)
+	result.setHostPromiseSanitizers = thisSetHostPromiseSanitizers;
+
+	return result;
+}
+
+exports.createBridge = createBridge;
+exports.VMError = VMError;
