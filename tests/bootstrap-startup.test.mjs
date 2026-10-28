@@ -195,6 +195,10 @@ test(
   async () => {
     const result = await run(
       `
+import fs from "node:fs"
+// 慢速 CI 上宿主启动可能超过默认 5 秒握手期限，这里只验证清理顺序。
+fs.mkdirSync("data/yunzai-guard", { recursive: true })
+fs.writeFileSync("data/yunzai-guard/settings.json", JSON.stringify({ handshakeTimeout: 30000 }))
 globalThis.redis = { get: async () => "still-open" }
 Bot.stat.online = 2
 Bot.exitEvent = async () => { throw Error("SELF_AUTHORED_EXIT_HOOK_FAILURE") }

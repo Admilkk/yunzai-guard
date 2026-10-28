@@ -8,6 +8,8 @@ import { useConsole } from "../state"
 type Update = {
   current: string
   installMode: "release" | "git"
+  gitBranch?: string
+  autoUpdate: boolean
   enabled: boolean
   checking: boolean
   checkedAt?: number
@@ -48,7 +50,7 @@ export function UpdateStrip() {
   }, [update?.phase, reload])
 
   if (!update) return null
-  const git = update.installMode === "git"
+  const git = !update.autoUpdate
 
   /** 手动检查最新版本。 */
   async function check() {
@@ -114,8 +116,10 @@ export function UpdateStrip() {
       content: (
         <div className="update-confirm">
           <p>
-            下载并校验 SHA-256 后替换插件文件，业务进程会重启。上一版本保留在{" "}
-            <code>.update/previous</code>，新版本无法上线时会自动还原。
+            {git || update?.installMode !== "git"
+              ? "下载并校验 SHA-256 后替换插件文件"
+              : "从 release 分支拉取新版本"}
+            ，业务进程会重启。上一版本会保留，可随时还原；新版本无法上线时会自动还原。
           </p>
           {!force && update?.latest?.notes && (
             <Typography.Paragraph type="secondary" className="update-notes">
@@ -156,7 +160,12 @@ export function UpdateStrip() {
               ? `检查失败：${update.error}`
               : `上次检查 ${relativeTime(update.checkedAt)}`}
             {update.phase === "failed" && update.message ? ` · 更新失败：${update.message}` : ""}
-            {git ? " · Git 安装请在插件目录 git pull 后 npm ci --include=dev 手动更新" : ""}
+            {update.installMode === "git" && update.autoUpdate
+              ? ` · Git 安装（${update.gitBranch} 分支）`
+              : ""}
+            {git
+              ? " · 源码安装需在插件目录 git pull 后 npm ci --include=dev 手动更新，或改用 release 分支"
+              : ""}
           </span>
         </div>
       </div>

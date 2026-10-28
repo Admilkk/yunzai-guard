@@ -3,6 +3,7 @@ import path from "node:path"
 import type { GuardSettings } from "../shared/types.js"
 import { M } from "../shared/messages.js"
 import { compareVersions } from "../shared/version.js"
+import { fetchRelease, gitBranch, gitSync, releaseBranch, versionAt } from "../update/git.js"
 import { crossesMajor, fetchLatestRelease, isNewer, type ReleaseInfo } from "../update/release.js"
 import {
   clearWork,
@@ -26,6 +27,10 @@ export interface UpdateSummary {
 export interface UpdateState {
   current: string
   installMode: "release" | "git"
+  /** Git 安装的分支；release 分支可自动更新，其他分支需手动更新。 */
+  gitBranch?: string
+  /** 能否由 Guard 自动更新与还原。 */
+  autoUpdate: boolean
   enabled: boolean
   intervalMs: number
   checking: boolean
@@ -47,6 +52,8 @@ interface Stored {
   release?: ReleaseInfo
   notified?: string
   pending: string[]
+  /** Git 安装更新前的提交，用于还原。 */
+  previousCommit?: string
   lastResult?: UpdateState["lastResult"]
 }
 
@@ -131,12 +138,16 @@ export class UpdateService {
 
   /** 当前状态快照，供面板、命令与 CLI 展示。 */
   state(): UpdateState {
+    const git = fs.existsSync(path.join(this.#options.pluginDir, ".git"))
+    const branch = git ? gitBranch(this.#options.pluginDir) : undefined
     const settings = this.#options.settings()
     const current = readVersion(this.#options.pluginDir)
     const release = this.#stored.release
     return {
       current,
-      installMode: fs.existsSync(path.join(this.#options.pluginDir, ".git")) ? "git" : "release",
+      installMode: git ? "git" : "release",
+      gitBranch: branch,
+      autoUpdate: !git || branch === releaseBranch,
       enabled: settings.check,
       intervalMs: settings.intervalMs,
       checking: Boolean(this.#checking),
@@ -201,7 +212,7 @@ export class UpdateService {
   async apply(force: boolean): Promise<{ ok: boolean; message: string }> {
     if (this.#busy) return { ok: false, message: M.update.busy }
     const state = this.state()
-    if (state.installMode === "git") return { ok: false, message: M.update.gitInstall }
+    if (!state.autoUpdate) return { ok: false, message: M.update.gitSource }
     this.#busy = true
     try {
       this.#phase = "downloading"
@@ -223,7 +234,14 @@ export class UpdateService {
       if (!force && crossesMajor(release.version, current))
         throw new Error(M.update.majorBlocked(current, release.version))
       this.#message = `正在下载 ${release.version}`
-      const staged = await stageRelease(release, this.#options.pluginDir, current)
+      const staged =
+        state.installMode === "git"
+          ? {
+              version: release.version,
+              directory: this.#options.pluginDir,
+              commit: (await fetchRelease(this.#options.pluginDir, release.version, force)).commit,
+            }
+          : await stageRelease(release, this.#options.pluginDir, current)
       this.#phase = "installing"
       this.#message = `正在安装 ${release.version}`
       this.#options.record("update-staged", { from: current, to: release.version, force })
@@ -238,6 +256,11 @@ export class UpdateService {
 
   /** 读取保留的上一版本号；没有或不完整时返回 undefined。 */
   #previous(): { version: string } | undefined {
+    const commit = this.#stored.previousCommit
+    if (fs.existsSync(path.join(this.#options.pluginDir, ".git"))) {
+      const version = commit ? versionAt(this.#options.pluginDir, commit) : undefined
+      return version ? { version } : undefined
+    }
     try {
       const manifest = JSON.parse(
         fs.readFileSync(
@@ -257,11 +280,27 @@ export class UpdateService {
    */
   async rollback(): Promise<{ ok: boolean; message: string }> {
     if (this.#busy) return { ok: false, message: M.update.busy }
-    if (fs.existsSync(path.join(this.#options.pluginDir, ".git")))
-      return { ok: false, message: M.update.gitInstall }
+    const state = this.state()
+    if (!state.autoUpdate) return { ok: false, message: M.update.gitSource }
     const previous = this.#previous()
     if (!previous) return { ok: false, message: M.update.noPrevious }
     this.#busy = true
+    if (state.installMode === "git") {
+      const current = readVersion(this.#options.pluginDir)
+      this.#phase = "installing"
+      this.#message = `正在还原到 ${previous.version}`
+      this.notify(`【Yunzai Guard】开始还原：${current} → ${previous.version}，宿主将重新启动`)
+      this.#options.install(
+        {
+          version: previous.version,
+          directory: this.#options.pluginDir,
+          commit: this.#stored.previousCommit,
+        },
+        current,
+        true,
+      )
+      return { ok: true, message: `开始还原：${current} → ${previous.version}` }
+    }
     try {
       const paths = workPaths(this.#options.pluginDir)
       clearWork(this.#options.pluginDir)
@@ -284,7 +323,20 @@ export class UpdateService {
   swap(staged: StagedRelease): ReturnType<typeof swapPackage> {
     this.#phase = "restarting"
     this.#message = M.update.restarting(staged.version)
-    return swapPackage(staged, this.#options.pluginDir)
+    if (!staged.commit) return swapPackage(staged, this.#options.pluginDir)
+    // Git 安装：切换到目标提交；还原时切回原提交，完成后记录原提交供之后还原。
+    const directory = this.#options.pluginDir
+    const before = gitSync(directory, ["rev-parse", "HEAD"])
+    gitSync(directory, ["reset", "--hard", "--quiet", staged.commit])
+    return {
+      rollback: () => {
+        gitSync(directory, ["reset", "--hard", "--quiet", before])
+      },
+      commit: () => {
+        this.#stored.previousCommit = before
+        this.#save()
+      },
+    }
   }
 
   /** 更新结束：记录结果并通知主人；defer 为真时留待新宿主上线后发送。 */

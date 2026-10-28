@@ -28,8 +28,10 @@ const managedItems = [
 
 export interface StagedRelease {
   version: string
-  /** 已解压并校验的包目录。 */
+  /** 已解压并校验的包目录；Git 安装时为插件目录本身。 */
   directory: string
+  /** Git 安装：要切换到的提交。 */
+  commit?: string
 }
 
 export interface SwapHandle {
