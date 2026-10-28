@@ -9,7 +9,10 @@
 [![License](https://img.shields.io/github/license/Admilkk/yunzai-guard?style=flat&logo=gnu)](LICENSE)
 ![Node.js](https://img.shields.io/badge/Node.js-%3E%3D23.11-3C873A?style=flat&logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue?style=flat)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat)
+![QQ 群](https://img.shields.io/badge/QQ%20群-833016696-12B7F5?style=flat&logo=qq&logoColor=white)
+
+💬 交流与反馈 QQ 群：**833016696**
 
 </div>
 
@@ -188,6 +191,7 @@ npm run package       # 生成发布资产到 release/
 
 ## 反馈与贡献 🤝
 
+- 交流群：QQ **833016696**
 - 缺陷与建议：[Issues](https://github.com/Admilkk/yunzai-guard/issues)
 - 安全问题：请走[私密漏洞报告](https://github.com/Admilkk/yunzai-guard/security/advisories/new)，见 [SECURITY.md](SECURITY.md)
 - 提交 PR 前请运行上面的检查命令。
