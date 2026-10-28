@@ -27,28 +27,31 @@ Yunzai Guard 以独立插件形式运行，**不修改 Yunzai 核心与业务插
 
 **环境要求**：Windows x64、Linux x64 或 macOS（实验）、Node.js `>=23.11.0`，以及能正常启动的 [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai) 或 [玖璃（JiuLi）](https://github.com/HL-z7/JiuLi)。PM2 可选（`>=5.0.0`，fork 单实例）。
 
-在 Yunzai 根目录安装。推荐使用发布包，免编译，也是控制台与 `#guard更新` 支持的更新方式。
-
-从 [Releases](https://github.com/Admilkk/yunzai-guard/releases) 下载对应平台的包，解压为 `plugins/yunzai-guard`：
-
-| 资产                               | 说明                                                       |
-| ---------------------------------- | ---------------------------------------------------------- |
-| `yunzai-guard-v*-win-x64.zip`      | Windows 包，**内置固定版本 Node 运行时**，首次启动无需下载 |
-| `yunzai-guard-v*-linux-x64.tar.gz` | Linux 包                                                   |
-| `node-v24.22.1-win-x64.exe`        | 与 Windows 包一致的独立 Node 运行时                        |
-| `SHA256SUMS.txt`                   | 全部资产的 SHA-256 校验和                                  |
-
-或者用 Git 安装编译好的 `release` 分支，之后在插件目录 `git pull` 即可更新：
+在 Yunzai 根目录执行（推荐）：
 
 ```sh
 git clone --depth=1 -b release https://github.com/Admilkk/yunzai-guard.git ./plugins/yunzai-guard
 ```
 
-Windows 用这种方式时，首次启动会下载并校验固定版本的 Node 运行时。
+`release` 分支是编译好的发布版，免编译即可使用。之后直接发送 `#guard更新`、在控制台点“立即更新”，或在插件目录 `git pull` 都能更新。Windows 首次启动会下载并校验固定版本的 Node 运行时。
+
+<details><summary>也可以下载发布包</summary>
+
+从 [Releases](https://github.com/Admilkk/yunzai-guard/releases) 下载对应平台的包，解压为 `plugins/yunzai-guard`，同样支持 `#guard更新` 与控制台更新：
+
+| 资产                               | 说明                                                       |
+| ---------------------------------- | ---------------------------------------------------------- |
+| `yunzai-guard-v*-win-x64.zip`      | Windows 包，**内置固定版本 Node 运行时**，首次启动无需下载 |
+| `yunzai-guard-v*-linux-x64.tar.gz` | Linux 包                                                   |
+| `yunzai-guard-v*-macos.tar.gz`     | macOS 包                                                   |
+| `node-v24.22.1-win-x64.exe`        | 与 Windows 包一致的独立 Node 运行时                        |
+| `SHA256SUMS.txt`                   | 全部资产的 SHA-256 校验和                                  |
+
+</details>
 
 <details><summary>从源码安装（开发用）</summary>
 
-需要自行编译与更新；控制台和 `#guard更新` 只会提示新版本，不会替换 Git 工作区，请自行 `git pull` 后重新安装依赖。
+main 分支是源码，需要自行编译；控制台和 `#guard更新` 只提示新版本，请自行 `git pull` 后重新安装依赖。
 
 ```sh
 git clone --depth=1 --branch main https://github.com/Admilkk/yunzai-guard.git ./plugins/yunzai-guard
