@@ -258,7 +258,7 @@ export class NativePluginClient {
     const dto = toDto(frame)
     if (Buffer.byteLength(JSON.stringify(dto)) > maxFrameBytes)
       throw new Error(M.nativeSandbox.frameLimit)
-    this.session.child.send!(object(dto), (error: Error | null) => {
+    this.session.child.send(object(dto), (error: Error | null) => {
       if (error) this.stop(error)
     })
   }
@@ -293,9 +293,9 @@ export class NativePluginClient {
         )
           throw new Error(M.nativeSandbox.errorPayload)
         failure = Object.assign(
-          new Error(((error.message as string) ?? "Native request rejected").slice(0, 1000)),
+          new Error((error.message! ?? "Native request rejected").slice(0, 1000)),
           {
-            code: (error.code as string) ?? "NATIVE_DENIED",
+            code: error.code! ?? "NATIVE_DENIED",
           },
         )
       }
@@ -477,7 +477,7 @@ export class NativePluginClient {
           pending?.type,
           event,
           pending?.coreRestartRequested === true,
-          this.#config.allowCoreRestart === true,
+          this.#config.allowCoreRestart,
         )
         if (!this.onCoreRestart) throw new Error(M.nativeSandbox.restartUnavailable)
         pending!.coreRestartRequested = true
@@ -645,7 +645,7 @@ export class NativePluginClient {
         pluginRoot: this.pluginRoot,
         entry,
         hookAction: this.#config.hookAction,
-        adapters: this.#config.adapters === true,
+        adapters: this.#config.adapters,
         ...(this.botEventsHost ? { botEventsSessionId: this.botEventsHost.sessionId } : {}),
       })
       if (this.errorLogs !== errors) throw new Error(M.nativeSandbox.importErrors(this.#config.id))

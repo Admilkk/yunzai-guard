@@ -41,7 +41,7 @@ export function kindMatches(kind: GuardRule["kind"], eventKind: string): boolean
   if (kind === undefined) return !explicit
   const kinds = typeof kind === "string" ? [kind] : kind
   for (let index = 0; index < kinds.length; index++) {
-    const pattern = kinds[index]!
+    const pattern = kinds[index]
     if (explicit ? pattern === eventKind : matchGlob(pattern, eventKind)) return true
   }
   return false
@@ -50,7 +50,7 @@ export function kindMatches(kind: GuardRule["kind"], eventKind: string): boolean
 /** 规则按顺序覆盖默认行为，首个匹配生效；未匹配行为仅审计。 */
 export function decide(event: GuardEvent, rules: readonly GuardRule[]): PolicyDecision {
   for (let index = 0; index < rules.length; index++) {
-    const rule = rules[index]!
+    const rule = rules[index]
     if (!kindMatches(rule.kind, event.kind)) continue
     if (rule.plugin && !matchGlob(rule.plugin, event.plugin ?? "unknown")) continue
     if (rule.operation && !matchGlob(rule.operation, event.operation)) continue

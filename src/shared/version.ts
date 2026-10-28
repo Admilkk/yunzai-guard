@@ -8,7 +8,7 @@ export function atLeastVersion(
   if (!match) return false
   for (let index = 0; index < 3; index++) {
     const part = Number(match[index + 1])
-    if (part !== minimum[index]) return part > minimum[index]!
+    if (part !== minimum[index]) return part > minimum[index]
   }
   return true
 }
@@ -34,7 +34,7 @@ export function compareVersions(a: unknown, b: unknown): number | undefined {
   const right = parseVersion(b)
   if (!left || !right) return undefined
   for (let index = 0; index < 3; index++) {
-    const difference = left.core[index]! - right.core[index]!
+    const difference = left.core[index] - right.core[index]
     if (difference) return difference
   }
   if (!left.pre.length || !right.pre.length) return right.pre.length - left.pre.length

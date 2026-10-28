@@ -207,7 +207,7 @@ export class SqliteAuditSink {
         const lines = bytes.subarray(0, length).toString("utf8").split("\n")
         if (begin > 0) lines.shift()
         for (let index = lines.length - 1; index >= 0; index--) {
-          const line = lines[index]!.trim()
+          const line = lines[index].trim()
           if (!line) continue
           if (examined++ >= 20000) {
             report.truncated = true
@@ -223,7 +223,7 @@ export class SqliteAuditSink {
                 : line
             records.push({
               value,
-              origin: "legacy:" + createHash("sha256").update(identity).digest("hex"),
+              origin: `legacy:${createHash("sha256").update(identity).digest("hex")}`,
             })
           } catch {
             report.invalidLines++
@@ -352,7 +352,7 @@ export class SqliteAuditSink {
         continue
       }
       try {
-        const frame = frames[index]!
+        const frame = frames[index]
         const sequence = this.#sequence + 1
         if (!Number.isSafeInteger(sequence)) throw new Error(M.audit.sequenceExhausted)
         const details = copyAuditData(frame.details ?? {})
@@ -434,7 +434,7 @@ export class SqliteAuditSink {
 
   /** 写入单条事件。 */
   record(type: string, details: Record<string, unknown> = {}, time?: number): AuditAppendReceipt {
-    return this.appendBatch([{ type, details, time }])[0]!
+    return this.appendBatch([{ type, details, time }])[0]
   }
 
   /** 返回存储统计快照。 */

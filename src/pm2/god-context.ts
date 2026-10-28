@@ -112,7 +112,7 @@ export function resolveCachedLoggingUtility(pm2Root: string): Pm2LoggingUtility 
   } catch {
     return undefined
   }
-  const require = createRequire(process.argv[1]!)
+  const require = createRequire(process.argv[1])
   const matches = Object.entries(require.cache).filter(([filename]) => {
     try {
       return canonical(filename) === expected

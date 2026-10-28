@@ -242,7 +242,7 @@ export function installInstrumentation(
     const properties = Object.getOwnPropertyDescriptors(original)
     for (const property of Reflect.ownKeys(properties)) {
       if (property === "caller" || property === "arguments" || property === "prototype") continue
-      const entry = properties[property as keyof typeof properties] as PropertyDescriptor
+      const entry = properties[property as keyof typeof properties]
       if (property === promisify.custom && typeof entry.value === "function") {
         const custom = entry.value as Callable
         const replacementDescriptor = {
@@ -470,7 +470,7 @@ export function installInstrumentation(
     ] as const)
       for (const query of queries)
         wrap(
-          container as Container,
+          container,
           query,
           `${label}.${query}`,
           (_this, args) => describeDns(`dns.${query}`, args),

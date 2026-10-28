@@ -2,7 +2,7 @@ import { matchGlob } from "../config/policy.js"
 import type { EmitEvent, GuardSettings } from "../shared/types.js"
 import { SandboxExecutor } from "./executor.js"
 import { sandboxWriteTarget, writeSandboxText } from "./filesystem.js"
-import type { SandboxAction, SandboxEvent, SandboxSource } from "./types.js"
+import type { SandboxSource } from "./types.js"
 
 import { validateSandboxActions, sandboxEvent } from "./actions.js"
 import { sandboxDecision } from "./policy.js"
@@ -26,7 +26,7 @@ export class SandboxDispatcher {
   async ready(): Promise<void> {
     if (!this.sources.length) return
     const result = await this.#executor.execute(
-      { ...this.sources[0]!, capabilities: [], source: "globalThis.onMessage = () => {}" },
+      { ...this.sources[0], capabilities: [], source: "globalThis.onMessage = () => {}" },
       { message: "", userId: "", groupId: "", selfId: "", isGroup: false },
       this.settings.pluginSandbox,
     )
@@ -53,9 +53,7 @@ export class SandboxDispatcher {
   async dispatch(original: Record<string, unknown>): Promise<boolean> {
     if (!this.sources.length) return false
     const event = sandboxEvent(original)
-    const plugin = this.sources.find(
-      item => item.enabled !== false && matchGlob(item.match, event.message),
-    )
+    const plugin = this.sources.find(item => item.enabled && matchGlob(item.match, event.message))
     if (!plugin) return false
     if (this.#closed || this.#busy.has(plugin.id)) {
       this.emit({

@@ -56,7 +56,7 @@ export function readSettingsDocument(stateDir: string, active: GuardSettings): S
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
   }
-  if (text === undefined || !text.trim())
+  if (!text?.trim())
     return {
       path: file,
       document: fallback,

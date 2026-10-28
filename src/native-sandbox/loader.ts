@@ -37,7 +37,7 @@ const forbiddenMethods = new Set(["constructor", "__proto__", "prototype", "then
 function row(value: unknown): Row {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error(M.nativeSandbox.pluginMetadata)
-  return value as Row
+  return value
 }
 
 /** 在原加载器导入选中插件源码前，先确定原生进程执行路径。 */
@@ -382,12 +382,12 @@ export class NativePluginLoader {
     }
     // 原生插件显示名不能作为宿主基类共享上下文存储的键。
     Object.defineProperty(NativePluginProxy.prototype, "conKey", {
-      value: function () {
+      value() {
         return namespace
       },
     })
     Object.defineProperty(NativePluginProxy.prototype, "getContext", {
-      value: async function (this: Row, _type?: unknown, isGroup = false) {
+      async value(this: Row, _type?: unknown, isGroup = false) {
         const values = row(
           await client.request("native-context", {
             classId: descriptor.id,
@@ -418,7 +418,7 @@ export class NativePluginLoader {
         if (Object.hasOwn(NativePluginProxy.prototype, method)) continue
         Object.defineProperty(NativePluginProxy.prototype, method, {
           configurable: false,
-          value: function (this: Row, ...args: unknown[]) {
+          value(this: Row, ...args: unknown[]) {
             return invoke(this, method, args)
           },
         })

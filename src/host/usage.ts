@@ -62,7 +62,7 @@ export function decodeProcAddress(hex: string): string | undefined {
   if (mapped) return `::ffff:${bytes.slice(12).join(".")}`
   const groups: string[] = []
   for (let index = 0; index < 16; index += 2)
-    groups.push(((bytes[index]! << 8) | bytes[index + 1]!).toString(16))
+    groups.push(((bytes[index] << 8) | bytes[index + 1]).toString(16))
   return groups.join(":").replace(/(^|:)0(:0)+(:|$)/, "::")
 }
 
@@ -72,10 +72,10 @@ export function parseProcTcp(text: string): Map<string, { address: string; port:
   for (const line of text.split("\n").slice(1)) {
     const fields = line.trim().split(/\s+/)
     if (fields.length < 10 || fields[3] !== "01") continue
-    const [hex, portHex] = fields[2]!.split(":")
+    const [hex, portHex] = fields[2].split(":")
     const address = hex && decodeProcAddress(hex)
     if (!address || !portHex) continue
-    result.set(fields[9]!, { address, port: parseInt(portHex, 16) })
+    result.set(fields[9], { address, port: parseInt(portHex, 16) })
   }
   return result
 }
@@ -104,7 +104,7 @@ function linuxTree(root: number): number[] {
   }
   const tree = [root]
   for (let index = 0; index < tree.length && tree.length < maxProcesses; index++)
-    tree.push(...(children.get(tree[index]!) ?? []))
+    tree.push(...(children.get(tree[index]) ?? []))
   return tree.slice(0, maxProcesses)
 }
 
@@ -271,7 +271,7 @@ async function sampleDarwin(root: number): Promise<ProcessUsage | undefined> {
   if (!found) return undefined
   const tree = [root]
   for (let index = 0; index < tree.length && tree.length < maxProcesses; index++)
-    tree.push(...(children.get(tree[index]!) ?? []))
+    tree.push(...(children.get(tree[index]) ?? []))
   const usage: ProcessUsage = {
     sampledAt: Date.now(),
     processes: tree.length,

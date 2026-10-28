@@ -389,7 +389,7 @@ export function validateAdapterEvent(event: AdapterProfile, name: string, id: Ad
     )
       adapterFail("ADAPTER_EVENT_DENIED", "Invalid event numeric field")
   const [kind, type, subtype] = name.split(".")
-  if (["message", "notice", "request"].includes(kind!)) {
+  if (["message", "notice", "request"].includes(kind)) {
     if (
       event.post_type !== kind ||
       (type !== undefined && event[`${kind}_type`] !== type) ||
@@ -402,7 +402,7 @@ export function validateAdapterEvent(event: AdapterProfile, name: string, id: Ad
   if (kind === "message" || event.message !== undefined) {
     if (!Array.isArray(event.message) || event.message.length > 128)
       adapterFail("ADAPTER_EVENT_DENIED", "Message must be a bounded segment array")
-    for (const segment of event.message as AdapterValue[]) {
+    for (const segment of event.message) {
       const row = adapterRow(segment)
       if (typeof row.type !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(row.type))
         adapterFail("ADAPTER_EVENT_DENIED", "Message segment type is invalid")

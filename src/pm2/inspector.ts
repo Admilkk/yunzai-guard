@@ -84,7 +84,7 @@ export function parseWindowsListeners(text: string, pid: number): Listener[] {
     const match = /^(127\.0\.0\.1|0\.0\.0\.0|\[::1\]|\[::\]):(\d+)$/.exec(fields[1] ?? "")
     const port = Number(match?.[2])
     if (match && port > 0 && port < 65536)
-      result.push({ host: match[1]!.replace(/^\[|\]$/g, ""), port })
+      result.push({ host: match[1].replace(/^\[|\]$/g, ""), port })
   }
   return result
 }
@@ -112,7 +112,7 @@ export function safeRuntimeError(details: unknown): string {
   }
   if (typeof description !== "string" || !description)
     return "PM2 daemon registration Runtime operation failed"
-  const first = description.split(/[\r\n]/, 1)[0]!.slice(0, 4096)
+  const first = description.split(/[\r\n]/, 1)[0].slice(0, 4096)
   const sanitized = first
     .replace(/\bBearer\s+[^\s"',;]+/gi, "Bearer [REDACTED]")
     .replace(
@@ -121,14 +121,14 @@ export function safeRuntimeError(details: unknown): string {
     )
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .slice(0, 240)
-  return "PM2 daemon registration Runtime operation failed: " + sanitized
+  return `PM2 daemon registration Runtime operation failed: ${sanitized}`
 }
 
 /** 拒绝会将新激活端点暴露到非回环地址的可见调试配置。 */
 export function assertLoopbackInspectorArguments(commandLine: string): void {
   const tokens = commandLine.match(/"[^"]*"|'[^']*'|\S+/g) ?? []
   for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index]!.replace(/^(["'])(.*)\1$/, "$2")
+    const token = tokens[index].replace(/^(["'])(.*)\1$/, "$2")
     const match = /^--inspect(?:-port|-brk|-wait)?(?:=(.*))?$/.exec(token)
     if (!match) continue
     let value = match[1]
@@ -159,7 +159,7 @@ export function readParentProof(): ParentProof {
   const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8")
   return {
     pid,
-    created: stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[19]!,
+    created: stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[19],
     commandLine: fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " ").trim(),
   }
 }
@@ -214,7 +214,7 @@ function listeners(pid: number, deadline?: InspectorDeadline): Listener[] {
   for (const fd of fs.readdirSync(`/proc/${pid}/fd`)) {
     try {
       const match = /^socket:\[(\d+)\]$/.exec(fs.readlinkSync(`/proc/${pid}/fd/${fd}`))
-      if (match) inodes.add(match[1]!)
+      if (match) inodes.add(match[1])
     } catch {
       /* 枚举期间 socket 可能已经关闭。 */
     }
@@ -227,8 +227,8 @@ function listeners(pid: number, deadline?: InspectorDeadline): Listener[] {
       .split("\n")
       .slice(1)) {
       const fields = line.trim().split(/\s+/)
-      if (fields[3] !== "0A" || !inodes.has(fields[9]!)) continue
-      const [address, port] = fields[1]!.split(":")
+      if (fields[3] !== "0A" || !inodes.has(fields[9])) continue
+      const [address, port] = fields[1].split(":")
       const host =
         address === "0100007F"
           ? "127.0.0.1"
@@ -239,7 +239,7 @@ function listeners(pid: number, deadline?: InspectorDeadline): Listener[] {
               : address === "00000000000000000000000000000000"
                 ? "::"
                 : null
-      if (host) result.push({ host, port: parseInt(port!, 16) })
+      if (host) result.push({ host, port: parseInt(port, 16) })
     }
   }
   return result
@@ -326,7 +326,7 @@ async function discover(
   for (const listener of owned) {
     const timeout = remaining(deadline, 800)
     try {
-      const response = await fetch(origin(listener) + "/json/list", {
+      const response = await fetch(`${origin(listener)}/json/list`, {
         signal: AbortSignal.timeout(timeout),
         redirect: "error",
       })

@@ -45,7 +45,7 @@ export function installDebugGuard(
     seal(
       process,
       "_kill",
-      function (pid: number, signal: number) {
+      (pid: number, signal: number) => {
         if (debugSignal !== undefined && signal === debugSignal)
           return deny("debug-access", "SIGUSR1")
         return apply(rawKill, process, [pid, signal])
@@ -55,7 +55,7 @@ export function installDebugGuard(
   seal(
     process,
     "kill",
-    function (pid: number, signal?: NodeJS.Signals | number) {
+    (pid: number, signal?: NodeJS.Signals | number) => {
       if (signal === "SIGUSR1" || (debugSignal !== undefined && signal === debugSignal))
         return deny("debug-access", "SIGUSR1")
       return apply(signalProcess, process, [pid, signal]) as true

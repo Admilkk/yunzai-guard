@@ -117,6 +117,7 @@ export function installRuntime(options: RuntimeOptions): RuntimeHandle {
     ),
   ]
   // fs 收口先于行为监控安装，业务文件观察在监控就绪后再接入。
+  // eslint-disable-next-line prefer-const -- 先被回调引用，之后才赋值
   let observeFile: InstrumentationDisposer["observeFile"] | undefined
   installFileGuard({
     roots,

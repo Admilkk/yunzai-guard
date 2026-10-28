@@ -22,7 +22,7 @@ export function installBindingGuard(
   seal(
     owner,
     "binding",
-    function (input: unknown) {
+    (input: unknown) => {
       const name = string(input)
       if (!arrayIncludes(queries, name)) return deny("binding-access", name)
       return apply(binding, owner, [name])

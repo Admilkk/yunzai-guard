@@ -63,7 +63,7 @@ export class NativeMediaSourceHost {
     this.sweep()
     if (requestId === undefined) return undefined
     const id = mediaRequestId(requestId)
-    if (this.options.isActiveRequest(id) !== true) {
+    if (!this.options.isActiveRequest(id)) {
       this.releaseRequest(id)
       return mediaFail("MEDIA_SOURCE_REQUEST", "Adapter request is missing or expired")
     }
@@ -94,7 +94,7 @@ export class NativeMediaSourceHost {
     for (const id of this.requests) {
       let active = false
       try {
-        active = this.options.isActiveRequest(id) === true
+        active = this.options.isActiveRequest(id)
       } catch {
         /* 查询失败时撤销能力。 */
       }

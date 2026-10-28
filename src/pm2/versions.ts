@@ -12,10 +12,10 @@ export function isSupportedPm2Version(value: unknown): boolean {
       value,
     )
   if (!match || match[0] !== value) return false
-  const core = [BigInt(match[1]!), BigInt(match[2]!), BigInt(match[3]!)]
+  const core = [BigInt(match[1]), BigInt(match[2]), BigInt(match[3])]
   for (let index = 0; index < 3; index++) {
-    if (core[index]! > minimum[index]!) return true
-    if (core[index]! < minimum[index]!) return false
+    if (core[index] > minimum[index]) return true
+    if (core[index] < minimum[index]) return false
   }
   return match[4] === undefined
 }

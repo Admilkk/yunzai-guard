@@ -34,7 +34,7 @@ export function writeControl(
   }
   let text: string
   try {
-    text = JSON.stringify(message) + "\n"
+    text = `${JSON.stringify(message)}\n`
   } catch (error) {
     return reject(error instanceof Error ? error : new Error(String(error)))
   }

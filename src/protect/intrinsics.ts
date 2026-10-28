@@ -69,7 +69,7 @@ function cleanDescriptor(descriptor: PropertyDescriptor): PropertyDescriptor {
   const clean = captures.create(null) as PropertyDescriptor
   const fields = ["value", "get", "set", "writable", "enumerable", "configurable"] as const
   for (let index = 0; index < fields.length; index++) {
-    const field = fields[index]!
+    const field = fields[index]
     if (call(captures.hasOwn, descriptor, [field])) clean[field] = captures.get(descriptor, field)
   }
   return clean
@@ -91,7 +91,7 @@ const descriptorFields = ["value", "get", "set", "writable", "enumerable", "conf
 export function sameDescriptor(a?: PropertyDescriptor, b?: PropertyDescriptor): boolean {
   if (!a || !b) return a === b
   for (let index = 0; index < descriptorFields.length; index++) {
-    const field = descriptorFields[index]!
+    const field = descriptorFields[index]
     if (a[field] !== b[field]) return false
   }
   return true
@@ -106,7 +106,7 @@ export function objectDescriptors(object: object): Record<PropertyKey, PropertyD
   const result = captures.create(null) as Record<PropertyKey, PropertyDescriptor>
   const keys = captures.ownKeys(object)
   for (let index = 0; index < keys.length; index++) {
-    const key = keys[index]!
+    const key = keys[index]
     const descriptor = objectDescriptor(object, key)
     if (descriptor) result[key] = descriptor
   }
@@ -174,7 +174,7 @@ export const stringSlice = (value: string, start: number, end?: number): string 
 export function stringSplit(value: string, separator: string): string[] {
   const result: string[] = []
   if (!separator) {
-    for (let index = 0; index < value.length; index++) arrayPush(result, value[index]!)
+    for (let index = 0; index < value.length; index++) arrayPush(result, value[index])
     return result
   }
   let cursor = 0
@@ -197,7 +197,7 @@ export const stringIndexOf = (value: string, search: string): number =>
 export const arrayIsArray = (value: unknown): value is unknown[] => captures.array(value)
 /** 按索引遍历数组。 */
 export function arrayEach<T>(values: readonly T[], visit: (value: T, index: number) => void): void {
-  for (let index = 0; index < values.length; index++) visit(values[index]!, index)
+  for (let index = 0; index < values.length; index++) visit(values[index], index)
 }
 /** 按索引映射数组。 */
 export function arrayMap<T, U>(values: readonly T[], visit: (value: T, index: number) => U): U[] {
@@ -212,7 +212,7 @@ export function arraySome<T>(
   values: readonly T[],
   visit: (value: T, index: number) => boolean,
 ): boolean {
-  for (let index = 0; index < values.length; index++) if (visit(values[index]!, index)) return true
+  for (let index = 0; index < values.length; index++) if (visit(values[index], index)) return true
   return false
 }
 /** 判断数组是否包含元素，NaN 视为相等。 */
@@ -254,7 +254,7 @@ export const arrayPush = <T>(values: T[], value: T): void => {
 /** 复制数组片段。 */
 export function arraySlice<T>(values: readonly T[], start = 0, end = values.length): T[] {
   const result: T[] = []
-  for (let index = start; index < end; index++) arrayPush(result, values[index]!)
+  for (let index = start; index < end; index++) arrayPush(result, values[index])
   return result
 }
 

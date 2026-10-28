@@ -136,7 +136,7 @@ async function safeStatus(
   try {
     fs.mkdirSync(path.join(view, "objects"))
     fs.mkdirSync(path.join(view, "refs"))
-    fs.writeFileSync(path.join(view, "HEAD"), commit + "\n", { mode: 0o600 })
+    fs.writeFileSync(path.join(view, "HEAD"), `${commit}\n`, { mode: 0o600 })
     const configuration = path.join(view, "config")
     fs.writeFileSync(
       configuration,

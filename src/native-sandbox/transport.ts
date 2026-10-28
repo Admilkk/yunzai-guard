@@ -178,7 +178,7 @@ export function attachNativeTransport(
   }
   const decoder = new BoundedJsonLines(value => child.emit("message", value), abort)
   Object.defineProperty(child, "connected", { configurable: true, get: () => connected })
-  child.send = ((message: unknown, ...extra: unknown[]) => {
+  child.send = (message: unknown, ...extra: unknown[]) => {
     const callback = extra.find(value => typeof value === "function") as
       ((error: Error | null) => void) | undefined
     try {
@@ -204,7 +204,7 @@ export function attachNativeTransport(
       abort(value)
       return false
     }
-  }) as ChildProcess["send"]
+  }
   child.disconnect = () => stream.destroy()
   stream.on("data", (chunk: Buffer) => decoder.write(chunk))
   stream.once("end", () => {

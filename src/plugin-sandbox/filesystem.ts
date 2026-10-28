@@ -37,10 +37,10 @@ function directory(root: string, parts: string[], create: boolean, allowMissing 
 
 /** 读取已启用受限脚本的源码。 */
 export function loadSandboxSources(root: string, settings: SandboxSettings): SandboxSource[] {
-  if (!settings.plugins.some(plugin => plugin.enabled !== false)) return []
+  if (!settings.plugins.some(plugin => plugin.enabled)) return []
   const base = directory(root, ["data", "yunzai-guard", "scripts"], false)
   const sources = settings.plugins
-    .filter(plugin => plugin.enabled !== false)
+    .filter(plugin => plugin.enabled)
     .map(plugin => {
       const file = path.join(base, `${plugin.id}.js`)
       const stat = fs.lstatSync(file)

@@ -346,8 +346,7 @@ export function parseAuditFrame(value: unknown): AuditWireFrame | undefined {
           !arrayIncludes(["settled", "incomplete", "unknown"], row.nestedCoverage)
         )
           return undefined
-        if (number(row.lastSentSeq) > (row.sourceCounters as AuditSourceCounters).accepted)
-          return undefined
+        if (number(row.lastSentSeq) > row.sourceCounters.accepted) return undefined
         break
       case "audit-flush-result":
         fields = [

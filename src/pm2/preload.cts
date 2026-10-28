@@ -10,7 +10,7 @@ function activatePm2Preload(): void {
   let entryPath: string
   let metadata: { name?: unknown; version?: unknown }
   try {
-    entryPath = fs.realpathSync.native(process.argv[1]!)
+    entryPath = fs.realpathSync.native(process.argv[1])
     if (path.basename(entryPath).toLowerCase() !== (daemon ? "daemon.js" : "pm2")) return
     if (path.basename(path.dirname(entryPath)) !== (daemon ? "lib" : "bin")) return
     metadata = JSON.parse(

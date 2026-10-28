@@ -36,11 +36,8 @@ class Prefix {
       previous.first = Math.min(previous.first, sequence)
       previous.last = Math.max(previous.last, sequence)
     } else this.completed.splice(at, 0, { first: sequence, last: sequence })
-    while (
-      this.completed[at + 1] &&
-      this.completed[at]!.last >= this.completed[at + 1]!.first - 1
-    ) {
-      this.completed[at]!.last = Math.max(this.completed[at]!.last, this.completed[at + 1]!.last)
+    while (this.completed[at + 1] && this.completed[at].last >= this.completed[at + 1].first - 1) {
+      this.completed[at].last = Math.max(this.completed[at].last, this.completed[at + 1].last)
       this.completed.splice(at + 1, 1)
     }
     while (this.completed[0]?.first === this.through + 1)

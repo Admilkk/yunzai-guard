@@ -83,24 +83,24 @@ function clientAddress(request: http.IncomingMessage, trustProxy: boolean): stri
 
 /** 根据 User-Agent 生成可读的设备名称。 */
 function deviceName(agent: string): string {
-  const browser = /Edg\//.test(agent)
+  const browser = agent.includes("Edg/")
     ? "Edge"
-    : /Firefox\//.test(agent)
+    : agent.includes("Firefox/")
       ? "Firefox"
       : /(?:Chrome|Chromium)\//.test(agent)
         ? "Chrome"
-        : /Safari\//.test(agent)
+        : agent.includes("Safari/")
           ? "Safari"
           : "浏览器"
-  const system = /Windows/.test(agent)
+  const system = agent.includes("Windows")
     ? "Windows"
-    : /Android/.test(agent)
+    : agent.includes("Android")
       ? "Android"
       : /iPhone|iPad/.test(agent)
         ? "iOS"
-        : /Macintosh/.test(agent)
+        : agent.includes("Macintosh")
           ? "macOS"
-          : /Linux/.test(agent)
+          : agent.includes("Linux")
             ? "Linux"
             : ""
   return system ? `${browser} · ${system}` : `${browser}设备`
@@ -811,7 +811,9 @@ export class GuardPanel {
     let identity: string | undefined
     let closed = false
     let waitingDrain = false
+    // eslint-disable-next-line prefer-const -- 先被回调引用，之后才赋值
     let timer: NodeJS.Timeout | undefined
+    // eslint-disable-next-line prefer-const -- 先被回调引用，之后才赋值
     let heartbeat: NodeJS.Timeout | undefined
     let drainTimer: NodeJS.Timeout | undefined
     const cleanup = () => {
@@ -856,7 +858,7 @@ export class GuardPanel {
         if (begin > 0) {
           const byte = Buffer.alloc(1)
           for (let index = 0; index < 3 && begin < info.size; index++) {
-            if (!fs.readSync(handle, byte, 0, 1, begin) || (byte[0]! & 0xc0) !== 0x80) break
+            if (!fs.readSync(handle, byte, 0, 1, begin) || (byte[0] & 0xc0) !== 0x80) break
             begin += 1
           }
         }

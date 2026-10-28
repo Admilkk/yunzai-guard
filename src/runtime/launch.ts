@@ -56,13 +56,13 @@ const realpath = fs.realpathSync.native
 export function stripGuardExecArgv(input: readonly string[]): string[] {
   const rest: string[] = []
   for (let index = 0; index < input.length; index++) {
-    const value = input[index]!
-    if (value === "--import" && setHas(ownImports, input[index + 1]!)) {
+    const value = input[index]
+    if (value === "--import" && setHas(ownImports, input[index + 1])) {
       index++
       continue
     }
     if (stringStartsWith(value, "--import=") && setHas(ownImports, stringSlice(value, 9))) continue
-    if ((value === "--require" || value === "-r") && setHas(ownRequires, input[index + 1]!)) {
+    if ((value === "--require" || value === "-r") && setHas(ownRequires, input[index + 1])) {
       index++
       continue
     }
@@ -104,7 +104,7 @@ export function stripGuardNodeOptions(input: string): string {
     let value = ""
     let quoted = false
     while (at < input.length) {
-      const char = input[at]!
+      const char = input[at]
       if (char === '"') {
         quoted = !quoted
         at++
@@ -125,7 +125,7 @@ export function stripGuardNodeOptions(input: string): string {
   }
   const kept: string[] = []
   for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index]!
+    const token = tokens[index]
     const next = tokens[index + 1]
     if (
       (token.value === "--import" && setHas(ownImports, next?.value ?? "")) ||
@@ -189,7 +189,7 @@ function ordinaryEnvironment(input: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     )
       delete env[key]
     if (normalized === "node_options" && typeof env[key] === "string") {
-      const cleaned = stripGuardNodeOptions(env[key]!)
+      const cleaned = stripGuardNodeOptions(env[key])
       if (cleaned) env[key] = cleaned
       else delete env[key]
     }
@@ -243,7 +243,7 @@ export function snapshotLaunch(operation: string, input: unknown[]): unknown[] {
     arrayIncludes(["exec", "execFile"], operation) && typeof current === "function"
   if (!callbackOnly && current != null && (typeof current !== "object" || arrayIsArray(current)))
     return input
-  const options = copyOptions(callbackOnly ? undefined : (current as object | undefined))
+  const options = copyOptions(callbackOnly ? undefined : current)
   if (arrayIsArray(args[1])) args[1] = arraySlice(args[1])
   if (arrayIsArray(options.execArgv)) options.execArgv = arraySlice(options.execArgv)
   options.env = copyEnvironment(

@@ -1,14 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { nativeIdentityProtocol, nativeIdentityLimits, NativeIdentityError } from "./protocol.js"
+import { nativeIdentityLimits, NativeIdentityError } from "./protocol.js"
 import type { NativeIdentityOptions, RefusalCode, NativeFailureResult } from "./protocol.js"
 import { resolveBundle } from "./bundle.js"
 import {
   fail,
   object,
   keys,
-  integer,
-  token,
   remaining,
   refusalCodes,
   parseNativeIdentityJson,
@@ -177,7 +175,7 @@ export class Transport {
         command,
         ...extra,
       }
-      const bytes = Buffer.from(JSON.stringify(frame) + "\n")
+      const bytes = Buffer.from(`${JSON.stringify(frame)}\n`)
       if (bytes.length > nativeIdentityLimits.frameBytes) fail("FRAME_OR_SCOPE_LIMIT")
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => this.break(new NativeIdentityError("DEADLINE")), budget)

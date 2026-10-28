@@ -12,7 +12,7 @@ import { M } from "../shared/messages.js"
 
 /** 读取核心当前的 Redis 客户端。 */
 const originalRedisClient = () => (globalThis as typeof globalThis & { redis?: unknown }).redis
-const bootstrapStarted = new WeakSet<object>()
+const bootstrapStarted = new WeakSet()
 
 /** 发送交接消息后退出当前进程。 */
 function commitAndExit(send: (callback: (error: Error | null) => void) => void): Promise<never> {

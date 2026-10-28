@@ -178,7 +178,7 @@ process.on("message", (input: unknown) => {
               message.entry as string,
               message.hookAction as "audit" | "deny" | "restart" | undefined,
               message.adapters === true,
-              message.botEventsSessionId as string | undefined,
+              message.botEventsSessionId,
             )
           } else if (message.type === "native-call") {
             if (
@@ -205,8 +205,8 @@ process.on("message", (input: unknown) => {
               message.args as unknown[] | undefined,
               message.eventArgs as unknown[] | undefined,
               message.handlerReject === true,
-              message.contextHandle as string | undefined,
-              message.instanceId as string | undefined,
+              message.contextHandle,
+              message.instanceId,
               message.ruleIndex as number | undefined,
             )
           } else if (message.type === "native-release-instances") {

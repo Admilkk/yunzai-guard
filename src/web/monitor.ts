@@ -265,7 +265,7 @@ function windowOf(stateDir: string): { entries: AuditEntry[]; coverage: AuditCov
       let lines = buffer.subarray(0, read).toString("utf8").split("\n")
       if (begin) lines = lines.slice(1)
       for (let index = lines.length - 1; index >= 0; index--) {
-        const line = lines[index]!.trim()
+        const line = lines[index].trim()
         if (!line) continue
         if (examined++ >= maxRecords) {
           coverage.truncated = true
@@ -356,7 +356,7 @@ function summarize(entries: AuditEntry[]): AuditSummary {
       info: 0,
     }))
     for (const entry of entries) {
-      const bucket = result.timeline[Math.floor((entry.time - start) / bucketMs)]!
+      const bucket = result.timeline[Math.floor((entry.time - start) / bucketMs)]
       bucket.total++
       bucket[entry.action]++
     }

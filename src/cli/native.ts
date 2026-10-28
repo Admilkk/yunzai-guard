@@ -47,7 +47,7 @@ export async function nativeCommand(args: string[], root: string): Promise<unkno
   }
   // ID 和权限默认值统一由配置解析器处理，名称不代表授权。
   parseNativeSandbox({ plugins: [{ id }] })
-  if (command === "enable") pluginDirectory(id!)
+  if (command === "enable") pluginDirectory(id)
   directory(root, ["data", "yunzai-guard"], true)
   let lock: ReturnType<typeof createFile>
   try {
@@ -67,7 +67,7 @@ export async function nativeCommand(args: string[], root: string): Promise<unkno
     const index = plugins.findIndex(plugin => plugin.id === id)
     if (index < 0 && command === "disable") throw new Error(M.cli.nativeUnconfigured(id))
     const enabled = command === "enable"
-    if (index >= 0 && (plugins[index]!.enabled ?? true) === enabled)
+    if (index >= 0 && (plugins[index].enabled ?? true) === enabled)
       return { command, id, changed: false, restartRequired: false }
     const selection = { ...(index < 0 ? { id } : plugins[index]), enabled }
     if (index < 0) plugins.push(selection)

@@ -279,7 +279,7 @@ export class AlertService {
 
   /** 补发业务进程不在线时留存的主人通知。 */
   flush(): void {
-    while (this.#pending.length && this.#options.send(this.#pending[0]!)) this.#pending.shift()
+    while (this.#pending.length && this.#options.send(this.#pending[0])) this.#pending.shift()
   }
 
   /** 最近的告警历史，新的在前；跳过损坏或缺少展示字段的记录。 */

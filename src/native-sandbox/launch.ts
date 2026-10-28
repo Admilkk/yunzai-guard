@@ -79,7 +79,7 @@ export interface NativeSandboxSession {
 export const nativeStartupTimeoutMs = 60000
 
 const active = new Set<string>()
-const reclaimedFailures = new WeakSet<object>()
+const reclaimedFailures = new WeakSet()
 const rememberReclaimed = reclaimedFailures.add.bind(reclaimedFailures)
 const wasReclaimed = reclaimedFailures.has.bind(reclaimedFailures)
 
@@ -324,7 +324,7 @@ async function startNativeSandbox(
         ? undefined
         : {
             pluginId: parseNativeSandbox({ plugins: [{ id: options.behavior.pluginId }] })
-              .plugins[0]!.id,
+              .plugins[0].id,
             settings: nativeBehaviorSettings(options.behavior.settings),
           }
     if (nativeBehavior && fold(nativeBehavior.pluginId) !== fold(path.basename(pluginRoot)))

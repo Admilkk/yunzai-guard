@@ -64,7 +64,7 @@ function validSession(value: unknown): value is Session {
     item.createdAt > 0 &&
     item.createdAt <= item.lastSeenAt &&
     item.lastSeenAt <= item.expiresAt &&
-    item.remember === true &&
+    item.remember &&
     typeof item.address === "string" &&
     item.address.length <= 128 &&
     typeof item.userAgent === "string" &&
@@ -310,7 +310,7 @@ export class PanelAuth {
     fs.mkdirSync(path.dirname(this.#file), { recursive: true })
     fs.writeFileSync(
       temporary,
-      JSON.stringify({ version: 1, secretId: this.#secretId, sessions }) + "\n",
+      `${JSON.stringify({ version: 1, secretId: this.#secretId, sessions })}\n`,
       { mode: 0o600 },
     )
     try {

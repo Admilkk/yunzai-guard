@@ -62,7 +62,7 @@ export function collectWindowsAliases(
   const pending = [{ directory: root, dependency: false }]
   for (const relative of writeDirectories) {
     const parts = relative.split("/")
-    if (parts.length !== 2 || fold(parts[0]!) !== "plugins") continue
+    if (parts.length !== 2 || fold(parts[0]) !== "plugins") continue
     const pluginRoot = path.join(root, relative)
     const pluginStat = fs.lstatSync(pluginRoot, { throwIfNoEntry: false })
     if (!pluginStat) continue

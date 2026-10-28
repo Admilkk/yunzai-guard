@@ -182,7 +182,7 @@ function processIdentity(
     const fields = stat.slice(stat.lastIndexOf(") ") + 2).split(" ")
     const startTicks = fields[19]
     if (!startTicks || !/^\d+$/.test(startTicks)) throw new Error(M.sandbox.namespaceStat)
-    return { startTicks, state: fields[0]!, parent: Number(fields[1]) }
+    return { startTicks, state: fields[0], parent: Number(fields[1]) }
   } catch (error) {
     if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined
     throw error

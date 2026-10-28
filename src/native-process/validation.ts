@@ -3,7 +3,6 @@ import { types } from "node:util"
 import { nativeIdentityLimits, NativeIdentityError } from "./protocol.js"
 import type {
   NativeIdentity,
-  NativeBirth,
   RefusalCode,
   NativeFailureResult,
   QualifiedNodeProfile,

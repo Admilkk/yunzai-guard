@@ -57,7 +57,7 @@ export async function waitForBootstrapHandoff(
     else if (!process.connected) disconnected()
     else {
       options.bound?.(watch.identities)
-      process.send!({ type: "armed", version: 1, nonce }, error => {
+      process.send({ type: "armed", version: 1, nonce }, error => {
         if (error) rejectHandoff(error)
       })
     }

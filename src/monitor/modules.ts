@@ -114,7 +114,7 @@ export function installModuleAudit(options: ModuleAuditOptions): ModuleAudit {
   const guardRoot = path.resolve(options.guardRoot)
   const modules = new Map<string, ModuleRecord>()
   const functionOrigins = new WeakMap<object, string>()
-  const uncertainOrigins = new WeakSet<object>()
+  const uncertainOrigins = new WeakSet()
   const outgoing = new Map<string, Set<string>>()
   const incoming = new Map<string, Set<string>>()
   let graphRevision = 0
@@ -273,7 +273,7 @@ export function installModuleAudit(options: ModuleAuditOptions): ModuleAudit {
         coverage("slot-limit", record)
         return descriptor
       }
-      result.set(target, { owner: object, descriptor, exportedName: parts[0]!, keys })
+      result.set(target, { owner: object, descriptor, exportedName: parts[0], keys })
       return descriptor
     }
     /** 登记类的静态方法与原型方法。 */
@@ -544,7 +544,7 @@ export function installModuleAudit(options: ModuleAuditOptions): ModuleAudit {
     }
     return {
       target: parts.map(part => encodeURIComponent(part)).join("/"),
-      plugin: parts[1]!,
+      plugin: parts[1],
       filename,
     }
   }
@@ -603,7 +603,7 @@ export function installModuleAudit(options: ModuleAuditOptions): ModuleAudit {
         seen.add(start)
         const pending = [{ url: start, edges: outgoing.get(start)!.values() }]
         while (pending.length) {
-          const current = pending[pending.length - 1]!
+          const current = pending[pending.length - 1]
           const next = current.edges.next()
           if (next.done) {
             finished.push(current.url)
@@ -617,7 +617,7 @@ export function installModuleAudit(options: ModuleAuditOptions): ModuleAudit {
       seen.clear()
       const nextComponents = new Map<string, ReadonlySet<string>>()
       for (let index = finished.length - 1; index >= 0; index--) {
-        const start = finished[index]!
+        const start = finished[index]
         if (seen.has(start)) continue
         const members = new Set<string>()
         const pending = [start]

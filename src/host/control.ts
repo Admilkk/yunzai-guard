@@ -14,7 +14,7 @@ export function request(command: string): Promise<unknown> {
     let data = ""
     socket.setTimeout(5000, () => socket.destroy(new Error(M.host.controlTimeout)))
     socket.on("error", reject)
-    socket.on("connect", () => socket.write(JSON.stringify({ token, command }) + "\n"))
+    socket.on("connect", () => socket.write(`${JSON.stringify({ token, command })}\n`))
     socket.on("data", chunk => {
       data += chunk
       if (Buffer.byteLength(data) > 1024 * 1024)

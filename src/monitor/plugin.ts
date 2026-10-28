@@ -31,7 +31,7 @@ export class PluginMonitor {
   readonly #check: () => void
   readonly #watch?: HookWatch
   readonly #currentPlugin?: () => string | undefined
-  readonly #observed = new WeakSet<object>()
+  readonly #observed = new WeakSet()
   readonly #entries = new Map<string, PluginActivity>()
   readonly #wrapped = new WeakMap<Function, { original: Function; name: string }>()
   readonly #instances = new WeakMap<object, string>()
@@ -168,7 +168,7 @@ export class PluginMonitor {
     const wrapped = function (this: unknown, ...args: unknown[]) {
       const owner =
         this && (typeof this === "object" || typeof this === "function")
-          ? (monitor.#instances.get(this as object) ?? name)
+          ? (monitor.#instances.get(this) ?? name)
           : name
       return monitor.#invoke(owner, operation, key, () => apply(original, this, args))
     }

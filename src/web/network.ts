@@ -8,19 +8,17 @@ function toBig(address: string): bigint | undefined {
     const parts = address.split(".").map(Number)
     return (
       (0xffffn << 32n) |
-      BigInt(((parts[0]! << 24) | (parts[1]! << 16) | (parts[2]! << 8) | parts[3]!) >>> 0)
+      BigInt(((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0)
     )
   }
   if (version !== 6) return undefined
-  let text = address.split("%")[0]!
+  let text = address.split("%")[0]
   const tail = /(\d+\.\d+\.\d+\.\d+)$/.exec(text)?.[1]
   if (tail) {
     const v4 = toBig(tail)!
-    text =
-      text.slice(0, -tail.length) +
-      Number((v4 >> 16n) & 0xffffn).toString(16) +
-      ":" +
-      Number(v4 & 0xffffn).toString(16)
+    text = `${text.slice(0, -tail.length) + Number((v4 >> 16n) & 0xffffn).toString(16)}:${Number(
+      v4 & 0xffffn,
+    ).toString(16)}`
   }
   const [head = "", rest] = text.split("::")
   const left = head ? head.split(":") : []

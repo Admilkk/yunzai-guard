@@ -61,7 +61,7 @@ export function nestedEnvironment(
     )
       throw new Error(M.pm2.nestedIdentity)
   }
-  return nested as Record<string, unknown> | undefined
+  return nested
 }
 /** 生成应用启动参数补丁。 */
 export function createPatch(

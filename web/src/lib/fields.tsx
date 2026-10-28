@@ -67,7 +67,7 @@ export function ConfigField({
   const { draft, overview, update, saving } = useConsole()
   const value = readPath(draft, path) ?? fallback
   const change = (next: any) => update(document => writePath(document, path, next))
-  const id = "field-" + path.join("-")
+  const id = `field-${path.join("-")}`
   const locked = saving || disabled
   let control
   if (type === "switch")

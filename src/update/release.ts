@@ -136,7 +136,7 @@ async function fetchViaRedirect(version: string): Promise<LatestResult> {
     signal: AbortSignal.timeout(requestTimeoutMs),
   })
   const match = /\/releases\/tag\/([^/?#]+)$/.exec(response.headers.get("location") ?? "")
-  const tag = match && decodeURIComponent(match[1]!)
+  const tag = match && decodeURIComponent(match[1])
   if (!tag || !parseVersion(tag)) throw new Error(M.update.badRelease)
   const base = `${downloadPrefix}${encodeURIComponent(tag)}/`
   const names = [

@@ -26,7 +26,7 @@ function captureHmac(): {
   const probe = createHmac("sha256", "guard-control-probe")
   const symbols = objectSymbols(probe)
   for (let index = 0; index < symbols.length; index++) {
-    const handle = objectDescriptor(probe, symbols[index]!)?.value
+    const handle = objectDescriptor(probe, symbols[index])?.value
     if (!handle || typeof handle !== "object") continue
     const prototype = objectPrototype(handle)
     if (!prototype) continue

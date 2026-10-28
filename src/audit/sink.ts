@@ -96,7 +96,7 @@ export class AuditSink {
         this.#rejected++
         continue
       }
-      const frame = frames[index]!
+      const frame = frames[index]
       try {
         if (typeof frame.type !== "string" || !frame.type || frame.type.length > 100)
           throw new TypeError(M.audit.recordType)
@@ -106,14 +106,13 @@ export class AuditSink {
         if (!Number.isSafeInteger(sequence)) throw new TypeError(M.audit.sequenceExhausted)
         const time = frame.time ?? this.#options.wallNow?.() ?? Date.now()
         if (!Number.isFinite(time)) throw new TypeError(M.audit.recordClock)
-        const text =
-          JSON.stringify({
-            ...details,
-            sequence,
-            time,
-            hostPid: this.#options.hostPid ?? process.pid,
-            type: frame.type,
-          }) + "\n"
+        const text = `${JSON.stringify({
+          ...details,
+          sequence,
+          time,
+          hostPid: this.#options.hostPid ?? process.pid,
+          type: frame.type,
+        })}\n`
         const bytes = Buffer.byteLength(text)
         if (bytes > this.#options.maxBytes) {
           receipts[index] = { result: "rejected", reason: "oversize" }
@@ -207,7 +206,7 @@ export class AuditSink {
   }
   /** 追加单条事件。 */
   record(type: string, details: Record<string, unknown> = {}, time?: number): AuditAppendReceipt {
-    return this.appendBatch([{ type, details, time }])[0]!
+    return this.appendBatch([{ type, details, time }])[0]
   }
   /** 返回落盘统计快照。 */
   stats() {

@@ -71,12 +71,12 @@ function step(object: object, key: string): Step {
 /** 按点分路径读取目标及其属性链快照。 */
 function read(roots: Record<string, unknown>, target: string): Snapshot | undefined {
   const keys = stringSplit(target, ".")
-  const root = roots[keys[0]!]
+  const root = roots[keys[0]]
   if (!isReference(root)) return undefined
   const steps: Step[] = []
   let value: unknown = root
   for (let index = 1; index < keys.length; index++) {
-    const key = keys[index]!
+    const key = keys[index]
     if (!isReference(value)) return undefined
     const result = step(value, key)
     arrayPush(steps, result)
@@ -92,8 +92,8 @@ function difference(before: Snapshot, after?: Snapshot): string | undefined {
   if (before.root !== after.root) return "root"
   if (before.steps.length !== after.steps.length) return "path"
   for (let i = 0; i < before.steps.length; i++) {
-    const a = before.steps[i]!
-    const b = after.steps[i]!
+    const a = before.steps[i]
+    const b = after.steps[i]
     if (a.object !== b.object) return "path"
     if (a.chain.length !== b.chain.length || arraySome(a.chain, (item, n) => item !== b.chain[n]))
       return "prototype"

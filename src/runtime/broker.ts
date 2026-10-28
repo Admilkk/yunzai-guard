@@ -70,7 +70,7 @@ export function writeBrokerSocketFrame(
   callback?: (error?: Error | null) => void,
 ): boolean {
   if (socket.destroyed) throw new Error(M.runtime.auditPeerGone)
-  const line = JSON.stringify(copyAuditData(message)) + "\n"
+  const line = `${JSON.stringify(copyAuditData(message))}\n`
   const bytes = Buffer.byteLength(line)
   if (bytes > 65536) throw new Error(M.runtime.auditReplyFrame)
   if (socket.writableLength + bytes > 256 * 1024) throw new Error(M.runtime.auditReplyQueue)

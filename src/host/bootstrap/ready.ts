@@ -8,6 +8,7 @@ export function waitForBootstrapReady(
   signal?: AbortSignal,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    // eslint-disable-next-line prefer-const -- 先被回调引用，之后才赋值
     let timer: ReturnType<typeof setTimeout> | undefined
     let settled = false
     const finish = (error?: unknown) => {

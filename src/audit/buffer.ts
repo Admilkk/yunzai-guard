@@ -269,7 +269,7 @@ export class AuditBuffer {
         this.#critical = undefined
       }
       while (this.#normal.length && batch.length < 64) {
-        const item = this.#normal[0]!
+        const item = this.#normal[0]
         const accelerated =
           this.#fast && item.admission <= this.#fast.cutoff && this.#fast.deadline.remainingMs() > 0
         if (!accelerated && this.#tokens < 1) break
@@ -296,10 +296,7 @@ export class AuditBuffer {
           receipts = batch.map(() => ({ result: "unknown", reason: "sink-error" }))
         }
         for (let index = 0; index < batch.length; index++)
-          this.#settle(
-            batch[index]!,
-            receipts[index] ?? { result: "unknown", reason: "sink-error" },
-          )
+          this.#settle(batch[index], receipts[index] ?? { result: "unknown", reason: "sink-error" })
       }
       if (this.#normal.length || this.#critical) {
         const accelerated =

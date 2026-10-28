@@ -56,18 +56,18 @@ function invoke(...args: unknown[]): boolean {
   const [capability, text, file] = args as string[]
   if (
     !plugin.capabilities.includes(capability as never) ||
-    capability!.length > 32 ||
+    capability.length > 32 ||
     actions.length >= 16 ||
-    text!.length > (capability === "writeText" ? 16384 : 4096) ||
+    text.length > (capability === "writeText" ? 16384 : 4096) ||
     (file !== undefined && file.length > 64) ||
     (capability === "writeText" ? file === undefined : file !== undefined)
   )
     return fail()
-  bytes += Buffer.byteLength(text!, "utf8") + Buffer.byteLength(file ?? "", "utf8")
+  bytes += Buffer.byteLength(text, "utf8") + Buffer.byteLength(file ?? "", "utf8")
   if (bytes > 32768) return fail()
   actions.push({
     capability: capability as SandboxAction["capability"],
-    text: text!,
+    text,
     ...(file === undefined ? {} : { file }),
   })
   return true

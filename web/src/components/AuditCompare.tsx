@@ -108,14 +108,13 @@ export function AuditCompare({
     setLoading(true)
     setError("")
     api<Comparison>(
-      "/api/audit/compare?" +
-        query({
-          plugin,
-          aFrom: now - 2 * span,
-          aTo: now - span - 1,
-          bFrom: now - span,
-          bTo: now,
-        }),
+      `/api/audit/compare?${query({
+        plugin,
+        aFrom: now - 2 * span,
+        aTo: now - span - 1,
+        bFrom: now - span,
+        bTo: now,
+      })}`,
       { signal: controller.signal },
     )
       .then(setData)

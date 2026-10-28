@@ -4,7 +4,7 @@ import { Paths } from "./paths.js"
 import { apply, objectDefine, objectDescriptor, objectFreeze, arrayPush } from "./intrinsics.js"
 
 const owner = process
-const report = process.report!
+const report = process.report
 const write = report.writeReport
 const chdir = process.chdir
 const cwd = process.cwd.bind(process)
@@ -63,7 +63,7 @@ export function installReportGuard(
       set,
     })
   }
-  options.seal(report, "writeReport", function (...args: unknown[]) {
+  options.seal(report, "writeReport", (...args: unknown[]) => {
     const first = args[0]
     if (first !== undefined && typeof first !== "string" && (!first || typeof first !== "object"))
       return apply(write, report, args)

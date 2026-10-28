@@ -38,6 +38,7 @@ import { M } from "../shared/messages.js"
 // 仅 Yunzai 主线程执行宿主握手及核心生命周期桥接。
 if (isMainThread) {
   let outputClosed = false
+  // eslint-disable-next-line prefer-const -- 先被回调引用，之后才赋值
   let requestOutputStop: (() => void) | undefined
   for (const stream of [process.stdout, process.stderr])
     stream.on("error", (error: NodeJS.ErrnoException) => {

@@ -45,7 +45,7 @@ export function nativeBehaviorSettings(value: unknown): GuardSettings {
 export function installNativeBehavior(options: NativeBehaviorOptions): NativeBehaviorHandle {
   if (!isMainThread) throw new Error(M.nativeSandbox.behaviorThread)
   if (Object.hasOwn(globalThis, runtimeKey)) throw new Error(M.nativeSandbox.behaviorInstalled)
-  const pluginId = parseNativeSandbox({ plugins: [{ id: options.pluginId }] }).plugins[0]!.id
+  const pluginId = parseNativeSandbox({ plugins: [{ id: options.pluginId }] }).plugins[0].id
   const settings = nativeBehaviorSettings(options.settings)
   const identity: RuntimeIdentity = Object.freeze({
     id: string(options.identity.id, "nativeBehavior.identity.id", 128),

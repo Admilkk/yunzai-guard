@@ -168,14 +168,14 @@ function queryStatus(identity: ControlIdentity): Promise<unknown> {
     socket.setTimeout(timeoutMs, () => finish(new Error(M.host.previousTimeout)))
     socket.on("error", error => finish(error))
     socket.on("connect", () =>
-      socket.write(JSON.stringify({ token: identity.token, command: "status" }) + "\n"),
+      socket.write(`${JSON.stringify({ token: identity.token, command: "status" })}\n`),
     )
     socket.on("data", bytes => {
       input += bytes.toString("utf8")
       if (Buffer.byteLength(input) > 65536) return finish(new Error(M.host.previousTooLarge))
       if (!input.includes("\n")) return
       try {
-        finish(undefined, JSON.parse(input.split("\n")[0]!))
+        finish(undefined, JSON.parse(input.split("\n")[0]))
       } catch {
         finish(new Error(M.host.previousInvalid))
       }

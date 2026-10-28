@@ -35,5 +35,6 @@ jobs:
       # prepare 脚本会完成 runtime 与面板构建，并核验随包原生组件的摘要。
       - run: npm ci --include=dev
       - run: npm run check
+      - run: npm run lint
       - run: npm run format:check
       - run: npm run test:unit

@@ -44,7 +44,7 @@ const encode = encoder.encode.bind(encoder)
 const normalize = (value: string): string => {
   if (platform !== "win32") return value
   const lower = stringLower(value)
-  if (stringStartsWith(lower, "\\\\?\\unc\\")) value = "\\\\" + stringSlice(value, 8)
+  if (stringStartsWith(lower, "\\\\?\\unc\\")) value = `\\\\${stringSlice(value, 8)}`
   else if (stringStartsWith(value, "\\\\?\\") || stringStartsWith(value, "\\\\.\\"))
     value = stringSlice(value, 4)
   return stringLower(value)
@@ -118,7 +118,7 @@ export class Paths {
       try {
         let resolved = realpath(cursor)
         for (let index = suffix.length - 1; index >= 0; index--)
-          resolved = join(resolved, suffix[index]!)
+          resolved = join(resolved, suffix[index])
         return resolved
       } catch {
         const parent = dirname(cursor)

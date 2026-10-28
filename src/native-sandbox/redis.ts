@@ -235,7 +235,7 @@ export function prepareNativeRedisCommand(
     denied("Redis command is not exposed; raw SCAN and arbitrary commands are unavailable")
   if (!Array.isArray(input)) denied("Redis arguments must be an array")
   const policy = parseNativeRedisPermissions(permissions)
-  const command = commands[method]!
+  const command = commands[method]
   if (input.length < command.min || input.length > command.max)
     denied("Invalid Redis command argument count")
   const args = argumentsCopy(input)

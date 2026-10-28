@@ -25,7 +25,7 @@ export function eventRule(entry: AuditEntry): Partial<Rule> {
   let target = entry.target && entry.target !== "—" ? entry.target : undefined
   if (target?.includes("[path-redacted]")) {
     try {
-      target = new URL(target).origin + "/*"
+      target = `${new URL(target).origin}/*`
     } catch {
       target = undefined
     }

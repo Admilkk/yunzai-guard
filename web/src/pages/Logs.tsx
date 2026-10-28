@@ -40,7 +40,7 @@ function ansi(text: string): ReactNode[] {
     at = expression.lastIndex
   }
   result.push(
-    <span key={"last-" + at} style={style}>
+    <span key={`last-${at}`} style={style}>
       {text.slice(at).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")}
     </span>,
   )

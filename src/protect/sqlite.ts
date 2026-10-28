@@ -96,7 +96,7 @@ export function installSqliteGuard(options: SqliteGuardOptions): void {
       }
       name = decode(name)
       if (!name || name === ":memory:") return snapshot
-      if (windows && name[0] === "/" && name[2] === ":") name = stringSlice(name, 1)
+      if (windows && name.startsWith("/") && name[2] === ":") name = stringSlice(name, 1)
     }
     const absolute = resolve(name)
     reads.check(absolute, operation)
@@ -185,7 +185,7 @@ export function installSqliteGuard(options: SqliteGuardOptions): void {
   options.seal(
     sqlite,
     "backup",
-    function (...args: unknown[]) {
+    (...args: unknown[]) => {
       args[1] = filename(args[1], "sqlite.backup", false)
       return apply(nativeBackup, sqlite, args)
     },

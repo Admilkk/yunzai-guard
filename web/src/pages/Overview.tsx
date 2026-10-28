@@ -75,7 +75,7 @@ function Trend({ timeline }: { timeline: Bucket[] }) {
       </div>
       <div className="chart-ticks">
         {ticks.map(index => (
-          <span key={index}>{formatTime(timeline[index]!.time)}</span>
+          <span key={index}>{formatTime(timeline[index].time)}</span>
         ))}
       </div>
     </div>

@@ -58,7 +58,7 @@ export default function Security() {
     try {
       if (item.current) await logout()
       else {
-        await api("/api/security/sessions/" + encodeURIComponent(item.id), { method: "DELETE" })
+        await api(`/api/security/sessions/${encodeURIComponent(item.id)}`, { method: "DELETE" })
         await load()
         message.success("已撤销")
       }

@@ -171,7 +171,7 @@ export async function registerPm2ApplicationWithGod(
     if (!Object.isExtensible(god)) throw new Error(M.pm2.godFrozen)
   }
   const child = god.clusters_db[String(options.pmId)]
-  const environment = child?.pm2_env as Pm2DaemonEnvironment | undefined
+  const environment = child?.pm2_env
   if (
     !(child instanceof ChildProcess) ||
     child.pid !== options.pid ||
@@ -313,7 +313,7 @@ export async function registerPm2ApplicationWithGod(
       return (
         god.clusters_db[String(app.pmId)] === child &&
         child.pm2_env === environment &&
-        matchesApplication(child.pm2_env as Pm2DaemonEnvironment, app)
+        matchesApplication(child.pm2_env, app)
       )
     } catch {
       return false
@@ -356,8 +356,8 @@ export async function registerPm2ApplicationWithGod(
         environment.unique_id !== app.uniqueId ||
         environment.pm_id !== app.pmId ||
         environment.exec_mode !== "fork_mode" ||
-        canonical(environment.pm_cwd!) !== root ||
-        canonical(environment.pm_exec_path!) !== appPath
+        canonical(environment.pm_cwd) !== root ||
+        canonical(environment.pm_exec_path) !== appPath
       )
         throw new Error(M.pm2.appChanged)
       preflightPm2Compatibility(god, launcherPath)
@@ -490,7 +490,7 @@ export async function registerPm2ApplicationWithGod(
                     message.type !== "yunzai-guard-pm2-check" ||
                     !sameNonce(message.nonce, ticket) ||
                     god.clusters_db[String(application.pmId)] !== spawned ||
-                    !matchesApplication(spawned.pm2_env as Pm2DaemonEnvironment, application) ||
+                    !matchesApplication(spawned.pm2_env, application) ||
                     spawned.pid === undefined ||
                     !spawned.connected
                   )
@@ -595,7 +595,7 @@ export async function registerPm2ApplicationWithGod(
         if (
           god.clusters_db[String(options.pmId)] !== child ||
           child.pm2_env !== environment ||
-          !matchesApplication(child.pm2_env as Pm2DaemonEnvironment, app)
+          !matchesApplication(child.pm2_env, app)
         ) {
           app.cold?.gate.fail("bootstrap-generation-changed")
           dispose()

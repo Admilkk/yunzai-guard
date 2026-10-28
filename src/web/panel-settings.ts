@@ -36,7 +36,7 @@ export function randomCode(length: number): string {
   const bytes = randomBytes(length * 2)
   let result = ""
   for (let index = 0; result.length < length && index < bytes.length; index++) {
-    const value = bytes[index]!
+    const value = bytes[index]
     if (value >= 256 - (256 % alphabet.length)) continue
     result += alphabet[value % alphabet.length]
   }
@@ -147,7 +147,7 @@ export function savePanelSettings(stateDir: string, patch: PanelSettingsPatch): 
     next.tokenTtlHours = patch.tokenTtlHours
   }
   if (patch.enabled !== undefined) next.enabled = patch.enabled
-  if (patch.allowExternal !== undefined) next.allowExternal = patch.allowExternal === true
+  if (patch.allowExternal !== undefined) next.allowExternal = patch.allowExternal
   if (patch.trustedDeviceTtlDays !== undefined) {
     if (
       !Number.isInteger(patch.trustedDeviceTtlDays) ||

@@ -219,7 +219,7 @@ export default function Audit() {
     if (filters.range) params.set("from", String(Date.now() - Number(filters.range)))
     if (!filters.system) params.set("scope", "behavior")
     try {
-      const response = await fetch("/api/audit/export?" + params, { credentials: "same-origin" })
+      const response = await fetch(`/api/audit/export?${params}`, { credentials: "same-origin" })
       if (!response.ok) throw new Error(`导出失败（${response.status}）`)
       const name =
         /filename="([^"]+)"/.exec(response.headers.get("content-disposition") ?? "")?.[1] ??
@@ -240,7 +240,7 @@ export default function Audit() {
       if (filters[key]) params.set(key, filters[key])
     if (filters.range) params.set("from", String(Date.now() - Number(filters.range)))
     if (!filters.system) params.set("scope", "behavior")
-    api("/api/audit?" + params, { signal: controller.signal })
+    api(`/api/audit?${params}`, { signal: controller.signal })
       .then(setResult)
       .catch((error: Error) => {
         if (error.name !== "AbortError") message.error(error.message)

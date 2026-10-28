@@ -58,7 +58,7 @@ export function assetName(
 export function checksumFor(text: string, name: string): string | undefined {
   for (const line of text.split(/\r?\n/)) {
     const match = /^([0-9a-f]{64}) [ *](.+)$/i.exec(line.trim())
-    if (match && match[2] === name) return match[1]!.toLowerCase()
+    if (match && match[2] === name) return match[1].toLowerCase()
   }
   return undefined
 }

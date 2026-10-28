@@ -64,7 +64,7 @@ export function writeWorkerControlFrame(
   }
   let line: string
   try {
-    line = JSON.stringify(message) + "\n"
+    line = `${JSON.stringify(message)}\n`
   } catch (error) {
     return refuse(error instanceof Error ? error : new Error(String(error)))
   }

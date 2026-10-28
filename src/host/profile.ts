@@ -312,12 +312,12 @@ export class BehaviorProfile {
     const slot = date.getHours()
     const day = date.toISOString().slice(0, 10)
     this.#roll(profile, plugin, feature.kind, now, found)
-    profile.rates[feature.kind]!.current++
+    profile.rates[feature.kind].current++
     profile.total++
-    profile.hourly[slot]!++
+    profile.hourly[slot]++
     if (!profile.days.includes(day)) profile.days = [...profile.days, day].slice(-maxDays)
     if (learning) {
-      profile.learnedHourly[slot]!++
+      profile.learnedHourly[slot]++
       profile.learnedTotal++
     }
     const id = `${feature.kind}|${feature.key}`
@@ -331,8 +331,8 @@ export class BehaviorProfile {
         const keys = Object.keys(profile.features)
         if (keys.length >= config.maxPerPlugin) {
           const oldest = keys.sort(
-            (a, b) => profile.features[a]!.lastAt - profile.features[b]!.lastAt,
-          )[0]!
+            (a, b) => profile.features[a].lastAt - profile.features[b].lastAt,
+          )[0]
           delete profile.features[oldest]
         }
         profile.features[id] = { count: 1, firstAt: now, lastAt: now }
@@ -497,7 +497,7 @@ export class BehaviorProfile {
   /** 从画像中移除一个行为，之后再次出现会重新提示。 */
   forget(plugin: string, kind: string, key: string): boolean {
     const profile = this.#plugins[plugin]
-    if (!profile || !profile.features[`${kind}|${key}`]) return false
+    if (!profile?.features[`${kind}|${key}`]) return false
     delete profile.features[`${kind}|${key}`]
     this.#changed()
     return true

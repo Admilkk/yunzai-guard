@@ -33,7 +33,7 @@ export function toDto(value: unknown, metadata = false, seen = new Set<object>()
   seen.add(value)
   try {
     if (Array.isArray(value)) return value.map(item => toDto(item, metadata, seen, depth + 1))
-    const result: { [key: string]: Dto } = Object.create(null)
+    const result: Record<string, Dto> = Object.create(null)
     for (const key of Object.keys(value)) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key)!
       if (!Object.hasOwn(descriptor, "value")) return unsupported("Accessors cannot cross IPC")

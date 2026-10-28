@@ -50,7 +50,7 @@ export async function sandboxCommand(args: string[], root: string): Promise<unkn
       plugins: sources.map(({ id, sha256 }) => ({ id, sha256 })),
     }
   }
-  if (!/^[a-z][a-z0-9-]{0,47}$/.test(id!) || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/.test(id!))
+  if (!/^[a-z][a-z0-9-]{0,47}$/.test(id) || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/.test(id))
     throw new Error(M.cli.pluginIdInvalid)
   directory(root, ["data", "yunzai-guard"], true)
   const lockName = path.join(state, "sandbox-cli.lock")
@@ -69,7 +69,7 @@ export async function sandboxCommand(args: string[], root: string): Promise<unkn
     const parsed = parseSettings(raw)
     if (parsed.pluginSandbox.plugins.some(plugin => plugin.id === id))
       throw new Error(M.cli.pluginExists(id))
-    const plugin = { id: id!, enabled: true, match: `#${id}*`, capabilities: ["reply"] }
+    const plugin = { id, enabled: true, match: `#${id}*`, capabilities: ["reply"] }
     const sandbox = (raw.pluginSandbox ?? {}) as Record<string, unknown>
     const updated = {
       ...raw,

@@ -118,7 +118,7 @@ export function createPm2ForkLogCapture(options: CaptureOptions): {
       : undefined
   const report = (child: ChildProcess, result: Pm2LogDrainResult): void => {
     try {
-      options.report?.({ event: "pm2-log-" + result.status, pid: child.pid, reason: result.reason })
+      options.report?.({ event: `pm2-log-${result.status}`, pid: child.pid, reason: result.reason })
     } catch {
       // 诊断不能改变 PM2 原生命周期或错误处理。
     }

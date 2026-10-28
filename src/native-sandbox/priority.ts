@@ -29,7 +29,7 @@ export function parseNativePriority(value: unknown): number {
           typeof key === "string" &&
           ["$type", "value"].includes(key) &&
           descriptors[key]?.enumerable &&
-          "value" in descriptors[key]!,
+          "value" in descriptors[key],
       ) &&
       descriptors.$type?.value === "NativePriority"
     ) {

@@ -56,7 +56,7 @@ export function createControlServer({ token, handle, after }: ControlServerOptio
       if (!text.includes("\n")) return
       answered = true
       try {
-        const raw: unknown = JSON.parse(text.split("\n")[0]!)
+        const raw: unknown = JSON.parse(text.split("\n")[0])
         if (!raw || typeof raw !== "object" || Array.isArray(raw))
           throw new Error(M.host.commandInvalid)
         const message = raw as Record<string, unknown>
@@ -67,7 +67,7 @@ export function createControlServer({ token, handle, after }: ControlServerOptio
         const command = message.command
         if (typeof command !== "string" || !controlCommands.includes(command as ControlCommand))
           throw new Error(M.host.commandUnknown)
-        socket.end(JSON.stringify(handle(command as ControlCommand)) + "\n")
+        socket.end(`${JSON.stringify(handle(command as ControlCommand))}\n`)
         after?.(command as ControlCommand)
       } catch {
         socket.destroy()

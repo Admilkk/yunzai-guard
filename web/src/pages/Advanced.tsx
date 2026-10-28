@@ -301,14 +301,14 @@ function NativePage() {
       render: (_, entry) => (
         <Space size={0}>
           <Button
-            aria-label={"编辑 " + entry.id}
+            aria-label={`编辑 ${entry.id}`}
             type="text"
             icon={<EditOutlined />}
             disabled={saving || plugins.some(item => item.id === entry.id && item.reserved)}
             onClick={() => setSelected(entry.id)}
           />
           <Popconfirm
-            title={"移除 " + entry.id + " 的草稿配置？"}
+            title={`移除 ${entry.id} 的草稿配置？`}
             okText="移除"
             cancelText="取消"
             onConfirm={() =>
@@ -320,7 +320,7 @@ function NativePage() {
             }
           >
             <Button
-              aria-label={"移除 " + entry.id}
+              aria-label={`移除 ${entry.id}`}
               danger
               type="text"
               disabled={saving}
@@ -404,7 +404,7 @@ function ScriptRules({ id }: { id: string }) {
       width: 190,
       render: (value, _, index) => (
         <Input
-          aria-label={"脚本规则 ID " + (index + 1)}
+          aria-label={`脚本规则 ID ${index + 1}`}
           value={value}
           maxLength={100}
           disabled={saving}
@@ -422,7 +422,7 @@ function ScriptRules({ id }: { id: string }) {
       width: 105,
       render: (value, _, index) => (
         <Select
-          aria-label={"脚本规则动作 " + (index + 1)}
+          aria-label={`脚本规则动作 ${index + 1}`}
           value={value}
           options={actionOptions}
           disabled={saving}
@@ -440,7 +440,7 @@ function ScriptRules({ id }: { id: string }) {
       width: 160,
       render: (value, _, index) => (
         <Select
-          aria-label={"脚本规则类型 " + (index + 1)}
+          aria-label={`脚本规则类型 ${index + 1}`}
           mode="tags"
           maxCount={32}
           value={typeof value === "string" ? [value] : (value ?? [])}
@@ -459,7 +459,7 @@ function ScriptRules({ id }: { id: string }) {
       width: 155,
       render: (value: string, _: Rule, index: number) => (
         <Input
-          aria-label={key + " " + (index + 1)}
+          aria-label={`${key} ${index + 1}`}
           value={value ?? ""}
           maxLength={512}
           disabled={saving}
@@ -477,7 +477,7 @@ function ScriptRules({ id }: { id: string }) {
       render: (_, entry, index) => (
         <Space size={0}>
           <Button
-            aria-label={"上移 " + entry.id}
+            aria-label={`上移 ${entry.id}`}
             type="text"
             size="small"
             icon={<ArrowUpOutlined />}
@@ -490,7 +490,7 @@ function ScriptRules({ id }: { id: string }) {
             }
           />
           <Button
-            aria-label={"下移 " + entry.id}
+            aria-label={`下移 ${entry.id}`}
             type="text"
             size="small"
             icon={<ArrowDownOutlined />}
@@ -503,7 +503,7 @@ function ScriptRules({ id }: { id: string }) {
             }
           />
           <Button
-            aria-label={"删除 " + entry.id}
+            aria-label={`删除 ${entry.id}`}
             danger
             type="text"
             size="small"
@@ -619,7 +619,7 @@ function ScriptsPage() {
       scriptList(document).push({
         id,
         enabled: true,
-        match: "#" + id + "*",
+        match: `#${id}*`,
         capabilities: ["reply"],
         timeoutMs: defaults.timeoutMs ?? 1000,
         memoryMiB: defaults.memoryMiB ?? 16,
@@ -674,14 +674,14 @@ function ScriptsPage() {
       render: (_, entry) => (
         <Space size={0}>
           <Button
-            aria-label={"编辑 " + entry.id}
+            aria-label={`编辑 ${entry.id}`}
             type="text"
             disabled={saving}
             icon={<EditOutlined />}
             onClick={() => setSelected(entry.id)}
           />
           <Popconfirm
-            title={"移除 " + entry.id + " 的草稿配置？"}
+            title={`移除 ${entry.id} 的草稿配置？`}
             okText="移除"
             cancelText="取消"
             onConfirm={() =>
@@ -693,7 +693,7 @@ function ScriptsPage() {
             }
           >
             <Button
-              aria-label={"移除 " + entry.id}
+              aria-label={`移除 ${entry.id}`}
               danger
               type="text"
               disabled={saving}

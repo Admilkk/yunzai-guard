@@ -17,7 +17,7 @@ export function runtimeFailureDecision(settings: GuardSettings, event: GuardEven
   if (explicit.ruleId) return explicit
   let action: PolicyDecision["action"] = "audit"
   for (let index = 0; index < settings.rules.length; index++) {
-    const rule = settings.rules[index]!
+    const rule = settings.rules[index]
     if (rule.plugin && !matchGlob(rule.plugin, event.plugin ?? "unknown")) continue
     if (rule.action === "restart") return { action: "restart" }
     if (rule.action === "deny") action = "deny"
@@ -57,7 +57,7 @@ export function runtimeEventDecision(settings: GuardSettings, event: GuardEvent)
   if (event.ruleId !== undefined) {
     let rule: GuardRule | undefined
     for (let index = 0; index < settings.rules.length; index++)
-      if (settings.rules[index]!.id === event.ruleId) {
+      if (settings.rules[index].id === event.ruleId) {
         rule = settings.rules[index]
         break
       }
@@ -71,7 +71,7 @@ export function runtimeEventDecision(settings: GuardSettings, event: GuardEvent)
     if (!redactedShell && decision.ruleId !== rule.id) return decision
     if (redactedShell) {
       for (let index = 0; index < settings.rules.length; index++) {
-        const earlier = settings.rules[index]!
+        const earlier = settings.rules[index]
         if (earlier.id === rule.id) break
         if (
           applicable(earlier, event) &&
