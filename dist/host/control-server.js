@@ -11,9 +11,11 @@ export const controlCommands = [
     "update",
     "force-update",
     "rollback",
+    "input",
 ];
 const maxConnections = 32;
-const maxRequestBytes = 2048;
+// input 携带控制台输入，转印进程按 JSON 编码后的字节数分段，见 control.ts 的 splitInput。
+export const maxRequestBytes = 16384;
 const idleTimeoutMs = 2000;
 /**
  * 本机 CLI 控制端点：单行 JSON 请求，常量时间比较令牌。
@@ -57,7 +59,7 @@ export function createControlServer({ token, handle, after }) {
                 const command = message.command;
                 if (typeof command !== "string" || !controlCommands.includes(command))
                     throw new Error(M.host.commandUnknown);
-                socket.end(`${JSON.stringify(handle(command))}\n`);
+                socket.end(`${JSON.stringify(handle(command, message))}\n`);
                 after?.(command);
             }
             catch {
@@ -69,4 +71,4 @@ export function createControlServer({ token, handle, after }) {
 //# sourceMappingURL=control-server.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "../protect/objects.js"
-__guardRegisterExports("host/control-server.ts", { controlCommands, createControlServer })
+__guardRegisterExports("host/control-server.ts", { controlCommands, maxRequestBytes, createControlServer })

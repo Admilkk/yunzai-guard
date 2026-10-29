@@ -258,6 +258,9 @@ declare const messages: {
         cleanupUnconfirmed: string;
         stopping: string;
         tripped: string;
+        /** 熔断原因代码的说明，用于推送给主人的告警；未收录的代码原样显示。 */
+        tripReasons: Record<string, string>;
+        trippedAlert: (reason: unknown) => string;
         rollbackFailed: string;
         auditWriteFailed: string;
         event: (label: unknown, reason: unknown) => string;
@@ -292,6 +295,11 @@ declare const messages: {
         unmanagedEntry: string;
         invalidSettings: string;
         waiting: string;
+        consoleHeld: string;
+        consoleRelay: string;
+        consolePty: string;
+        consoleStopping: string;
+        consoleStopFailed: (detail: unknown) => string;
         coldFailed: string;
         exitCleanupFailed: string;
         pm2Deadline: string;
@@ -1123,6 +1131,9 @@ export declare const M: {
         cleanupUnconfirmed: string;
         stopping: string;
         tripped: string;
+        /** 熔断原因代码的说明，用于推送给主人的告警；未收录的代码原样显示。 */
+        tripReasons: Record<string, string>;
+        trippedAlert: (reason: unknown) => string;
         rollbackFailed: string;
         auditWriteFailed: string;
         event: (label: unknown, reason: unknown) => string;
@@ -1157,6 +1168,11 @@ export declare const M: {
         unmanagedEntry: string;
         invalidSettings: string;
         waiting: string;
+        consoleHeld: string;
+        consoleRelay: string;
+        consolePty: string;
+        consoleStopping: string;
+        consoleStopFailed: (detail: unknown) => string;
         coldFailed: string;
         exitCleanupFailed: string;
         pm2Deadline: string;

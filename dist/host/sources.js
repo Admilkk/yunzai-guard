@@ -248,19 +248,19 @@ export class SourceWatch {
                 this.#options.onChange({
                     plugin: item.plugin,
                     type: "remote",
-                    text: `插件 ${item.plugin} 的远端地址变了：${before.remote ?? "无"} → ${item.remote ?? "无"}`,
+                    text: `插件 ${item.plugin} 的远端仓库地址已变更：${before.remote ?? "无"} → ${item.remote ?? "无"}。如非本人操作，请核实插件来源。`,
                 });
             if (notify.commit && before.commit !== item.commit)
                 this.#options.onChange({
                     plugin: item.plugin,
                     type: "commit",
-                    text: `插件 ${item.plugin} 的提交变了：${before.commit?.slice(0, 8)} → ${item.commit.slice(0, 8)}`,
+                    text: `插件 ${item.plugin} 的当前提交已变更：${before.commit?.slice(0, 8)} → ${item.commit.slice(0, 8)}。如非本人更新，请核实改动内容。`,
                 });
             if (notify.dirty && !before.dirty && item.dirty)
                 this.#options.onChange({
                     plugin: item.plugin,
                     type: "dirty",
-                    text: `插件 ${item.plugin} 有 ${item.dirty} 个文件与仓库不一致：${(item.dirtyFiles ?? []).slice(0, 3).join("、")}`,
+                    text: `插件 ${item.plugin} 有 ${item.dirty} 个文件与仓库版本不一致（${(item.dirtyFiles ?? []).slice(0, 3).join("、")}）。如非本人修改，请核实文件内容。`,
                 });
         }
         this.#stored = next;

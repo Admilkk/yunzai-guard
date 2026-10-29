@@ -21,6 +21,7 @@ import { assertNoDebugger } from "../protect/debug.js";
 import { assertNoInternals } from "../protect/bindings.js";
 import { authorizeHostEvent } from "./event-policy.js";
 import { waitForBootstrapHandoff } from "./bootstrap/handoff.js";
+import { consoleRelayTimeout } from "./bootstrap/console-relay.js";
 import { installHostLog, pipeHostOutput, pruneHostLog } from "./log.js";
 import { loadSandboxSources } from "../plugin-sandbox/filesystem.js";
 import { monitorStatus, parseMonitorReport } from "../monitor/report.js";
@@ -52,6 +53,8 @@ const bootstrapPid = path.basename(process.argv[1] || "") === "supervisor.js"
     ? Number(process.argv[2]) || undefined
     : undefined;
 const supervisedIpc = Boolean(process.connected && !bootstrapPid);
+// Windows 冷接管的宿主没有控制台，业务进程的标准输入改由原窗口的转印进程经控制端点送来。
+const consoleInput = process.platform === "win32" && (Boolean(bootstrapPid) || process.env.YUNZAI_GUARD_COLD === "1");
 const bootstrapRedisPid = bootstrapPid
     ? process.argv[3] === "none"
         ? null
@@ -701,6 +704,9 @@ async function startWorker() {
     };
     delete env.NODE_OPTIONS;
     delete env.YUNZAI_GUARD_PM2_TICKET;
+    // TRSS 与 JiuLi 的标准输入适配器只在 TTY 上启用，管道输入需要显式开启。
+    if (consoleInput)
+        env.FORCE_TTY ??= "1";
     const args = [
         "--import",
         new URL("../worker-preload.js", import.meta.url).href,
@@ -792,7 +798,12 @@ async function startWorker() {
                     extraStdio: [],
                     dispose: () => { },
                 };
-            const stdio = ["inherit", "pipe", "pipe", "ipc"];
+            const stdio = [
+                consoleInput ? "pipe" : "inherit",
+                "pipe",
+                "pipe",
+                "ipc",
+            ];
             for (const extra of spec.extraStdio)
                 stdio[extra.fd] = extra.source;
             if ("statusFd" in spec)
@@ -808,6 +819,10 @@ async function startWorker() {
                 });
                 const current = ownChild(child);
                 current.waitOutput = pipeHostOutput(child);
+                if (consoleInput && child.stdin) {
+                    child.stdin.on("error", () => { });
+                    current.input = child.stdin;
+                }
                 if (process.platform === "win32" && sessionSettings.isolationMode === "managed")
                     prepareDescendantCapture(child);
                 if ("observe" in spec) {
@@ -986,7 +1001,17 @@ function trip(reason) {
         console.error(M.host.recoveryPersist);
     }
     record("recovery-tripped", { reason, failures: recovery.failures.length });
-    alerts.raise("tripped", "业务进程熔断", `【Yunzai Guard】业务进程连续故障，已熔断：${redact(reason)}。修正后请在控制台或用 resume 命令解除熔断`);
+    alerts.raise("tripped", "业务进程熔断", M.host.trippedAlert(describeTrip(redact(reason))));
+}
+/** 把熔断原因代码换成说明，代码后附带的细节放在括号内；未收录的代码原样返回。 */
+function describeTrip(reason) {
+    const separator = reason.indexOf(":");
+    const code = separator < 0 ? reason : reason.slice(0, separator);
+    const label = M.host.tripReasons[code];
+    if (!label)
+        return reason;
+    const detail = separator < 0 ? "" : reason.slice(separator + 1).trim();
+    return detail ? `${label}（${detail}）` : label;
 }
 /** 按退避策略恢复业务进程，超过上限时熔断。 */
 async function recover(reason) {
@@ -1056,9 +1081,9 @@ async function sendLoginLink() {
     try {
         const { urls, ttlSeconds } = await core.loginLink();
         text = [
-            "【Yunzai Guard】控制台登录链接",
+            "【Yunzai Guard】Web 控制台登录链接",
             ...urls,
-            `${Math.round(ttlSeconds / 60)} 分钟内有效，仅可使用一次，请勿转发。`,
+            `有效期 ${Math.round(ttlSeconds / 60)} 分钟，仅可使用一次，请勿转发。`,
         ].join("\n");
         record("panel-login-link", { urls: urls.length });
     }
@@ -1505,10 +1530,20 @@ async function pump() {
     }
     pumping = false;
 }
+/** 把原窗口转来的键盘输入写入当前业务进程的标准输入；业务进程未运行时丢弃。 */
+function forwardInput(data) {
+    const input = worker?.input;
+    if (typeof data !== "string" || !input?.writable)
+        return false;
+    input.write(data);
+    return true;
+}
 const server = createControlServer({
     token,
     /** 处理控制命令。 */
-    handle(command) {
+    handle(command, message) {
+        if (command === "input")
+            return { ok: forwardInput(message.data) };
         if (command === "restart")
             enqueue({ type: "restart" });
         if (command === "resume" && phase === "tripped")
@@ -1630,7 +1665,10 @@ try {
         bootstrapHandoff = waitForBootstrapHandoff({
             bootstrapPid,
             redisPid: bootstrapRedisPid,
-            timeout: settings.handshakeTimeout + settings.shutdownTimeout,
+            // Windows 上原进程在提交前还要等控制台转印进程就绪，见 consoleRelayTimeout。
+            timeout: settings.handshakeTimeout +
+                settings.shutdownTimeout +
+                (process.platform === "win32" ? consoleRelayTimeout : 0),
             signal: bootstrapAbort.signal,
             bound: identities => record("bootstrap-resources-bound", { identities }),
         });

@@ -171,7 +171,7 @@ export class AlertService {
             time: Date.now(),
             category: "digest",
             title: "告警合并",
-            text: `【Yunzai Guard】过去 ${minutes} 分钟内另有 ${total} 条告警被合并：${top}`,
+            text: `【Yunzai Guard】过去 ${minutes} 分钟内另有 ${total} 条告警已合并发送，主要为：${top}。`,
         });
     }
     /** 写入历史，并送达主人与 Webhook。 */
