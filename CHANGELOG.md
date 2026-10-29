@@ -2,6 +2,19 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.3.0](https://github.com/Admilkk/yunzai-guard/compare/v1.2.0...v1.3.0) (2026-10-29)
+
+
+### ✨ 新功能
+
+* **windows:** 冷接管后原窗口保持前台体验，并规范提示与通知措辞 ([a02cd5a](https://github.com/Admilkk/yunzai-guard/commit/a02cd5a9aa69126b52b4f51129ef3eb4c3c7b8e4))
+
+
+### 🐛 问题修复
+
+* **runtime:** Windows 显式启动器按 Ctrl+C 时由宿主有序停止业务进程 ([261de03](https://github.com/Admilkk/yunzai-guard/commit/261de032993f7046ff09a8c79d7176be80401305))
+* **windows:** 接管超时预留转印进程就绪时间，控制台输入按字节安全分段 ([25dc533](https://github.com/Admilkk/yunzai-guard/commit/25dc533f2672032e5bb4066b42e8c98a4ab35e0d))
+
 ## [1.2.0](https://github.com/Admilkk/yunzai-guard/compare/v1.1.1...v1.2.0) (2026-10-28)
 
 
