@@ -51,6 +51,10 @@ if (isMainThread) {
       outputClosed = true
       requestOutputStop?.()
     })
+  // Windows 显式启动器下业务进程与宿主共用控制台，Ctrl+C 也会直接送到这里；交由宿主有序停止，
+  // 否则业务进程被立即结束，宿主无法确认清理而熔断。宿主断开时业务进程仍会随之退出。
+  if (process.platform === "win32")
+    for (const signal of ["SIGINT", "SIGBREAK"] as const) process.on(signal, () => {})
   await ensureWorkerTransport()
   const rawExit = process.exit.bind(process)
   const ipcSend = process.send?.bind(process)
