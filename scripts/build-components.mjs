@@ -22,12 +22,13 @@ const metaFiles = new Set([
   "settings.plugin-sandbox.example.json",
 ])
 
-// 宿主外壳：Guard 宿主进程、启动器、CLI 与 PM2 适配的入口。
+// 宿主外壳：Guard 宿主进程、启动器、CLI、控制台转印与 PM2 适配的入口。
 const shellEntries = [
   "dist/host/supervisor.js",
   "dist/launcher.js",
   "dist/entry.js",
   "dist/cli.js",
+  "dist/entry/console.js",
   "dist/entry/launcher.js",
   "dist/entry/preload.js",
   "dist/pm2-compat.js",

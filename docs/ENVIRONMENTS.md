@@ -57,7 +57,7 @@ node plugins/yunzai-guard/dist/launcher.js
 
 运行期间可使用 `dist/cli.js status` 查看业务状态。工作进程故障按恢复预算重建；预算耗尽后保留宿主和故障状态，修正原因后执行 `dist/cli.js resume`。面板保存配置后按[字段范围](PERMISSIONS.md#配置生效)自动应用；手工编辑配置仍需完整重启宿主，CLI `restart` 只重建工作进程。
 
-宿主和工作进程输出统一写入 `data/yunzai-guard/host.log`，运行中按每份 4 MiB 保留当前与上一份。Linux 冷接管保留终端输入输出；Windows 冷接管后为独立后台宿主，可使用面板或 `dist/cli.js log` 查看日志。显式 launcher 与 PM2 保留各自原有输出。清理未确认完成时宿主保留锁和熔断状态，不强行退出后另起实例。
+宿主和工作进程输出统一写入 `data/yunzai-guard/host.log`，运行中按每份 4 MiB 保留当前与上一份。Linux 冷接管后宿主继承原终端输出，原进程退出后会回到命令提示符而输出照常追加，宿主不随 Ctrl+C 停止，请用面板或 `dist/cli.js stop`。Windows 冷接管后宿主是独立后台进程，原窗口由一个轻量转印进程接管：原进程退出前暂停启动它的 cmd、PowerShell（或 npm、JiuLi 守护进程等直接父进程），之后该窗口与机器人直接在前台运行时一样，照常显示输出、键盘输入送到业务进程的标准输入（TRSS 与 JiuLi 的 stdin 适配器），按 Ctrl+C 或关闭窗口会停止机器人并显示停止过程，机器人停止后才回到命令提示符；宿主级更新重启时跟随新宿主。再按一次 Ctrl+C 只关闭输出并立即交还命令提示符。暂停 shell 依赖系统 PowerShell；无法暂停时（例如父进程不在同一控制台）只转印输出，提示符会提前回来、键盘输入不转发。Git Bash（mintty）会在原进程退出后结束该窗口的控制台会话，无法继续显示，此时机器人转入后台运行，请用 `dist/cli.js log` 查看日志、`dist/cli.js stop` 停止；需要在 Git Bash 中前台运行时改用 `node plugins/yunzai-guard/dist/launcher.js`，可正常输入指令并按 Ctrl+C 停止。转印进程若被任务管理器强制结束，被暂停的 shell 不会恢复，关闭该窗口即可。随时可用面板或 `dist/cli.js log` 查看日志。显式 launcher 与 PM2 保留各自原有输出。清理未确认完成时宿主保留锁和熔断状态，不强行退出后另起实例。
 
 默认 `startupTimeout` 为 60000 毫秒。启动器和外层进程管理器应为初始化及系统资源回收保留足够期限，避免过早强杀。
 

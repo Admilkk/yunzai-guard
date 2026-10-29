@@ -12,20 +12,22 @@ export const controlCommands = [
   "update",
   "force-update",
   "rollback",
+  "input",
 ] as const
 export type ControlCommand = (typeof controlCommands)[number]
 
 interface ControlServerOptions {
   /** 每代宿主随机生成的令牌，只写入 0600 的 control.json。 */
   token: string
-  /** 认证通过后执行命令，返回值作为应答。 */
-  handle: (command: ControlCommand) => unknown
+  /** 认证通过后执行命令，返回值作为应答；message 为完整请求，供 input 读取附带的 data。 */
+  handle: (command: ControlCommand, message: Record<string, unknown>) => unknown
   /** 应答发出后再执行的动作，例如 stop。 */
   after?: (command: ControlCommand) => void
 }
 
 const maxConnections = 32
-const maxRequestBytes = 2048
+// input 携带控制台输入，转印进程按 4000 字符分段，中文按 UTF-8 计约 12 KiB。
+const maxRequestBytes = 16384
 const idleTimeoutMs = 2000
 
 /**
@@ -67,7 +69,7 @@ export function createControlServer({ token, handle, after }: ControlServerOptio
         const command = message.command
         if (typeof command !== "string" || !controlCommands.includes(command as ControlCommand))
           throw new Error(M.host.commandUnknown)
-        socket.end(`${JSON.stringify(handle(command as ControlCommand))}\n`)
+        socket.end(`${JSON.stringify(handle(command as ControlCommand, message))}\n`)
         after?.(command as ControlCommand)
       } catch {
         socket.destroy()

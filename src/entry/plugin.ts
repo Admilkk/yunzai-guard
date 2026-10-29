@@ -1,3 +1,7 @@
+import fs from "node:fs"
+import net from "node:net"
+import path from "node:path"
+import { randomBytes } from "node:crypto"
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { contextKey, stateDir } from "../shared/identity.js"
@@ -20,6 +24,82 @@ function commitAndExit(send: (callback: (error: Error | null) => void) => void):
     send(error => {
       if (error) reject(error)
       else process.exit(0)
+    })
+  })
+}
+
+/** 读取 host.log 当前长度，作为控制台转印的起点。 */
+function hostLogSize(): number {
+  try {
+    return fs.statSync(path.join(stateDir, "host.log")).size
+  } catch {
+    return 0
+  }
+}
+
+/** 原进程的标准输出仍有去处（控制台、管道或文件）时才需要转印，NUL 等字符设备不算。 */
+function hasOutput(): boolean {
+  if (process.stdout.isTTY) return true
+  try {
+    return !fs.fstatSync(1).isCharacterDevice()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Windows 冷接管后宿主没有控制台：detached 子进程拿不到原控制台句柄，非 detached 子进程又会随原进程被结束。
+ * 经 cmd 拉起的孙进程不在原进程的作业对象里，挂在原控制台上继续打印宿主输出，并且照常收到 Ctrl+C
+ * （start /b 会屏蔽它）。转印进程还会暂停启动本进程的 shell 并接管键盘输入，体验与前台运行一致。
+ * cmd 随原进程退出被结束，不影响孙进程。只影响显示与输入，失败时宿主照常接管。
+ * 返回 held（shell 已暂停）、pty（mintty 等伪终端，只转印输出）、plain（只转印输出）或 undefined（未能拉起）。
+ */
+function startConsoleRelay(hostPid: number, offset: number): Promise<string | undefined> {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    YUNZAI_GUARD_CONSOLE_NODE: process.execPath,
+    YUNZAI_GUARD_CONSOLE_SCRIPT: fileURLToPath(new URL("./console.js", import.meta.url)),
+  }
+  delete env.NODE_OPTIONS
+  const pipe = `\\\\.\\pipe\\yunzai-guard-console-${randomBytes(12).toString("hex")}`
+  return new Promise(resolve => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // 转印进程报告就绪才算挂好；cmd 必须在原进程退出前拉起它，否则会一起被结束。
+    const server = net.createServer(socket => {
+      let text = ""
+      socket.setEncoding("utf8")
+      socket.on("error", () => {})
+      socket.on("data", chunk => (text += chunk))
+      socket.on("end", () => finish(/^(held|pty|plain)\n/.exec(text)?.[1]))
+    })
+    const finish = (mode: string | undefined) => {
+      clearTimeout(timer)
+      server.close()
+      resolve(mode)
+    }
+    server.on("error", () => finish(undefined))
+    server.listen(pipe, () => {
+      // 路径经环境变量展开并加引号，避免其中的 & ^ % 等字符被 cmd 解析。
+      const relay = spawn(
+        process.env.ComSpec || "cmd.exe",
+        [
+          "/d",
+          "/s",
+          "/c",
+          `""%YUNZAI_GUARD_CONSOLE_NODE%" "%YUNZAI_GUARD_CONSOLE_SCRIPT%" ${hostPid} ${offset} ${pipe} ${process.pid} ${process.ppid}"`,
+        ],
+        {
+          cwd: process.cwd(),
+          env,
+          stdio: "inherit",
+          // 有控制台时不能隐藏：windowsHide 可能让 cmd 另开隐藏控制台，转印进程就挂不到本窗口上。
+          windowsHide: !process.stdout.isTTY,
+          windowsVerbatimArguments: true,
+        },
+      )
+      relay.once("error", () => finish(undefined))
+      relay.once("exit", () => finish(undefined))
+      timer = setTimeout(() => finish(undefined), 10000)
     })
   })
 }
@@ -229,6 +309,7 @@ export class YunzaiGuard extends plugin {
     }
     const env = { ...process.env }
     delete env.NODE_OPTIONS
+    const logOffset = hostLogSize()
     const host = spawn(
       hostExecutable,
       [
@@ -250,6 +331,11 @@ export class YunzaiGuard extends plugin {
         detached: true,
       },
     )
+    // 与交接并行拉起，原进程退出前确认转印进程已挂上控制台。
+    const relay =
+      process.platform === "win32" && host.pid && hasOutput()
+        ? startConsoleRelay(host.pid, logOffset)
+        : undefined
     try {
       const nonce = await new Promise<string>((resolve, reject) => {
         const timer = setTimeout(
@@ -275,6 +361,15 @@ export class YunzaiGuard extends plugin {
           resolve(reply.nonce)
         })
       })
+      const mode = await relay
+      if (mode)
+        logger.info(
+          mode === "held"
+            ? M.entry.consoleHeld
+            : mode === "pty"
+              ? M.entry.consolePty
+              : M.entry.consoleRelay,
+        )
       await exitPlan.prepare(settings.shutdownTimeout)
       exitPlan.assertCurrent()
       await commitAndExit(callback =>

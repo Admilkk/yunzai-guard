@@ -103,6 +103,8 @@ interface Session {
   usage?: UsageWatch
   /** 上一次监控报告中各插件处理调用的总数，用于判断业务是否空闲。 */
   calls?: number
+  /** 控制台输入写入的业务进程标准输入，仅 Windows 冷接管时存在。 */
+  input?: NonNullable<ChildProcess["stdin"]>
 }
 
 let settings = initialSettings
@@ -118,6 +120,9 @@ const bootstrapPid =
     ? Number(process.argv[2]) || undefined
     : undefined
 const supervisedIpc = Boolean(process.connected && !bootstrapPid)
+// Windows 冷接管的宿主没有控制台，业务进程的标准输入改由原窗口的转印进程经控制端点送来。
+const consoleInput =
+  process.platform === "win32" && (Boolean(bootstrapPid) || process.env.YUNZAI_GUARD_COLD === "1")
 const bootstrapRedisPid = bootstrapPid
   ? process.argv[3] === "none"
     ? null
@@ -777,6 +782,8 @@ async function startWorker(): Promise<void> {
   }
   delete env.NODE_OPTIONS
   delete env.YUNZAI_GUARD_PM2_TICKET
+  // TRSS 与 JiuLi 的标准输入适配器只在 TTY 上启用，管道输入需要显式开启。
+  if (consoleInput) env.FORCE_TTY ??= "1"
   const args = [
     "--import",
     new URL("../worker-preload.js", import.meta.url).href,
@@ -883,7 +890,12 @@ async function startWorker(): Promise<void> {
               extraStdio: [],
               dispose: () => {},
             }
-      const stdio: import("node:child_process").StdioOptions = ["inherit", "pipe", "pipe", "ipc"]
+      const stdio: import("node:child_process").StdioOptions = [
+        consoleInput ? "pipe" : "inherit",
+        "pipe",
+        "pipe",
+        "ipc",
+      ]
       for (const extra of spec.extraStdio) stdio[extra.fd] = extra.source
       if ("statusFd" in spec) stdio[spec.statusFd] = "pipe"
       const allocationErrors: unknown[] = []
@@ -897,6 +909,10 @@ async function startWorker(): Promise<void> {
         })
         const current = ownChild(child)
         current.waitOutput = pipeHostOutput(child)
+        if (consoleInput && child.stdin) {
+          child.stdin.on("error", () => {})
+          current.input = child.stdin
+        }
         if (process.platform === "win32" && sessionSettings.isolationMode === "managed")
           prepareDescendantCapture(child)
         if ("observe" in spec) {
@@ -1065,11 +1081,17 @@ function trip(reason: string): void {
     console.error(M.host.recoveryPersist)
   }
   record("recovery-tripped", { reason, failures: recovery.failures.length })
-  alerts.raise(
-    "tripped",
-    "业务进程熔断",
-    `【Yunzai Guard】业务进程连续故障，已熔断：${redact(reason)}。修正后请在控制台或用 resume 命令解除熔断`,
-  )
+  alerts.raise("tripped", "业务进程熔断", M.host.trippedAlert(describeTrip(redact(reason))))
+}
+
+/** 把熔断原因代码换成说明，代码后附带的细节放在括号内；未收录的代码原样返回。 */
+function describeTrip(reason: string): string {
+  const separator = reason.indexOf(":")
+  const code = separator < 0 ? reason : reason.slice(0, separator)
+  const label = M.host.tripReasons[code]
+  if (!label) return reason
+  const detail = separator < 0 ? "" : reason.slice(separator + 1).trim()
+  return detail ? `${label}（${detail}）` : label
 }
 
 /** 按退避策略恢复业务进程，超过上限时熔断。 */
@@ -1139,9 +1161,9 @@ async function sendLoginLink(): Promise<void> {
   try {
     const { urls, ttlSeconds } = await core.loginLink()
     text = [
-      "【Yunzai Guard】控制台登录链接",
+      "【Yunzai Guard】Web 控制台登录链接",
       ...urls,
-      `${Math.round(ttlSeconds / 60)} 分钟内有效，仅可使用一次，请勿转发。`,
+      `有效期 ${Math.round(ttlSeconds / 60)} 分钟，仅可使用一次，请勿转发。`,
     ].join("\n")
     record("panel-login-link", { urls: urls.length })
   } catch (error) {
@@ -1598,10 +1620,19 @@ async function pump(): Promise<void> {
   pumping = false
 }
 
+/** 把原窗口转来的键盘输入写入当前业务进程的标准输入；业务进程未运行时丢弃。 */
+function forwardInput(data: unknown): boolean {
+  const input = worker?.input
+  if (typeof data !== "string" || !input?.writable) return false
+  input.write(data)
+  return true
+}
+
 const server = createControlServer({
   token,
   /** 处理控制命令。 */
-  handle(command) {
+  handle(command, message) {
+    if (command === "input") return { ok: forwardInput(message.data) }
     if (command === "restart") enqueue({ type: "restart" })
     if (command === "resume" && phase === "tripped") enqueue({ type: "resume" })
     if (command === "check-update") void updates.check(true)

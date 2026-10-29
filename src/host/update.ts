@@ -316,16 +316,16 @@ export class UpdateService {
     const deferred =
       plan.level === "worker" && !immediate && this.#options.settings().workerRestart !== "now"
     const effect = {
-      static: "控制台将直接更新，业务不中断",
-      core: "控制台将热替换，业务不中断",
+      static: "本次仅更新 Web 控制台，机器人运行不受影响。",
+      core: "Web 控制台将热替换，机器人运行不受影响。",
       worker: deferred
-        ? "控制台先行更新，业务侧更新将在空闲时生效，再次发送 #guard更新 可马上生效"
-        : "业务进程将重启一次",
-      host: "宿主将重新启动",
+        ? "Web 控制台将先行更新，业务侧更新将在机器人空闲时生效；如需立即生效，请再次发送 #guard更新。"
+        : "业务进程将重启一次。",
+      host: "宿主将重新启动一次。",
     }[plan.level]
     const verb = rollback ? "还原" : "更新"
     this.#phase = "installing"
-    this.#message = `正在${verb}到 ${staged.version}`
+    this.#message = `正在${verb}至 ${staged.version}`
     this.#options.record(rollback ? "update-rollback-staged" : "update-staged", {
       from: current,
       to: staged.version,
@@ -334,7 +334,7 @@ export class UpdateService {
       changed: plan.changed.length,
       reason: plan.reason,
     })
-    const text = `开始${verb}：${current} → ${staged.version}，${effect}`
+    const text = `开始${verb}：${current} → ${staged.version}。${effect}`
     this.notify(`【Yunzai Guard】${text}`)
     this.#options.install({ ...staged, plan }, current, rollback, immediate)
     return { ok: true, message: text }
@@ -440,7 +440,7 @@ export class UpdateService {
     this.#message = undefined
     this.#options.record("update-deferred", { from, to: staged.version })
     this.notify(
-      `【Yunzai Guard】控制台已${rollback ? "还原" : "更新"}至 ${staged.version}，业务侧更新将在空闲时生效，再次发送 #guard更新 可马上生效`,
+      `【Yunzai Guard】Web 控制台已${rollback ? "还原" : "更新"}至 ${staged.version}，业务侧更新将在机器人空闲时生效；如需立即生效，请再次发送 #guard更新。`,
     )
   }
 
@@ -524,14 +524,14 @@ export class UpdateService {
     this.#message = result.ok ? undefined : result.message
     const verb = result.rollback ? "还原" : "更新"
     const effect = {
-      hot: "，业务未中断",
-      worker: "，业务进程已重启",
-      relaunch: "，宿主已重新启动",
-      "host-pending": "，宿主重启后完全生效",
+      hot: "，机器人运行未中断。",
+      worker: "，业务进程已重启。",
+      relaunch: "，宿主已重新启动。",
+      "host-pending": "，需重启宿主后完全生效。",
     }[result.mode]
     const text = result.ok
-      ? `【Yunzai Guard】已${verb}至 ${result.to}（原 ${result.from}）${effect}`
-      : `【Yunzai Guard】${verb}失败：${result.message ?? "未知原因"}`
+      ? `【Yunzai Guard】已${verb}至 ${result.to}（原版本 ${result.from}）${effect}`
+      : `【Yunzai Guard】${verb}失败：${result.message ?? "原因未知"}。`
     this.#stored.lastResult = {
       ok: result.ok,
       version: result.to,
@@ -592,9 +592,9 @@ export class UpdateService {
       this.#options.record("update-available", { current, latest: release.version })
       this.notify(
         [
-          `【Yunzai Guard】发现新版本 ${release.version}（当前 ${current}）`,
+          `【Yunzai Guard】发现新版本 ${release.version}（当前版本 ${current}）`,
           brief(release.notes),
-          "发送 #guard更新 进行更新",
+          "如需更新，请发送 #guard更新。",
           release.url,
         ]
           .filter(Boolean)

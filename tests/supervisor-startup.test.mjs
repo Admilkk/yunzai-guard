@@ -39,6 +39,7 @@ function fixture(options = {}) {
     records = [],
     auditDrops = [],
     exits = [],
+    alertsRaised = [],
     child = new EventEmitter()
   Object.assign(child, {
     pid: 100,
@@ -171,7 +172,13 @@ function fixture(options = {}) {
     bootstrapPending: false,
     priority: { start: 0, restart: 1, resume: 2, recover: 3, update: 3, stop: 4 },
     updates: { stop() {} },
-    alerts: { raise() {}, stop() {}, flush() {} },
+    alerts: {
+      raise(category, title, text) {
+        alertsRaised.push({ category, title, text })
+      },
+      stop() {},
+      flush() {},
+    },
     sourceWatch: { stop() {} },
     profiles: { flush() {} },
     root: "/owned-project",
@@ -180,6 +187,7 @@ function fixture(options = {}) {
     auditSink: { stats: () => ({}) },
     createAuditDeadline: () => deadline,
     supervisedIpc: false,
+    consoleInput: false,
     invalidMessages: 0,
     lastAudit: undefined,
     lastAuditPermit: undefined,
@@ -259,6 +267,7 @@ function fixture(options = {}) {
       "send",
       "fail",
       "trip",
+      "describeTrip",
       "enqueue",
       "closeHost",
       "applyUpdate",
@@ -273,7 +282,7 @@ function fixture(options = {}) {
     ],
     bindings,
   )
-  return { ...api, steps, records, auditDrops, exits, child, broker }
+  return { ...api, steps, records, auditDrops, exits, child, broker, alertsRaised }
 }
 
 test("broker drop keeps channel identity and does not count write errors twice", async () => {
@@ -388,6 +397,14 @@ test("trip removes a queued recovery while preserving an explicit stop request",
   f.context.pending = { type: "recover", reason: "earlier-error" }
   f.trip("cleanup-unconfirmed")
   assert.equal(f.context.pending, undefined)
+  // 推送给主人的熔断告警使用原因说明，不显示内部代码。
+  assert.match(f.alertsRaised.at(-1).text, /原因：无法确认上一个业务进程及其子进程已全部退出。/)
+  assert.doesNotMatch(f.alertsRaised.at(-1).text, /cleanup-unconfirmed/)
+  assert.equal(
+    f.describeTrip("configuration-rollback-failed:磁盘已满"),
+    "新配置应用失败，且未能回退至原配置（磁盘已满）",
+  )
+  assert.equal(f.describeTrip("some-new-code"), "some-new-code")
   f.enqueue({ type: "start" })
   f.enqueue({ type: "restart" })
   f.enqueue({ type: "recover" })

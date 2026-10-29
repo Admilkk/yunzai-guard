@@ -352,7 +352,7 @@ test("等待中的业务侧更新：再次请求更新即马上执行，还原�
   service.defer(staged, "1.0.0", false)
   assert.equal(service.state().phase, "pending")
   assert.equal(service.state().pending.version, "1.1.0")
-  assert.match(sent.at(-1), /业务侧更新将在空闲时生效，再次发送 #guard更新 可马上生效/)
+  assert.match(sent.at(-1), /业务侧更新将在机器人空闲时生效；如需立即生效，请再次发送 #guard更新/)
   // 有等待中的更新时不再联网检查，直接执行等待中的那次。
   const applied = await service.apply(false)
   assert.equal(applied.ok, true)
@@ -372,10 +372,10 @@ test("等待中的业务侧更新：再次请求更新即马上执行，还原�
 test("更新结果按完成方式说明业务是否中断", t => {
   const { service, sent } = deferredService(t)
   const cases = [
-    ["hot", false, /已更新至 1\.1\.0（原 1\.0\.0），业务未中断/],
+    ["hot", false, /已更新至 1\.1\.0（原版本 1\.0\.0），机器人运行未中断/],
     ["worker", false, /业务进程已重启/],
-    ["relaunch", true, /已还原至 1\.1\.0（原 1\.0\.0），宿主已重新启动/],
-    ["host-pending", false, /宿主重启后完全生效/],
+    ["relaunch", true, /已还原至 1\.1\.0（原版本 1\.0\.0），宿主已重新启动/],
+    ["host-pending", false, /需重启宿主后完全生效/],
   ]
   for (const [mode, rollback, pattern] of cases) {
     service.finish({ ok: true, from: "1.0.0", to: "1.1.0", mode, rollback })
