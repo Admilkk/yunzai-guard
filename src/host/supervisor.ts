@@ -22,6 +22,7 @@ import { assertNoDebugger } from "../protect/debug.js"
 import { assertNoInternals } from "../protect/bindings.js"
 import { authorizeHostEvent } from "./event-policy.js"
 import { waitForBootstrapHandoff } from "./bootstrap/handoff.js"
+import { consoleRelayTimeout } from "./bootstrap/console-relay.js"
 import { installHostLog, pipeHostOutput, pruneHostLog } from "./log.js"
 import { loadSandboxSources } from "../plugin-sandbox/filesystem.js"
 import { monitorStatus, parseMonitorReport, type MonitorReport } from "../monitor/report.js"
@@ -1745,7 +1746,11 @@ try {
     bootstrapHandoff = waitForBootstrapHandoff({
       bootstrapPid,
       redisPid: bootstrapRedisPid,
-      timeout: settings.handshakeTimeout + settings.shutdownTimeout,
+      // Windows 上原进程在提交前还要等控制台转印进程就绪，见 consoleRelayTimeout。
+      timeout:
+        settings.handshakeTimeout +
+        settings.shutdownTimeout +
+        (process.platform === "win32" ? consoleRelayTimeout : 0),
       signal: bootstrapAbort.signal,
       bound: identities => record("bootstrap-resources-bound", { identities }),
     })

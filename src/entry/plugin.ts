@@ -11,6 +11,7 @@ import { registerCurrentPm2Application } from "../pm2/auto.js"
 import { inspectorDeadline } from "../pm2/inspector.js"
 import { waitForBootstrapReady } from "../host/bootstrap/ready.js"
 import { createBootstrapExitPlan } from "../host/bootstrap/exit-plan.js"
+import { consoleRelayTimeout } from "../host/bootstrap/console-relay.js"
 import { prepareNode } from "../dependencies/node.js"
 import { M } from "../shared/messages.js"
 
@@ -99,7 +100,7 @@ function startConsoleRelay(hostPid: number, offset: number): Promise<string | un
       )
       relay.once("error", () => finish(undefined))
       relay.once("exit", () => finish(undefined))
-      timer = setTimeout(() => finish(undefined), 10000)
+      timer = setTimeout(() => finish(undefined), consoleRelayTimeout)
     })
   })
 }

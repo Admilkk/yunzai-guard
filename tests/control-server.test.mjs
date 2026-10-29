@@ -3,6 +3,7 @@ import net from "node:net"
 import { once } from "node:events"
 import test from "node:test"
 import { createControlServer } from "../dist/host/control-server.js"
+import { splitInput } from "../dist/host/control.js"
 
 const token = "a".repeat(48)
 
@@ -57,4 +58,23 @@ test("control server rejects a wrong token, unknown commands and oversized reque
     "",
   )
   assert.equal(calls.length, 0)
+})
+
+test("console input is split so every input request stays within the control server limit", async t => {
+  const { calls, port } = await serve(t)
+  // 控制字符 JSON 编码后每个占 6 字节，按字符数分段会超出上限。
+  const controls = "\u0001".repeat(6000)
+  const emoji = "😀".repeat(5000)
+  const text = `#状态\r\n${controls}${emoji}\n尾巴`
+  const parts = splitInput(text)
+  assert.equal(parts.join(""), text.replace(/\r\n/g, "\n"))
+  assert.equal(parts[0], "#状态\n")
+  assert.equal(parts.at(-1), "尾巴")
+  for (const data of parts) {
+    // 分段不拆开代理对。
+    assert.equal(data.isWellFormed(), true)
+    const reply = await send(port, `${JSON.stringify({ token, command: "input", data })}\n`)
+    assert.deepEqual(JSON.parse(reply), { ok: true })
+  }
+  assert.equal(calls.map(call => call.message.data).join(""), text.replace(/\r\n/g, "\n"))
 })

@@ -26,8 +26,8 @@ interface ControlServerOptions {
 }
 
 const maxConnections = 32
-// input 携带控制台输入，转印进程按 4000 字符分段，中文按 UTF-8 计约 12 KiB。
-const maxRequestBytes = 16384
+// input 携带控制台输入，转印进程按 JSON 编码后的字节数分段，见 control.ts 的 splitInput。
+export const maxRequestBytes = 16384
 const idleTimeoutMs = 2000
 
 /**

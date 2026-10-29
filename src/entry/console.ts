@@ -11,13 +11,12 @@ import net from "node:net"
 import path from "node:path"
 import { execFile, spawnSync } from "node:child_process"
 import { StringDecoder } from "node:string_decoder"
-import { request } from "../host/control.js"
+import { request, splitInput } from "../host/control.js"
 import { stateDir } from "../shared/identity.js"
 import { M } from "../shared/messages.js"
 
 const pollInterval = 200
 const relaunchWait = 120000
-const inputChunk = 4000
 const file = path.join(stateDir, "host.log")
 const decoder = new StringDecoder("utf8")
 const buffer = Buffer.alloc(64 * 1024)
@@ -234,11 +233,8 @@ function forwardInput(): void {
   process.stdin.setEncoding("utf8")
   process.stdin.on("error", () => {})
   process.stdin.on("data", (text: string) => {
-    for (const line of text.replace(/\r\n/g, "\n").split(/(?<=\n)/))
-      for (let index = 0; index < line.length; index += inputChunk) {
-        const data = line.slice(index, index + inputChunk)
-        queue = queue.then(() => request("input", { data })).catch(() => {})
-      }
+    for (const data of splitInput(text))
+      queue = queue.then(() => request("input", { data })).catch(() => {})
   })
 }
 
