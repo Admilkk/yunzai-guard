@@ -2,6 +2,28 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.4.0](https://github.com/Admilkk/yunzai-guard/compare/v1.3.1...v1.4.0) (2026-10-30)
+
+
+### ✨ 新功能
+
+* **config:** 配置改用带注释的 YAML，旧版 settings.json 自动转换 ([deac4f3](https://github.com/Admilkk/yunzai-guard/commit/deac4f397119e528b0c76af43afd225544ca74d6))
+* **entry:** #guard 命令不区分大小写 ([9b25feb](https://github.com/Admilkk/yunzai-guard/commit/9b25feb60f7b61c4df8576428b4cd7e93597fd4f))
+* **notice:** 统一推送给主人的消息格式 ([c812170](https://github.com/Admilkk/yunzai-guard/commit/c81217062a494e0c50b3baee5f681807ae2cdc74))
+* **runtime:** 主人命令在 dealEvent 之后立即处理，先于上下文与全部插件 ([db79207](https://github.com/Admilkk/yunzai-guard/commit/db79207f71f9d5ab773c2aa4a0fb44f3179ef95f))
+
+
+### 🐛 问题修复
+
+* **runtime:** 主人命令改由运行时接管，不再经全局上下文暴露 ([fa1c31a](https://github.com/Admilkk/yunzai-guard/commit/fa1c31aa4b9aeff7942f4260d9ba9ea7a4476205))
+* 收口运行时能力并修复配置与画像恢复边界 ([b299d48](https://github.com/Admilkk/yunzai-guard/commit/b299d485cc0ac0baa623f766428aba606887e748))
+
+
+### ♻️ 重构
+
+* **native-sandbox:** 成组的模块分入 media、adapter、bot-events 子目录 ([a5d8573](https://github.com/Admilkk/yunzai-guard/commit/a5d8573a35ff94d71a4bb583f73f6a54f2810946))
+* **shared:** 提取文件读写、摘要与普通文件校验等公共工具 ([9ea1082](https://github.com/Admilkk/yunzai-guard/commit/9ea1082bc0f8f11222130810819aafd38bb53279))
+
 ## [1.3.1](https://github.com/Admilkk/yunzai-guard/compare/v1.3.0...v1.3.1) (2026-10-30)
 
 
