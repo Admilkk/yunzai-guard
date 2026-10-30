@@ -2,6 +2,13 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.3.1](https://github.com/Admilkk/yunzai-guard/compare/v1.3.0...v1.3.1) (2026-10-30)
+
+
+### 🐛 问题修复
+
+* **sources:** 已改动插件再被改动时仍提醒，中文与重命名文件名正常显示 ([37fd329](https://github.com/Admilkk/yunzai-guard/commit/37fd329efe3da52612f1c2f1dd66d0215e83de04))
+
 ## [1.3.0](https://github.com/Admilkk/yunzai-guard/compare/v1.2.0...v1.3.0) (2026-10-29)
 
 
