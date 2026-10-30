@@ -226,3 +226,38 @@ test("git plugins are scanned and changes are reported", { skip: !hasGit }, asyn
   assert.equal(linked.dirty, 0)
   assert.equal(linked.error, undefined)
 })
+
+test("already modified plugins still report further changes", { skip: !hasGit }, async () => {
+  const root = tmp()
+  const plugins = path.join(root, "plugins")
+  const repo = path.join(plugins, "demo-plugin")
+  fs.mkdirSync(repo, { recursive: true })
+  const git = (...args) =>
+    spawnSync("git", ["-c", "user.email=a@b.c", "-c", "user.name=t", ...args], { cwd: repo })
+  git("init", "-q")
+  git("config", "core.autocrlf", "false")
+  fs.writeFileSync(path.join(repo, "配置.js"), "export {}\n")
+  fs.writeFileSync(path.join(repo, "index.js"), "export {}\n")
+  git("add", ".")
+  git("commit", "-q", "-m", "init")
+  const changes = []
+  const settings = parseSettings({})
+  const watch = new SourceWatch({
+    pluginsDir: plugins,
+    stateDir: path.join(root, "state"),
+    settings: () => settings.sources,
+    onChange: change => changes.push(change),
+  })
+  await watch.scan()
+  fs.writeFileSync(path.join(repo, "配置.js"), "export const a = 1\n")
+  const [first] = await watch.scan()
+  assert.deepEqual(first.dirtyFiles, ["配置.js"])
+  await watch.scan()
+  assert.equal(changes.length, 1)
+  fs.writeFileSync(path.join(repo, "index.js"), "export const b = 1\n")
+  await watch.scan()
+  fs.writeFileSync(path.join(repo, "index.js"), "export const b = 2\n")
+  await watch.scan()
+  assert.equal(changes.length, 3)
+  assert.ok(changes.slice(1).every(item => item.type === "dirty" && item.text.includes("index.js")))
+})

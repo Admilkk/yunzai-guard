@@ -3,6 +3,7 @@ import path from "node:path"
 import { execFile } from "node:child_process"
 import type { GuardSettings } from "../shared/types.js"
 import { matchGlob } from "../config/policy.js"
+import { hashFile } from "../shared/hash.js"
 
 export interface PluginSource {
   plugin: string
@@ -27,6 +28,8 @@ interface Stored {
   commit?: string
   remote?: string
   dirty?: number
+  /** 已改动文件的工作区摘要，用于发现已改动插件中新的改动。 */
+  changes?: Record<string, string>
 }
 
 interface SourceOptions {
@@ -150,7 +153,14 @@ async function safeStatus(
     )
     return await git(
       view,
-      [...options, "status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all"],
+      [
+        ...options,
+        "status",
+        "--porcelain",
+        "-z",
+        "--untracked-files=no",
+        "--ignore-submodules=all",
+      ],
       {
         GIT_DIR: view,
         GIT_COMMON_DIR: view,
@@ -167,6 +177,38 @@ async function safeStatus(
     if (path.dirname(fs.realpathSync(view)) === base)
       fs.rmSync(view, { recursive: true, force: true })
   }
+}
+
+/** 解析 `status --porcelain -z`：路径不转义，重命名条目后附原路径。 */
+function statusFiles(value: string): string[] {
+  const items = value.split("\0")
+  const files: string[] = []
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index]
+    if (item.length < 4) continue
+    files.push(item.slice(3))
+    if (item[0] === "R" || item[0] === "C") index++
+  }
+  return files
+}
+
+/** 记录改动文件当前内容的摘要；不跟随符号链接。 */
+function fingerprint(directory: string, files: string[]): Record<string, string> {
+  const result: Record<string, string> = Object.create(null)
+  for (const file of files) {
+    const target = path.join(directory, file)
+    try {
+      const stat = fs.lstatSync(target)
+      result[file] = stat.isSymbolicLink()
+        ? `link:${fs.readlinkSync(target)}`
+        : stat.isFile()
+          ? hashFile(target).slice(0, 16)
+          : "other"
+    } catch (error) {
+      result[file] = (error as NodeJS.ErrnoException).code === "ENOENT" ? "deleted" : "unreadable"
+    }
+  }
+  return result
 }
 
 /**
@@ -246,6 +288,7 @@ export class SourceWatch {
       // plugins 目录不存在。
     }
     const result: PluginSource[] = []
+    const changes = new Map<string, Record<string, string>>()
     for (const plugin of names.sort()) {
       if (config.ignore.some(pattern => matchGlob(pattern, plugin))) continue
       const directory = path.join(this.#options.pluginsDir, plugin)
@@ -295,7 +338,8 @@ export class SourceWatch {
               gitConfiguration,
               this.#options.stateDir,
             ).catch(() => undefined)
-      const files = (status ?? "").split("\n").filter(Boolean)
+      const files = statusFiles(status ?? "")
+      if (status !== undefined) changes.set(plugin, fingerprint(directory, files))
       result.push({
         plugin,
         git: true,
@@ -303,27 +347,29 @@ export class SourceWatch {
         branch,
         commit,
         dirty: status === undefined ? undefined : files.length,
-        dirtyFiles: files.slice(0, maxDirtyFiles).map(line => line.slice(3)),
+        dirtyFiles: files.slice(0, maxDirtyFiles),
         scannedAt,
         ...(status === undefined ? { error: "无法安全读取 Git 工作区状态" } : {}),
       })
     }
-    this.#compare(result)
+    this.#compare(result, changes)
     this.#sources = result
     return result
   }
 
   /** 与上次记录比较，按配置通知并更新记录。 */
-  #compare(current: PluginSource[]): void {
+  #compare(current: PluginSource[], changes: Map<string, Record<string, string>>): void {
     const notify = this.#options.settings().notify
     const next: Record<string, Stored> = Object.create(null)
     for (const item of current) {
       if (!item.git || !item.commit) continue
       const before = this.#stored[item.plugin]
+      const files = changes.get(item.plugin)
       next[item.plugin] = {
         commit: item.commit,
         remote: item.remote,
         dirty: item.dirty ?? before?.dirty,
+        changes: files ?? before?.changes,
       }
       if (!before) continue
       if (notify.remote && before.remote !== item.remote)
@@ -338,11 +384,19 @@ export class SourceWatch {
           type: "commit",
           text: `插件 ${item.plugin} 的当前提交已变更：${before.commit?.slice(0, 8)} → ${item.commit.slice(0, 8)}。如非本人更新，请核实改动内容。`,
         })
-      if (notify.dirty && !before.dirty && item.dirty)
+      if (!notify.dirty || !item.dirty) continue
+      // 已改动的插件再有文件改动时也要提示；旧记录缺少摘要时只补记，避免升级后集中误报。
+      const fresh =
+        before.dirty && before.changes && files
+          ? Object.keys(files).filter(file => before.changes![file] !== files[file])
+          : []
+      if (!before.dirty || fresh.length)
         this.#options.onChange({
           plugin: item.plugin,
           type: "dirty",
-          text: `插件 ${item.plugin} 有 ${item.dirty} 个文件与仓库版本不一致（${(item.dirtyFiles ?? []).slice(0, 3).join("、")}）。如非本人修改，请核实文件内容。`,
+          text: before.dirty
+            ? `插件 ${item.plugin} 又有 ${fresh.length} 个文件发生改动（${fresh.slice(0, 3).join("、")}），当前共 ${item.dirty} 个文件与仓库版本不一致。如非本人修改，请核实文件内容。`
+            : `插件 ${item.plugin} 有 ${item.dirty} 个文件与仓库版本不一致（${(item.dirtyFiles ?? []).slice(0, 3).join("、")}）。如非本人修改，请核实文件内容。`,
         })
     }
     this.#stored = next
