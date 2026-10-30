@@ -11,6 +11,9 @@
 export const tag = "[Yunzai Guard]"
 
 const messages = {
+  files: {
+    jsonOversize: (file: unknown) => `JSON 文件超过大小上限：${file}`,
+  },
   protect: {
     exposeInternals: "自保护要求关闭 --expose-internals",
     inspectorOpen: "自保护要求关闭 Inspector",
@@ -293,7 +296,6 @@ const messages = {
     rollbackFailed: "配置回退失败",
     auditWriteFailed: `${tag} 审计日志写入失败，可通过 status 查看 logAvailable`,
     event: (label: unknown, reason: unknown) => `${tag} 宿主 ${label}：${reason}`,
-    recoveryOversize: "恢复状态文件过大",
     recoveryState: "恢复状态无效",
     failureRecord: "故障记录无效",
     previousWorker: "上一工作进程尚未清理",

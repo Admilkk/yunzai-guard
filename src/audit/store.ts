@@ -1,12 +1,13 @@
 import fs from "node:fs"
 import path from "node:path"
-import { createHash } from "node:crypto"
 import type { DatabaseSync, StatementSync } from "node:sqlite"
 import { assertAuditFiles, initializeAuditDatabase, openAuditDatabase } from "./database.js"
 import { storedAuditRecord, type StoredAuditRecord } from "./record.js"
 import type { AuditAppendReceipt, AuditSinkFrame } from "./sink.js"
 import { copyAuditData } from "./protocol.js"
 import { M } from "../shared/messages.js"
+import { sha256 } from "../shared/hash.js"
+import { isOrdinaryFile } from "../shared/files.js"
 
 export interface SqliteAuditOptions {
   filePath: string
@@ -179,7 +180,7 @@ export class SqliteAuditSink {
       let handle: number | undefined
       try {
         const info = fs.lstatSync(file)
-        if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
+        if (!isOrdinaryFile(info)) {
           report.filesSkipped++
           continue
         }
@@ -223,7 +224,7 @@ export class SqliteAuditSink {
                 : line
             records.push({
               value,
-              origin: `legacy:${createHash("sha256").update(identity).digest("hex")}`,
+              origin: `legacy:${sha256(identity)}`,
             })
           } catch {
             report.invalidLines++

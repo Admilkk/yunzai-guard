@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { parseSettings } from "../config/index.js"
 import { M } from "../shared/messages.js"
+import { isOrdinaryFile } from "../shared/files.js"
 
 export const maxSettingsBytes = 1024 * 1024
 
@@ -38,8 +39,7 @@ export function directory(root: string, parts: string[], create: boolean): strin
 export function readConfig(filename: string): Buffer | undefined {
   try {
     const stat = fs.lstatSync(filename)
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > maxSettingsBytes)
-      throw new Error(M.cli.settingsFile)
+    if (!isOrdinaryFile(stat, maxSettingsBytes)) throw new Error(M.cli.settingsFile)
     const value = fs.readFileSync(filename)
     if (value.length > maxSettingsBytes) throw new Error(M.cli.settingsOversize)
     return value

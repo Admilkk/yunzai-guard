@@ -1,4 +1,4 @@
-import fs from "node:fs"
+import { readJsonFile, writeJsonFile } from "../shared/files.js"
 import { redactAuditText as redact } from "../audit/redaction.js"
 import { M } from "../shared/messages.js"
 
@@ -15,10 +15,9 @@ const maxFailures = 256
 
 /** 损坏的计数不能放行无限重启：无法解析时视为已熔断，保留控制端点供恢复。 */
 export function readRecoveryState(file: string): RecoveryState {
-  if (!fs.existsSync(file)) return { version: 1, failures: [], tripped: false }
   try {
-    if (fs.statSync(file).size > maxFileBytes) throw new Error(M.host.recoveryOversize)
-    const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"))
+    const value = readJsonFile(file, maxFileBytes)
+    if (value === undefined) return { version: 1, failures: [], tripped: false }
     if (!value || typeof value !== "object") throw new Error(M.host.recoveryState)
     const data = value as Record<string, unknown>
     if (data.version !== 1 || typeof data.tripped !== "boolean" || !Array.isArray(data.failures))
@@ -48,7 +47,5 @@ export function readRecoveryState(file: string): RecoveryState {
 
 /** 原子写入熔断与恢复状态。 */
 export function saveRecoveryState(file: string, state: RecoveryState): void {
-  const temporary = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(temporary, JSON.stringify(state), { mode: 0o600 })
-  fs.renameSync(temporary, file)
+  writeJsonFile(file, state)
 }

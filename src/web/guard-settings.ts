@@ -1,9 +1,9 @@
 import fs from "node:fs"
 import path from "node:path"
-import { randomBytes } from "node:crypto"
 import { parseSettings } from "../config/index.js"
 import type { GuardSettings } from "../shared/types.js"
 import { M } from "../shared/messages.js"
+import { writeJsonFile } from "../shared/files.js"
 
 export interface SettingsDocument {
   path: string
@@ -186,14 +186,7 @@ export function writeSettingsDocument(
   const normalized = validateSettingsDocument(stateDir, value)
   const file = guardSettingsPath(stateDir)
   const backup = backupFile(file)
-  const temporary = `${file}.${randomBytes(4).toString("hex")}.tmp`
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  try {
-    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
-    fs.renameSync(temporary, file)
-  } finally {
-    if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true })
-  }
+  writeJsonFile(file, value, { pretty: true })
   return { pendingRestart: canonical(normalized) !== canonical(active), backup }
 }
 

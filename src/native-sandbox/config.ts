@@ -2,7 +2,14 @@ import { action, boolean, keys, number, object, string } from "../config/validat
 import type { NativeSandboxPlugin, NativeSandboxSettings, NativeRedisPermissions } from "./types.js"
 import { M } from "../shared/messages.js"
 
-const reservedDirectories = new Set(["yunzai-guard", "adapter", "system", "other", "example"])
+/** 核心目录与 Guard 自身，不能作为原生沙盒对象；控制台据此标记，避免给出会被拒绝的入口。 */
+export const reservedDirectories: ReadonlySet<string> = new Set([
+  "yunzai-guard",
+  "adapter",
+  "system",
+  "other",
+  "example",
+])
 export const nativeRedisReservedPrefixes: readonly string[] = Object.freeze([
   "yunzai-guard:",
   "yunzaiguard:",

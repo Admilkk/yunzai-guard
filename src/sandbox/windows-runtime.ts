@@ -1,7 +1,8 @@
 import fs from "node:fs"
 import path from "node:path"
-import { createHash } from "node:crypto"
 import { M } from "../shared/messages.js"
+import { sha256 } from "../shared/hash.js"
+import { isOrdinaryFile } from "../shared/files.js"
 
 /** 保留早期管道候选供显式选择，不授予元数据能力。 */
 export const privateWindowsRuntimeCandidate = Object.freeze({
@@ -40,14 +41,10 @@ interface RuntimeHost {
   versions: { node: string; modules?: string }
 }
 
-/** 计算 SHA-256 摘要。 */
-const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex")
-
 /** 读取有大小上限的普通文件。 */
 function ordinaryFile(file: string, maximum: number): Buffer {
   const stat = fs.lstatSync(file)
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > maximum)
-    throw new Error(M.sandbox.privateFiles)
+  if (!isOrdinaryFile(stat, maximum)) throw new Error(M.sandbox.privateFiles)
   return fs.readFileSync(file)
 }
 
@@ -75,13 +72,13 @@ export function verifyPrivateWindowsRuntime(
   )
     throw new Error(M.sandbox.privateReparse)
   const manifestBytes = ordinaryFile(path.join(directory, "build-manifest.json"), 65536)
-  if (digest(manifestBytes) !== candidate.buildManifestSha256)
+  if (sha256(manifestBytes) !== candidate.buildManifestSha256)
     throw new Error(M.sandbox.privateBuild)
   const manifest = JSON.parse(manifestBytes.toString("utf8"))
   const verificationBytes = ordinaryFile(path.join(directory, "os-verification.json"), 65536)
   if (
     canonical &&
-    digest(verificationBytes) !== privateWindowsCanonicalRuntimeCandidate.osVerificationSha256
+    sha256(verificationBytes) !== privateWindowsCanonicalRuntimeCandidate.osVerificationSha256
   )
     throw new Error(M.sandbox.privateOs)
   const verification = JSON.parse(verificationBytes.toString("utf8"))
@@ -117,7 +114,7 @@ export function verifyPrivateWindowsRuntime(
   )
     throw new Error(M.sandbox.privateMetadata)
   const executable = path.join(directory, "node.exe")
-  if (digest(ordinaryFile(executable, 256 * 1024 * 1024)) !== candidate.sha256)
+  if (sha256(ordinaryFile(executable, 256 * 1024 * 1024)) !== candidate.sha256)
     throw new Error(M.sandbox.privateDigest)
   return {
     executable,

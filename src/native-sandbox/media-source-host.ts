@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { performance } from "node:perf_hooks"
 import { adapterDto, type AdapterValue } from "./adapter-protocol.js"
+import { sha256 } from "../shared/hash.js"
 import {
   imageMime,
   mediaArgument,
@@ -122,7 +123,7 @@ export class NativeMediaSourceHost {
         handle: `source-${randomUUID()}`,
         size: value.length,
         mime: imageMime(value),
-        sha256: createHash("sha256").update(value).digest("hex"),
+        sha256: sha256(value),
       }
       staged.push({
         tag,

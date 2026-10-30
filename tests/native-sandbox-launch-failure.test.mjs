@@ -118,6 +118,7 @@ export function attachNativeTransport(child,stream,onError) {state.calls.push('a
     "../protect/objects.js": pathToFileURL(path.join(repository, "dist/protect/objects.js")).href,
     "../protect/paths.js": pathToFileURL(path.join(repository, "dist/protect/paths.js")).href,
     "../shared/messages.js": pathToFileURL(path.join(repository, "dist/shared/messages.js")).href,
+    "../shared/hash.js": pathToFileURL(path.join(repository, "dist/shared/hash.js")).href,
   }))
     source = source.replaceAll(`from "${from}"`, `from ${JSON.stringify(to)}`)
   const moduleUrl = write("launch.mjs", source)

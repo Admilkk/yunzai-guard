@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { performance } from "node:perf_hooks"
+import { sha256 } from "../shared/hash.js"
 import {
   decodeMediaBase64,
   imageMime,
@@ -190,7 +191,7 @@ export class NativeMediaHost {
       }
       if (item.received !== item.size)
         return mediaFail("MEDIA_INCOMPLETE", "Media upload is incomplete")
-      if (createHash("sha256").update(item.bytes).digest("hex") !== item.sha256)
+      if (sha256(item.bytes) !== item.sha256)
         return mediaFail("MEDIA_DIGEST_MISMATCH", "Media digest did not match")
       if (imageMime(item.bytes) !== item.mime)
         return mediaFail("MEDIA_TYPE_MISMATCH", "Image signature differs from declared type")

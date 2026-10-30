@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import sqlite, { type DatabaseSync } from "node:sqlite"
 import { M } from "../shared/messages.js"
+import { isOrdinaryFile } from "../shared/files.js"
 
 export const auditDatabaseName = "events.sqlite"
 export const auditApplicationId = 0x59475244
@@ -19,8 +20,7 @@ export function assertAuditFiles(file: string): void {
   for (const suffix of ["", "-wal", "-shm", "-journal"]) {
     try {
       const info = fs.lstatSync(file + suffix)
-      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1)
-        throw new Error(M.audit.dbFiles)
+      if (!isOrdinaryFile(info)) throw new Error(M.audit.dbFiles)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
     }

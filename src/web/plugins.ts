@@ -1,5 +1,6 @@
 import fs from "node:fs"
 import path from "node:path"
+import { reservedDirectories } from "../native-sandbox/config.js"
 
 export interface PluginEntry {
   /** 目录名，同时是原生沙盒的 id。 */
@@ -8,9 +9,6 @@ export interface PluginEntry {
   reserved: boolean
   description?: string
 }
-
-/** 与原生沙盒的保留目录保持一致，避免页面给出会被拒绝的入口。 */
-const reservedDirectories = new Set(["yunzai-guard", "adapter", "system", "other", "example"])
 
 /** 读取插件目录的 package.json 描述。 */
 function describe(directory: string): string | undefined {

@@ -4,6 +4,7 @@ import path from "node:path"
 import { createHmac, randomBytes } from "node:crypto"
 import type { GuardSettings } from "../shared/types.js"
 import { field, notice } from "../shared/notice.js"
+import { readJsonFile, writeJsonFile } from "../shared/files.js"
 
 export type AlertCategory = keyof GuardSettings["alerts"]["on"]
 
@@ -153,7 +154,7 @@ export class AlertService {
   #loadState(): AlertState {
     const empty: AlertState = { readBefore: 0, read: [], mutes: [] }
     try {
-      const value = JSON.parse(fs.readFileSync(this.#stateFile, "utf8")) as Partial<AlertState>
+      const value = (readJsonFile(this.#stateFile) ?? {}) as Partial<AlertState>
       return {
         readBefore: Number.isFinite(value.readBefore) ? Number(value.readBefore) : 0,
         read: Array.isArray(value.read)
@@ -178,8 +179,7 @@ export class AlertService {
 
   #saveState(): void {
     try {
-      fs.mkdirSync(this.#options.stateDir, { recursive: true })
-      fs.writeFileSync(this.#stateFile, JSON.stringify(this.#state), { mode: 0o600 })
+      writeJsonFile(this.#stateFile, this.#state)
     } catch {
       // 状态写入失败只影响重启后的已读与静默。
     }

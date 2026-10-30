@@ -1,6 +1,11 @@
 import fs from "node:fs"
 import { createHash } from "node:crypto"
 
+/** 计算数据的 SHA-256 摘要，返回小写十六进制。 */
+export function sha256(data: string | Uint8Array): string {
+  return createHash("sha256").update(data).digest("hex")
+}
+
 /**
  * 分块计算文件的 SHA-256 摘要，读取缓冲区固定为 64 KiB。
  * @param file 要校验的文件路径；路径与文件类型由调用方校验。

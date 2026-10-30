@@ -3,6 +3,7 @@ import net from "node:net"
 import path from "node:path"
 import { randomBytes } from "node:crypto"
 import { M } from "../shared/messages.js"
+import { writeJsonFile } from "../shared/files.js"
 
 /** 面板是宿主进程的附加入口：配置放在 Guard 状态目录，业务插件无法读写。 */
 export interface PanelSettings {
@@ -99,14 +100,7 @@ function normalize(value: unknown): PanelSettings {
 
 /** 原子写入面板配置。 */
 function writeSettings(file: string, settings: PanelSettings): void {
-  const temporary = `${file}.${randomBytes(6).toString("hex")}.tmp`
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 })
-  try {
-    fs.renameSync(temporary, file)
-  } finally {
-    if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true })
-  }
+  writeJsonFile(file, settings, { pretty: true })
 }
 
 /** 字段损坏时回落到默认值并立即规范化落盘，避免面板因手改配置而无法启动。 */

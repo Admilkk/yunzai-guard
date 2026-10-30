@@ -4,6 +4,7 @@ import { execFile } from "node:child_process"
 import type { GuardSettings } from "../shared/types.js"
 import { matchGlob } from "../config/policy.js"
 import { hashFile } from "../shared/hash.js"
+import { readJsonFile, writeJsonFile } from "../shared/files.js"
 import { field, listed, notice } from "../shared/notice.js"
 
 export interface PluginSource {
@@ -230,7 +231,7 @@ export class SourceWatch {
     this.#options = options
     this.#file = path.join(options.stateDir, "sources.json")
     try {
-      const value = JSON.parse(fs.readFileSync(this.#file, "utf8"))
+      const value = readJsonFile(this.#file)
       if (value && typeof value === "object" && !Array.isArray(value))
         Object.assign(this.#stored, value)
     } catch {
@@ -424,8 +425,7 @@ export class SourceWatch {
     }
     this.#stored = next
     try {
-      fs.mkdirSync(this.#options.stateDir, { recursive: true })
-      fs.writeFileSync(this.#file, JSON.stringify(next), { mode: 0o600 })
+      writeJsonFile(this.#file, next)
     } catch {
       // 记录写入失败时，下次扫描会重复提示一次变化。
     }

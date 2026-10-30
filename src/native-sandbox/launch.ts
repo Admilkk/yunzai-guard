@@ -2,7 +2,7 @@ import fs from "node:fs"
 import net from "node:net"
 import os from "node:os"
 import nodePath from "node:path"
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { Duplex } from "node:stream"
@@ -22,6 +22,7 @@ import {
 } from "../sandbox/windows-runtime.js"
 import { within } from "../protect/paths.js"
 import { M } from "../shared/messages.js"
+import { sha256 } from "../shared/hash.js"
 
 const path = Object.freeze({ ...nodePath })
 const createDirectory = fs.mkdtempSync.bind(fs)
@@ -395,7 +396,7 @@ async function startNativeSandbox(
           runtimeManifest: manifest,
           forwardOutput: false,
           sharedWritablePaths,
-          sessionKey: `plugin-${createHash("sha256").update(identity).digest("hex").slice(0, 32)}`,
+          sessionKey: `plugin-${sha256(identity).slice(0, 32)}`,
         }),
       )
     } else {

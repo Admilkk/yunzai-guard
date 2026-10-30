@@ -3,6 +3,7 @@ import path from "node:path"
 import type { GuardSettings } from "../shared/types.js"
 import { M } from "../shared/messages.js"
 import { field, notice } from "../shared/notice.js"
+import { readJsonFile, writeJsonFile } from "../shared/files.js"
 import { inWindow } from "../shared/update-window.js"
 import { compareVersions } from "../shared/version.js"
 import { fetchRelease, gitBranch, gitSync, releaseBranch, versionAt } from "../update/git.js"
@@ -191,7 +192,7 @@ export class UpdateService {
     this.#file = path.join(options.stateDir, "update.json")
     this.#verifyFile = path.join(options.stateDir, "update-verify.json")
     try {
-      const value = JSON.parse(fs.readFileSync(this.#file, "utf8")) as Partial<Stored>
+      const value = (readJsonFile(this.#file) ?? {}) as Partial<Stored>
       this.#stored = {
         etag: typeof value.etag === "string" ? value.etag : undefined,
         checkedAt: typeof value.checkedAt === "number" ? value.checkedAt : undefined,
@@ -528,20 +529,17 @@ export class UpdateService {
 
   /** 宿主重新启动前记录待确认的更新，新宿主上线后据此确认成功或还原。 */
   markVerify(value: { from: string; to: string; rollback: boolean; revert?: boolean }): void {
-    fs.mkdirSync(this.#options.stateDir, { recursive: true })
-    fs.writeFileSync(this.#verifyFile, JSON.stringify({ ...value, attempts: 0, at: Date.now() }), {
-      mode: 0o600,
-    })
+    writeJsonFile(this.#verifyFile, { ...value, attempts: 0, at: Date.now() })
   }
 
   /** 读取待确认的更新并累加启动次数；没有时返回 undefined。 */
   takeVerify():
     { from: string; to: string; rollback: boolean; revert: boolean; attempts: number } | undefined {
     try {
-      const value = JSON.parse(fs.readFileSync(this.#verifyFile, "utf8")) as Record<string, unknown>
-      if (typeof value.from !== "string" || typeof value.to !== "string") return undefined
+      const value = readJsonFile(this.#verifyFile) as Record<string, unknown> | undefined
+      if (typeof value?.from !== "string" || typeof value.to !== "string") return undefined
       const attempts = (Number.isSafeInteger(value.attempts) ? Number(value.attempts) : 0) + 1
-      fs.writeFileSync(this.#verifyFile, JSON.stringify({ ...value, attempts }), { mode: 0o600 })
+      writeJsonFile(this.#verifyFile, { ...value, attempts })
       return {
         from: value.from,
         to: value.to,
@@ -667,8 +665,7 @@ export class UpdateService {
   /** 保存状态；写入失败只影响跨重启的去重与补发。 */
   #save(): void {
     try {
-      fs.mkdirSync(this.#options.stateDir, { recursive: true })
-      fs.writeFileSync(this.#file, JSON.stringify(this.#stored), { mode: 0o600 })
+      writeJsonFile(this.#file, this.#stored)
     } catch {
       // 状态文件不可写时仅丢失缓存，不影响更新流程。
     }

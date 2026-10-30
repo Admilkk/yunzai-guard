@@ -3,7 +3,6 @@ import http from "node:http"
 import { isIP } from "node:net"
 import os from "node:os"
 import path from "node:path"
-import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import type { GuardSettings } from "../shared/types.js"
 import type { SettingsApplyState } from "../config/update.js"
@@ -32,6 +31,7 @@ import { isLocalAddress } from "./network.js"
 import { compareAudit } from "./compare.js"
 import { M } from "../shared/messages.js"
 import { field, notice } from "../shared/notice.js"
+import { sha256 } from "../shared/hash.js"
 
 export interface PanelOptions {
   root: string
@@ -161,7 +161,7 @@ function setSessionCookie(
 
 /** 计算配置文本的版本摘要。 */
 function revision(text: string): string {
-  return createHash("sha256").update(text).digest("hex")
+  return sha256(text)
 }
 
 /** 发送 JSON 响应。 */
