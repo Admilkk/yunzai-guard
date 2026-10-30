@@ -11,7 +11,7 @@ import {
 import { App as AntApp } from "antd"
 import { api, ApiError, setCsrf } from "./api"
 import { mergedDocument } from "./lib/config"
-import { documentChanges } from "./lib/diff"
+import { documentChanges, parseRaw } from "./lib/diff"
 import type { ConsoleValue, Draft, PluginRecord, SettingsApplyState } from "./types"
 
 /**
@@ -65,7 +65,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     () => (settings ? documentChanges(serverDoc, draft, rawText) : []),
     [draft, rawText, serverDoc, settings],
   )
-  const dirty = changes.length > 0
+  // 只改了注释时配置对象不变，但原文变了，同样需要保存。
+  const dirty = changes.length > 0 || (rawText !== null && rawText !== settings?.text)
   const current = useRef({ draft, serverDoc, rawText, dirty, settings })
   current.current = { draft, serverDoc, rawText, dirty, settings }
 
@@ -199,15 +200,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("beforeunload", beforeUnload)
   }, [])
 
-  const candidate = (): Draft => {
-    const value =
-      current.current.rawText === null
-        ? current.current.draft
-        : (JSON.parse(current.current.rawText) as Draft)
-    if (!value || typeof value !== "object" || Array.isArray(value))
-      throw new Error("配置顶层必须是 JSON 对象")
-    return value
-  }
+  const candidate = (): Draft =>
+    current.current.rawText === null ? current.current.draft : parseRaw(current.current.rawText)
 
   const update = (change: (value: Draft) => void): boolean => {
     if (savingRef.current) return false
@@ -225,20 +219,17 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  // 原始配置按原文保存才能保留注释，因此离开前须先保存或撤销，不再并入表单草稿。
   const commitRaw = () => {
     if (savingRef.current) return false
     if (current.current.rawText === null) return true
-    try {
-      const next = candidate()
-      const dirty = documentChanges(current.current.serverDoc, next, null).length > 0
-      current.current = { ...current.current, draft: next, rawText: null, dirty }
-      setDraft(next)
+    if (!current.current.dirty) {
+      current.current = { ...current.current, rawText: null }
       setRawText(null)
       return true
-    } catch {
-      message.error("JSON 格式错误或配置顶层不是对象")
-      return false
     }
+    message.warning("原始配置有未保存的修改，请先保存或撤销")
+    return false
   }
 
   const save = async () => {
@@ -248,9 +239,13 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     try {
       const value = candidate()
       assertIntegers(value)
+      const raw = current.current.rawText
       const result = await api("/api/settings", {
         method: "PUT",
-        body: JSON.stringify({ document: value, revision: current.current.settings?.revision }),
+        body: JSON.stringify({
+          ...(raw === null ? { document: value } : { raw }),
+          revision: current.current.settings?.revision,
+        }),
       })
       setApply(result.apply)
       await reload(false)
@@ -277,9 +272,10 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     try {
       const value = candidate()
       assertIntegers(value)
+      const raw = current.current.rawText
       const result = await api("/api/settings/validate", {
         method: "POST",
-        body: JSON.stringify({ document: value }),
+        body: JSON.stringify(raw === null ? { document: value } : { raw }),
       })
       if (!result.ok) throw new Error(result.error)
       message.success("校验通过")
@@ -295,6 +291,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     configurationLoaded,
     configurationError,
     settingsRevision: settings?.revision,
+    settingsText: settings?.text,
     error,
     meta,
     session,
@@ -312,7 +309,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       const dirty =
         text === null
           ? documentChanges(current.current.serverDoc, current.current.draft, null).length > 0
-          : documentChanges(current.current.serverDoc, current.current.draft, text).length > 0
+          : documentChanges(current.current.serverDoc, current.current.draft, text).length > 0 ||
+            text !== current.current.settings?.text
       current.current = { ...current.current, rawText: text, dirty }
       setRawText(text)
     },

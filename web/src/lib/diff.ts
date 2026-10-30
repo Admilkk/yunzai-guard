@@ -1,4 +1,12 @@
+import { parse } from "yaml"
 import type { Draft } from "../types"
+
+/** 解析原始配置文本（YAML，兼容 JSON），顶层须为对象；空文档视为空对象。 */
+export function parseRaw(text: string): Draft {
+  const value: unknown = parse(text, { uniqueKeys: true }) ?? {}
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("配置顶层必须是键值对象")
+  return value as Draft
+}
 
 export interface ConfigChange {
   path: string
@@ -54,7 +62,7 @@ function compare(
     }
     return
   }
-  changes.push({ path: path || "settings.json", before, after })
+  changes.push({ path: path || "settings.yaml", before, after })
 }
 
 /** 列出草稿相对当前配置的变化。 */
@@ -66,11 +74,11 @@ export function documentChanges(
   let after: unknown = draft
   if (rawText !== null) {
     try {
-      after = JSON.parse(rawText)
+      after = parseRaw(rawText)
     } catch {
       return [
         {
-          path: "settings.json",
+          path: "settings.yaml",
           before: server,
           after: rawText,
           invalid: true,
@@ -83,7 +91,7 @@ export function documentChanges(
     compare(server, after, "", changes, { nodes: maxNodes })
   } catch (error) {
     if (error !== comparisonLimit) throw error
-    return [{ path: "settings.json", before: server, after, limited: true }]
+    return [{ path: "settings.yaml", before: server, after, limited: true }]
   }
   return changes
 }

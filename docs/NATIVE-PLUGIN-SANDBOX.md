@@ -19,29 +19,25 @@ node plugins/yunzai-guard/dist/cli.js native disable my-plugin
 
 以下示例应按插件实际需求调整，不要直接授予无关数据：
 
-```json
-{
-  "pluginSandbox": {
-    "native": {
-      "plugins": [
-        {
-          "id": "my-plugin",
-          "timeoutMs": 10000,
-          "network": "none",
-          "hookAction": "deny",
-          "adapters": false,
-          "allowCoreRestart": false,
-          "writablePaths": ["data/my-plugin"],
-          "writableFiles": ["config/my-plugin.yaml"],
-          "redis": {
-            "read": ["my-plugin:*"],
-            "write": ["my-plugin:*"]
-          }
-        }
-      ]
-    }
-  }
-}
+```yaml
+pluginSandbox:
+  native:
+    plugins:
+      - id: my-plugin
+        timeoutMs: 10000
+        network: none
+        hookAction: deny
+        adapters: false
+        allowCoreRestart: false
+        writablePaths:
+          - data/my-plugin
+        writableFiles:
+          - config/my-plugin.yaml
+        redis:
+          read:
+            - my-plugin:*
+          write:
+            - my-plugin:*
 ```
 
 `hookAction` 为 `audit` 时允许并记录插件自身 JS 副本的修改，不能取得宿主或其他插件的函数引用。`deny` 拒绝修改，`restart` 按规则请求重启；全局规则不能扩展固定的 IPC 能力。
@@ -118,4 +114,4 @@ node app.js
 
 ## 内部脚本实验
 
-仓库另提供 vm2 受限脚本执行器、[脚本示例](../examples/plugin-sandbox/echo.js)及[配置示例](../settings.plugin-sandbox.example.json)，可通过 `dist/cli.js sandbox init echo` 准备示例。它使用独立脚本接口，不是现有 Yunzai 插件的透明接入方式，也不能代替上述系统隔离。
+仓库另提供 vm2 受限脚本执行器、[脚本示例](../examples/plugin-sandbox/echo.js)及[配置示例](../settings.plugin-sandbox.example.yaml)，可通过 `dist/cli.js sandbox init echo` 准备示例。它使用独立脚本接口，不是现有 Yunzai 插件的透明接入方式，也不能代替上述系统隔离。

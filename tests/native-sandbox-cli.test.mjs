@@ -3,6 +3,7 @@ import fs from "node:fs"
 import path from "node:path"
 import test from "node:test"
 import { nativeCommand } from "../dist/cli/native.js"
+import { parse } from "yaml"
 import { parseSettings } from "../dist/config/index.js"
 
 const runs = path.resolve("tests/runs")
@@ -10,7 +11,8 @@ function fixture(t, settings) {
   fs.mkdirSync(runs, { recursive: true })
   const root = fs.mkdtempSync(path.join(runs, "native-cli-")),
     state = path.join(root, "data/yunzai-guard"),
-    config = path.join(state, "settings.json")
+    config = path.join(state, "settings.yaml"),
+    legacy = path.join(state, "settings.json")
   const plugin = path.join(root, "plugins/Business")
   fs.mkdirSync(plugin, { recursive: true })
   fs.writeFileSync(
@@ -21,14 +23,15 @@ function fixture(t, settings) {
   fs.writeFileSync(path.join(root, "data/Business/original.json"), '{"seed":"original"}')
   if (settings) {
     fs.mkdirSync(state)
-    fs.writeFileSync(config, JSON.stringify(settings))
+    // 输入写成旧版 settings.json，命令执行后应转换为 settings.yaml。
+    fs.writeFileSync(legacy, JSON.stringify(settings))
   }
   t.after(() => {
     assert.equal(fs.realpathSync.native(path.dirname(root)), fs.realpathSync.native(runs))
     assert.ok(path.basename(root).startsWith("native-cli-"))
     fs.rmSync(root, { recursive: true, force: true })
   })
-  return { root, state, config, plugin }
+  return { root, state, config, legacy, plugin }
 }
 
 test("native CLI selects original plugins without executing or moving their source and data", async t => {
@@ -43,7 +46,7 @@ test("native CLI selects original plugins without executing or moving their sour
   assert.equal(fs.existsSync(f.state), false)
   const enabled = await nativeCommand(["enable", "Business"], f.root)
   assert.equal(enabled.restartRequired, true)
-  const settings = parseSettings(JSON.parse(fs.readFileSync(f.config)))
+  const settings = parseSettings(parse(fs.readFileSync(f.config, "utf8")))
   assert.deepEqual(settings.pluginSandbox.native.plugins[0], {
     id: "Business",
     enabled: true,
@@ -82,17 +85,17 @@ test("disable and reenable retain every explicit permission and exact original b
     },
   }
   const f = fixture(t, input),
-    before = fs.readFileSync(f.config)
+    before = fs.readFileSync(f.legacy)
   const result = await nativeCommand(["disable", "Business"], f.root)
   assert.deepEqual(fs.readFileSync(result.backup), before)
-  const disabled = JSON.parse(fs.readFileSync(f.config))
+  const disabled = parse(fs.readFileSync(f.config, "utf8"))
   assert.deepEqual(disabled.rules, input.rules)
   assert.deepEqual(disabled.pluginSandbox.native.plugins[0], {
     ...input.pluginSandbox.native.plugins[0],
     enabled: false,
   })
   await nativeCommand(["enable", "Business"], f.root)
-  const reenabled = JSON.parse(fs.readFileSync(f.config)).pluginSandbox.native.plugins[0]
+  const reenabled = parse(fs.readFileSync(f.config, "utf8")).pluginSandbox.native.plugins[0]
   assert.deepEqual(reenabled, { ...input.pluginSandbox.native.plugins[0], enabled: true })
   const bytes = fs.readFileSync(f.config),
     files = fs.readdirSync(f.state)
@@ -116,17 +119,17 @@ test("unsafe IDs, absent plugins and linked plugin directories never create sett
 
 test("CLI contention and invalid settings cannot clobber prior configuration", async t => {
   const f = fixture(t, { pluginSandbox: { native: { plugins: [] } } }),
-    before = fs.readFileSync(f.config)
+    before = fs.readFileSync(f.legacy)
   fs.writeFileSync(path.join(f.state, "sandbox-cli.lock"), "existing")
   await assert.rejects(nativeCommand(["enable", "Business"], f.root), { code: "EEXIST" })
-  assert.deepEqual(fs.readFileSync(f.config), before)
+  assert.deepEqual(fs.readFileSync(f.legacy), before)
   assert.equal(fs.readFileSync(path.join(f.state, "sandbox-cli.lock"), "utf8"), "existing")
   fs.unlinkSync(path.join(f.state, "sandbox-cli.lock"))
-  fs.writeFileSync(f.config, '{"badConfig":true}')
+  fs.writeFileSync(f.legacy, '{"badConfig":true}')
   await assert.rejects(
     nativeCommand(["enable", "Business"], f.root),
     /未知配置项：settings\.badConfig/,
   )
-  assert.equal(fs.readFileSync(f.config, "utf8"), '{"badConfig":true}')
+  assert.equal(fs.readFileSync(f.legacy, "utf8"), '{"badConfig":true}')
   assert.equal(fs.existsSync(path.join(f.state, "sandbox-cli.lock")), false)
 })

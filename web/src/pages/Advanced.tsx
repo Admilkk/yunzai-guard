@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react"
 import {
-  App,
+  Alert,
   Button,
   Card,
   Drawer,
@@ -32,6 +32,7 @@ import { actionOptions, ConfigField, networkOptions, violationOptions } from "..
 import { newRuleId } from "../lib/id"
 import { FieldLabel } from "../components/FieldHelp"
 import { BackupCard } from "../components/BackupCard"
+import { parseRaw } from "../lib/diff"
 
 /** 读取原生沙箱插件列表。 */
 function nativeList(document: Draft): any[] {
@@ -864,43 +865,43 @@ function ScriptsPage() {
   )
 }
 
-/** 原始配置编辑页面。 */
+/** 原始配置编辑页面：直接编辑 settings.yaml 原文，保存时按原文写入以保留注释。 */
 function RawPage() {
-  const { draft, rawText, setRawText, validate, saving } = useConsole()
-  const { message } = App.useApp()
+  const { rawText, setRawText, settingsText, dirty, validate, saving } = useConsole()
   let invalid = ""
   if (rawText !== null) {
     try {
-      const value = JSON.parse(rawText)
-      if (!value || typeof value !== "object" || Array.isArray(value))
-        invalid = "配置顶层必须是 JSON 对象"
+      parseRaw(rawText)
     } catch (error) {
       invalid = (error as Error).message
     }
   }
-  const format = () => {
-    try {
-      setRawText(JSON.stringify(JSON.parse(rawText ?? JSON.stringify(draft)), null, 2))
-    } catch {
-      message.error("JSON 语法错误")
-    }
-  }
+  // 表单的未保存修改不在原文里，先保存或撤销表单修改再编辑原文。
+  const locked = rawText === null && dirty
   return (
     <Card
-      title="settings.json"
+      title="settings.yaml"
       className="raw-card"
       extra={
         <Space>
-          {invalid && <Tag color="red">JSON 无效</Tag>}
-          <Button onClick={format} disabled={saving}>
-            格式化
+          {invalid && <Tag color="red">YAML 有误</Tag>}
+          <Button onClick={() => setRawText(null)} disabled={saving || rawText === null}>
+            撤销修改
           </Button>
-          <Button onClick={validate} disabled={saving}>
+          <Button onClick={validate} disabled={saving || locked}>
             校验
           </Button>
         </Space>
       }
     >
+      {locked && (
+        <Alert
+          type="info"
+          showIcon
+          className="raw-error"
+          message="表单中有未保存的修改，保存或撤销后才能编辑原始配置。"
+        />
+      )}
       {invalid && (
         <Typography.Text type="danger" className="raw-error" role="alert">
           {invalid}
@@ -908,11 +909,11 @@ function RawPage() {
       )}
       <Input.TextArea
         aria-label="原始配置"
-        value={rawText ?? JSON.stringify(draft, null, 2)}
+        value={rawText ?? settingsText ?? ""}
         onChange={event => setRawText(event.target.value)}
         autoSize={{ minRows: 24, maxRows: 40 }}
         className="raw-editor"
-        disabled={saving}
+        disabled={saving || locked}
         spellCheck={false}
       />
     </Card>

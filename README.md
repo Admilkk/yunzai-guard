@@ -153,7 +153,11 @@ TRSS 官方 Docker 脚本（`node . start`）与 `node . daemon` 守护模式会
 
 ## 配置与命令 ⚙️
 
-配置文件位于 Yunzai 根目录 `data/yunzai-guard/settings.json`，推荐通过控制台修改，保存后按字段自动生效（见[配置生效](docs/PERMISSIONS.md#配置生效)）。可从[默认配置示例](settings.example.json)开始。
+配置文件位于 Yunzai 根目录 `data/yunzai-guard/settings.yaml`，推荐通过控制台修改，保存后按字段自动生效（见[配置生效](docs/PERMISSIONS.md#配置生效)）；控制台保存时会保留文件中的注释与顺序。
+
+- `settings.yaml`：只写要修改的项，没写的项使用当前版本的默认值。直接编辑文件后需重启机器人。
+- `settings.default.yaml`：每次启动按当前版本重新生成，列出全部配置项、默认值与说明，仅供参考；新版本增加的配置项会自动出现在这里。也可查看仓库中的[完整示例](settings.example.yaml)。
+- `settings.json`：1.3 及更早版本使用的格式。升级后首次启动会自动转换为 `settings.yaml`，原文件保留并由 Guard 同步更新，供回退到旧版本时读取，请勿再编辑它。
 
 ```sh
 node plugins/yunzai-guard/dist/cli.js status   # 查看状态

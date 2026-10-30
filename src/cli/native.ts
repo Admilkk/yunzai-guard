@@ -5,14 +5,16 @@ import { parseSettings } from "../config/index.js"
 import { parseNativeSandbox } from "../native-sandbox/config.js"
 import {
   directory,
-  readConfig,
-  parseConfig,
-  unchanged,
+  readUserConfig,
+  configOrigin,
+  configUnchanged,
+  syncLegacy,
   createFile,
   removeOwned,
   maxSettingsBytes,
 } from "./settings.js"
 import { M } from "../shared/messages.js"
+import { renderSettings } from "../config/settings-file.js"
 
 /** 离线选择已有插件，不导入业务、迁移数据或自动授予权限。 */
 export async function nativeCommand(args: string[], root: string): Promise<unknown> {
@@ -25,7 +27,6 @@ export async function nativeCommand(args: string[], root: string): Promise<unkno
   )
     throw new Error(M.cli.nativeUsage)
   const state = directory(root, ["data", "yunzai-guard"], false)
-  const filename = path.join(state, "settings.json")
   const pluginDirectory = (pluginId: string) => {
     const target = directory(root, ["plugins", pluginId], false)
     if (!fs.existsSync(target) || !fs.lstatSync(target).isDirectory())
@@ -33,7 +34,7 @@ export async function nativeCommand(args: string[], root: string): Promise<unkno
     return target
   }
   if (!change) {
-    const plugins = parseSettings(parseConfig(readConfig(filename))).pluginSandbox.native.plugins
+    const plugins = parseSettings(readUserConfig(state).value).pluginSandbox.native.plugins
     if (command === "list")
       return { command, plugins, source: "configuration-only", executed: false }
     for (const plugin of plugins) if (plugin.enabled) pluginDirectory(plugin.id)
@@ -59,8 +60,8 @@ export async function nativeCommand(args: string[], root: string): Promise<unkno
   }
   const rollback: ReturnType<typeof createFile>[] = []
   try {
-    const original = readConfig(filename),
-      raw = parseConfig(original)
+    const config = readUserConfig(state)
+    const { filename, original, value: raw } = config
     const sandbox = (raw.pluginSandbox ?? {}) as Record<string, unknown>
     const native = (sandbox.native ?? {}) as Record<string, unknown>
     const plugins = [...((native.plugins ?? []) as Record<string, unknown>[])]
@@ -74,21 +75,23 @@ export async function nativeCommand(args: string[], root: string): Promise<unkno
     else plugins[index] = selection
     const updated = { ...raw, pluginSandbox: { ...sandbox, native: { ...native, plugins } } }
     parseSettings(updated)
-    const encoded = `${JSON.stringify(updated, null, 2)}\n`
+    const encoded = renderSettings(updated, { previous: config.text })
     if (Buffer.byteLength(encoded) > maxSettingsBytes) throw new Error(M.cli.settingsTooLarge)
+    const origin = configOrigin(config)
     const suffix = randomUUID(),
-      backup = original ? path.join(state, `settings.json.backup-${suffix}`) : undefined
-    if (backup) rollback.push(createFile(backup, original!))
+      backup = origin ? `${origin.filename}.backup-${suffix}` : undefined
+    if (backup) rollback.push(createFile(backup, origin!.bytes))
     const staged = createFile(path.join(state, `.settings-${suffix}.tmp`), encoded)
     rollback.push(staged)
     directory(root, ["data", "yunzai-guard"], false)
-    unchanged(filename, original)
+    configUnchanged(config)
     if (original) fs.renameSync(staged.name, filename)
     else {
       rollback.push(createFile(filename, encoded))
       removeOwned(staged)
     }
     rollback.length = 0
+    syncLegacy(state, updated)
     return {
       command,
       id,

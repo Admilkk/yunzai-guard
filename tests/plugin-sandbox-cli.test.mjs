@@ -3,19 +3,24 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { parse } from "yaml"
 import { sandboxCommand } from "../dist/cli/sandbox.js"
 
-function fixture(t, settings) {
+/** settings 默认写成旧版 settings.json（尚未转换），format 为 yaml 时写 settings.yaml。 */
+function fixture(t, settings, format = "json") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-sandbox-cli-"))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const state = path.join(root, "data/yunzai-guard")
-  const config = path.join(state, "settings.json")
+  const config = path.join(state, "settings.yaml")
+  const legacy = path.join(state, "settings.json")
   if (settings) {
     fs.mkdirSync(state, { recursive: true })
-    fs.writeFileSync(config, `${JSON.stringify(settings, null, 2)}\n`)
+    fs.writeFileSync(format === "yaml" ? config : legacy, `${JSON.stringify(settings, null, 2)}\n`)
   }
-  return { root, state, config, source: id => path.join(state, "scripts", `${id}.js`) }
+  return { root, state, config, legacy, source: id => path.join(state, "scripts", `${id}.js`) }
 }
+
+const readYaml = file => parse(fs.readFileSync(file, "utf8"))
 
 test("sandbox CLI defaults to an empty offline list without creating runtime files", async t => {
   const f = fixture(t)
@@ -33,7 +38,9 @@ test("sandbox init creates a reply-only script and configuration; repeated init 
   assert.equal(result.backup, undefined)
   const before = fs.readFileSync(f.config, "utf8")
   const script = fs.readFileSync(f.source("hello"), "utf8")
-  const settings = JSON.parse(before)
+  const settings = parse(before)
+  assert.match(before, /^# Yunzai Guard 配置/)
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.legacy, "utf8")), settings)
   assert.deepEqual(settings.pluginSandbox.plugins, [
     { id: "hello", enabled: true, match: "#hello*", capabilities: ["reply"] },
   ])
@@ -56,10 +63,12 @@ test("sandbox init preserves unrelated settings and records exact original bytes
     pluginSandbox: { defaults: { timeoutMs: 250 }, plugins: [] },
   }
   const f = fixture(t, original)
-  const bytes = fs.readFileSync(f.config)
+  const bytes = fs.readFileSync(f.legacy)
   const result = await sandboxCommand(["init", "second"], f.root)
+  // 尚未转换时读取的是 settings.json，它会被改写为镜像，原始字节须留有备份。
   assert.deepEqual(fs.readFileSync(result.backup), bytes)
-  const updated = JSON.parse(fs.readFileSync(f.config, "utf8"))
+  const updated = readYaml(f.config)
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.legacy, "utf8")), updated)
   assert.deepEqual(updated.protect, original.protect)
   assert.deepEqual(updated.rules, original.rules)
   assert.equal(updated.pluginSandbox.defaults.timeoutMs, 250)
@@ -89,9 +98,10 @@ test("sandbox check validates sources without evaluating Node side effects", asy
 
 test("sandbox init rejects legacy settings, occupied sources, invalid ids and concurrent CLI locks", async t => {
   const old = fixture(t, { strictJs: { plugins: [] } })
-  const bytes = fs.readFileSync(old.config)
+  const bytes = fs.readFileSync(old.legacy)
   await assert.rejects(sandboxCommand(["init", "migrate"], old.root), /strictJs.*pluginSandbox/)
-  assert.deepEqual(fs.readFileSync(old.config), bytes)
+  assert.deepEqual(fs.readFileSync(old.legacy), bytes)
+  assert.equal(fs.existsSync(old.config), false)
   assert.equal(fs.existsSync(old.source("migrate")), false)
   const occupied = fixture(t)
   fs.mkdirSync(path.dirname(occupied.source("hello")), { recursive: true })
@@ -111,15 +121,12 @@ test("sandbox CLI rejects linked settings and source directories without touchin
   const f = fixture(t, {})
   const outside = path.join(f.root, "outside.json")
   fs.writeFileSync(outside, "{}\n")
-  fs.unlinkSync(f.config)
-  fs.linkSync(outside, f.config)
+  fs.unlinkSync(f.legacy)
+  fs.linkSync(outside, f.legacy)
   for (const args of [["list"], ["check"], ["init", "hello"]])
-    await assert.rejects(
-      sandboxCommand(args, f.root),
-      /settings\.json 须为单链接普通文件且不超过 1 MiB/,
-    )
+    await assert.rejects(sandboxCommand(args, f.root), /配置文件须为单链接普通文件且不超过 1 MiB/)
   assert.equal(fs.readFileSync(outside, "utf8"), "{}\n")
-  fs.unlinkSync(f.config)
+  fs.unlinkSync(f.legacy)
   fs.mkdirSync(path.join(f.root, "outside-scripts"))
   fs.symlinkSync(
     path.join(f.root, "outside-scripts"),
@@ -132,7 +139,7 @@ test("sandbox CLI rejects linked settings and source directories without touchin
 })
 
 test("sandbox init rolls back only its own files after configuration commit failure", async t => {
-  const f = fixture(t, { protect: { action: "audit" } })
+  const f = fixture(t, { protect: { action: "audit" } }, "yaml")
   const before = fs.readFileSync(f.config)
   const rename = fs.renameSync
   fs.renameSync = (from, to) => {
@@ -146,28 +153,31 @@ test("sandbox init rolls back only its own files after configuration commit fail
   }
   assert.deepEqual(fs.readFileSync(f.config), before)
   assert.equal(fs.existsSync(f.source("rollback")), false)
-  assert.deepEqual(fs.readdirSync(f.state).sort(), ["scripts", "settings.json"])
+  assert.deepEqual(fs.readdirSync(f.state).sort(), ["scripts", "settings.yaml"])
 })
 
-test("sandbox init detects a concurrent configuration edit and preserves the editor's content", async t => {
-  const f = fixture(t, {})
-  const concurrent = '{"protect":{"action":"deny"}}\n'
-  const open = fs.openSync
-  let edited = false
-  fs.openSync = (filename, ...args) => {
-    if (String(filename).includes(".settings-") && String(filename).endsWith(".tmp") && !edited) {
-      edited = true
-      fs.writeFileSync(f.config, concurrent)
+for (const format of ["yaml", "json"])
+  test(`sandbox init detects a concurrent edit of settings.${format} and preserves the editor's content`, async t => {
+    // json：尚未转换时读的是 settings.json，它同样要做并发检测，否则写镜像时会覆盖他人的修改。
+    const f = fixture(t, {}, format)
+    const target = format === "yaml" ? f.config : f.legacy
+    const concurrent = '{"protect":{"action":"deny"}}\n'
+    const open = fs.openSync
+    let edited = false
+    fs.openSync = (filename, ...args) => {
+      if (String(filename).includes(".settings-") && String(filename).endsWith(".tmp") && !edited) {
+        edited = true
+        fs.writeFileSync(target, concurrent)
+      }
+      return open(filename, ...args)
     }
-    return open(filename, ...args)
-  }
-  try {
-    await assert.rejects(sandboxCommand(["init", "concurrent"], f.root), /其他操作修改/)
-  } finally {
-    fs.openSync = open
-  }
-  assert.equal(edited, true)
-  assert.equal(fs.readFileSync(f.config, "utf8"), concurrent)
-  assert.equal(fs.existsSync(f.source("concurrent")), false)
-  assert.deepEqual(fs.readdirSync(f.state).sort(), ["scripts", "settings.json"])
-})
+    try {
+      await assert.rejects(sandboxCommand(["init", "concurrent"], f.root), /其他操作修改/)
+    } finally {
+      fs.openSync = open
+    }
+    assert.equal(edited, true)
+    assert.equal(fs.readFileSync(target, "utf8"), concurrent)
+    assert.equal(fs.existsSync(f.source("concurrent")), false)
+    assert.deepEqual(fs.readdirSync(f.state).sort(), ["scripts", `settings.${format}`])
+  })

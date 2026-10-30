@@ -310,12 +310,17 @@ test("HTTP 结构化审计和插件汇总可读，配置保存拒绝旧版本覆
   assert.equal(saved.status, 200)
   assert.equal(saved.body.pendingRestart, true)
   assert.equal((await app.request("/api/settings", update)).status, 409)
+  // 保存写入 settings.yaml（带注释），并同步旧版本回退用的 settings.json 镜像。
+  const yaml = fs.readFileSync(path.join(app.stateDir, "settings.yaml"), "utf8")
+  assert.match(yaml, /^# Yunzai Guard 配置/)
+  assert.match(yaml, /startupTimeout: 61000/)
   assert.equal(
     JSON.parse(fs.readFileSync(path.join(app.stateDir, "settings.json"))).startupTimeout,
     61000,
   )
+  // JSON 写法同样是合法的 YAML；旧字段 strictJs 仍按兼容规则读取。
   const legacy = { strictJs: { timeoutMs: 1400, plugins: [] } }
-  fs.writeFileSync(path.join(app.stateDir, "settings.json"), JSON.stringify(legacy))
+  fs.writeFileSync(path.join(app.stateDir, "settings.yaml"), JSON.stringify(legacy))
   const compatible = await app.request("/api/settings", session)
   assert.deepEqual(compatible.body.document, legacy)
   assert.equal(compatible.body.normalized.pluginSandbox.timeoutMs, 1400)

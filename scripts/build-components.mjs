@@ -18,8 +18,8 @@ const metaFiles = new Set([
   "CHANGELOG.md",
   "LICENSE",
   "SECURITY.md",
-  "settings.example.json",
-  "settings.plugin-sandbox.example.json",
+  "settings.example.yaml",
+  "settings.plugin-sandbox.example.yaml",
 ])
 
 // 宿主外壳：Guard 宿主进程、启动器、CLI、控制台转印与 PM2 适配的入口。

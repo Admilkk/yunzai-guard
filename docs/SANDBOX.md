@@ -4,16 +4,17 @@
 
 ## 配置
 
-在面板保存以下设置会协调重建业务进程；手工合并到 `data/yunzai-guard/settings.json` 时，仍需完整重启宿主：
+在面板保存以下设置会协调重建业务进程；手工合并到 `data/yunzai-guard/settings.yaml` 时，仍需完整重启宿主：
 
-```json
-{
-  "isolationMode": "os-sandbox",
-  "sandbox": {
-    "network": "none",
-    "writablePaths": ["data", "temp", "logs", "config/config"]
-  }
-}
+```yaml
+isolationMode: os-sandbox
+sandbox:
+  network: none
+  writablePaths:
+    - data
+    - temp
+    - logs
+    - config/config
 ```
 
 示例沿用默认运行目录。网络 `none` 阻止直接网络连接，使用网络协议的业务需要明确选择 `host` 并评估服务端权限；`host` 不限制目的地址。审计规则的允许或记录动作不能扩大系统权限。

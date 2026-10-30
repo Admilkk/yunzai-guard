@@ -44,12 +44,19 @@ Worker 构造器别名和子类同样经过预加载；Guard 的环境元数据�
 
 `listen`、`filesystem` 和 `native` 是 1.0.0 新增的**显式类型**：只有规则的 `kind` 原样写出它们时才匹配。省略 `kind`、写 `*` 或其他通配的规则不作用于这三类事件，因此升级前写下的宽泛规则不会意外拦截文件写入、原生扩展加载或端口监听。例如：
 
-```json
-[
-  { "id": "web-panel", "plugin": "web-dashboard", "kind": "listen", "action": "audit" },
-  { "id": "no-listen", "kind": "listen", "action": "deny" },
-  { "id": "no-native", "kind": ["native"], "plugin": "untrusted-*", "action": "deny" }
-]
+```yaml
+- id: web-panel
+  plugin: web-dashboard
+  kind: listen
+  action: audit
+- id: no-listen
+  kind: listen
+  action: deny
+- id: no-native
+  kind:
+    - native
+  plugin: untrusted-*
+  action: deny
 ```
 
 宿主重算、工作进程检查和控制台预览使用同一套匹配规则。
@@ -101,15 +108,13 @@ Guard 在 `process.dlopen` 记录原生扩展路径和加载插件，可用 `kin
 
 例如将下列规则加入 `rules`，可以阻止指定入口并请求重建工作进程：
 
-```json
-{
-  "id": "block-dangerous-method",
-  "kind": "plugin",
-  "plugin": "example-plugin",
-  "operation": "plugin.call",
-  "target": "dangerousAction",
-  "action": "restart"
-}
+```yaml
+id: block-dangerous-method
+kind: plugin
+plugin: example-plugin
+operation: plugin.call
+target: dangerousAction
+action: restart
 ```
 
 规则遵循[第一条匹配生效](PERMISSIONS.md)。插件自行 `import()`、自行构造类或保存未包装引用，不会自动纳入上述核心检查点。

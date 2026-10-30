@@ -1,6 +1,6 @@
 # 默认观察与权限规则
 
-配置文件位于 Yunzai 根目录的 `data/yunzai-guard/settings.json`，可参考[默认配置示例](../settings.example.json)。
+配置文件位于 Yunzai 根目录的 `data/yunzai-guard/settings.yaml`，全部配置项与说明见同目录自动生成的 `settings.default.yaml`，也可参考仓库中的[完整示例](../settings.example.yaml)。
 
 ## 默认行为
 
@@ -38,23 +38,16 @@
 
 以下示例主动禁止外部命令和某个插件的网络访问，不属于默认配置：
 
-```json
-{
-  "rules": [
-    {
-      "id": "global-shell-policy",
-      "kind": "process",
-      "operation": "exec*",
-      "action": "deny"
-    },
-    {
-      "id": "one-plugin-network-policy",
-      "plugin": "sample-plugin",
-      "kind": "network",
-      "action": "deny"
-    }
-  ]
-}
+```yaml
+rules:
+  - id: global-shell-policy
+    kind: process
+    operation: exec*
+    action: deny
+  - id: one-plugin-network-policy
+    plugin: sample-plugin
+    kind: network
+    action: deny
 ```
 
 插件例外应放在相应宽规则之前。全局和单插件规则没有额外的隐式优先级。来源不能确认时记为 `unknown`；调用栈和插件名称只是归因提示，不能证明恶意代码身份。

@@ -22,8 +22,8 @@ const files = [
   "CHANGELOG.md",
   "LICENSE",
   "SECURITY.md",
-  "settings.example.json",
-  "settings.plugin-sandbox.example.json",
+  "settings.example.yaml",
+  "settings.plugin-sandbox.example.yaml",
 ]
 const name = `yunzai-guard-v${pkg.version}`
 const hash = file => createHash("sha256").update(fs.readFileSync(file)).digest("hex")

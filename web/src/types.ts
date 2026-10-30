@@ -58,6 +58,8 @@ export interface ConsoleValue {
   configurationLoaded: boolean
   configurationError: string | null
   settingsRevision?: string
+  /** settings.yaml 原文，原始配置页据此编辑。 */
+  settingsText?: string
   error: string
   meta: Record<string, any> | null
   session: Record<string, any> | null

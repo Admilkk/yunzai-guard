@@ -3,6 +3,7 @@ import path from "node:path"
 import { parseSettings } from "../config/index.js"
 import { M } from "../shared/messages.js"
 import { isOrdinaryFile } from "../shared/files.js"
+import { parseSettingsText, settingsFiles, writeLegacyMirror } from "../config/settings-file.js"
 
 export const maxSettingsBytes = 1024 * 1024
 
@@ -49,14 +50,56 @@ export function readConfig(filename: string): Buffer | undefined {
   }
 }
 
-/** 解析配置字节，空内容视为空对象。 */
-export function parseConfig(bytes?: Buffer): Record<string, unknown> {
-  if (!bytes) return {}
+/** 解码配置字节；YAML 允许 BOM，旧版 JSON 保持原有要求。 */
+function decode(bytes: Buffer, yaml: boolean): string {
   const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
-  if (text.charCodeAt(0) === 0xfeff) throw new Error(M.cli.settingsEncoding)
-  const value: unknown = JSON.parse(text)
+  if (text.charCodeAt(0) !== 0xfeff) return text
+  if (!yaml) throw new Error(M.cli.settingsEncoding)
+  return text.slice(1)
+}
+
+export interface UserConfig {
+  /** settings.yaml 路径，写入目标。 */
+  filename: string
+  /** settings.yaml 的原始字节；尚未转换为 YAML 时为 undefined。 */
+  original?: Buffer
+  /** settings.yaml 原文，写入时据此保留注释。 */
+  text?: string
+  /** 尚未转换时读取的旧版 settings.json；写入后它会被改写为镜像，需备份并检查并发修改。 */
+  legacy?: { filename: string; bytes: Buffer }
+  value: Record<string, unknown>
+}
+
+/** 本次修改实际读取的文件及其原始字节，用于备份。 */
+export function configOrigin(config: UserConfig): { filename: string; bytes: Buffer } | undefined {
+  return config.original ? { filename: config.filename, bytes: config.original } : config.legacy
+}
+
+/** 确认读取过的配置文件在提交前都未被他人修改。 */
+export function configUnchanged(config: UserConfig): void {
+  unchanged(config.filename, config.original)
+  if (config.legacy) unchanged(config.legacy.filename, config.legacy.bytes)
+}
+
+/** 读取并校验用户配置：优先 settings.yaml，只有旧版 settings.json 时读取它，写入时转换为 YAML。 */
+export function readUserConfig(state: string): UserConfig {
+  const filename = path.join(state, settingsFiles.user)
+  const original = readConfig(filename)
+  if (original) {
+    const text = decode(original, true)
+    const value = parseSettingsText(text)
+    parseSettings(value)
+    return { filename, original, text, value }
+  }
+  const legacyName = path.join(state, settingsFiles.legacy)
+  const legacy = readConfig(legacyName)
+  const value: unknown = legacy ? JSON.parse(decode(legacy, false)) : {}
   parseSettings(value)
-  return value as Record<string, unknown>
+  return {
+    filename,
+    ...(legacy ? { legacy: { filename: legacyName, bytes: legacy } } : {}),
+    value: value as Record<string, unknown>,
+  }
 }
 
 /** 确认配置文件自读取后未被修改。 */
@@ -97,5 +140,14 @@ export function removeOwned(file: OwnedFile): void {
       fs.unlinkSync(file.name)
   } catch (error) {
     if (!missing(error)) throw error
+  }
+}
+
+/** 同步旧版本回退用的 settings.json；失败时由下次宿主启动补齐。 */
+export function syncLegacy(state: string, value: Record<string, unknown>): void {
+  try {
+    writeLegacyMirror(state, value)
+  } catch {
+    // 镜像只供回退旧版本使用。
   }
 }

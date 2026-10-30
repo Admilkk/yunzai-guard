@@ -32,6 +32,7 @@ import { compareAudit } from "./compare.js"
 import { M } from "../shared/messages.js"
 import { field, notice } from "../shared/notice.js"
 import { sha256 } from "../shared/hash.js"
+import { parseSettingsText } from "../config/settings-file.js"
 
 export interface PanelOptions {
   root: string
@@ -736,8 +737,13 @@ export class GuardPanel {
     }
     if (route === "POST /api/settings/validate") {
       const body = await readBody(request)
-      const value = isPlainObject(body) ? body.document : undefined
       try {
+        const value =
+          isPlainObject(body) && typeof body.raw === "string"
+            ? parseSettingsText(body.raw)
+            : isPlainObject(body)
+              ? body.document
+              : undefined
         validateSettingsDocument(this.#options.stateDir, value)
       } catch (error) {
         return sendJson(response, 200, { ok: false, error: (error as Error).message })
@@ -748,18 +754,14 @@ export class GuardPanel {
       const body = await readBody(request)
       const active = this.#options.getSettings?.() ?? this.#options.settings
       this.#checkSettingsRevision(body)
-      let value: unknown = isPlainObject(body) ? body.document : undefined
-      if (isPlainObject(body) && typeof body.raw === "string") {
-        try {
-          value = JSON.parse(body.raw)
-        } catch (error) {
-          throw new PanelError(400, M.web.jsonParse((error as Error).message))
-        }
-      }
+      // 原始配置页提交 YAML 原文，按原文写入以保留注释；表单提交配置对象。
+      const raw = isPlainObject(body) && typeof body.raw === "string" ? body.raw : undefined
+      const value: unknown =
+        raw !== undefined ? parseSettingsText(raw) : isPlainObject(body) ? body.document : undefined
       let result: ReturnType<typeof writeSettingsDocument>
       const normalized = validateSettingsDocument(this.#options.stateDir, value)
       try {
-        result = writeSettingsDocument(this.#options.stateDir, active, value)
+        result = writeSettingsDocument(this.#options.stateDir, active, value, raw)
       } catch (error) {
         if (error instanceof TypeError) throw error
         throw new PanelError(500, M.web.writeFailed((error as Error).message))

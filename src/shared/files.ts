@@ -20,20 +20,23 @@ export function readJsonFile(file: string, maxBytes = 4 * 1024 * 1024): unknown 
 }
 
 /**
- * 原子写入 JSON：先写同目录临时文件再改名替换，进程中途退出也不会留下半截文件。
+ * 原子写入文本：先写同目录临时文件再改名替换，进程中途退出也不会留下半截文件。
  * 权限 0600，按需创建目录；失败时清理临时文件并抛出。
  */
-export function writeJsonFile(file: string, value: unknown, options: { pretty?: boolean } = {}) {
+export function writeTextFile(file: string, text: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const temporary = `${file}.${randomBytes(6).toString("hex")}.tmp`
   try {
-    fs.writeFileSync(temporary, `${JSON.stringify(value, null, options.pretty ? 2 : 0)}\n`, {
-      mode: 0o600,
-    })
+    fs.writeFileSync(temporary, text, { mode: 0o600 })
     fs.renameSync(temporary, file)
   } finally {
     fs.rmSync(temporary, { force: true })
   }
+}
+
+/** 原子写入 JSON，见 writeTextFile。 */
+export function writeJsonFile(file: string, value: unknown, options: { pretty?: boolean } = {}) {
+  writeTextFile(file, `${JSON.stringify(value, null, options.pretty ? 2 : 0)}\n`)
 }
 
 /** 是否为普通文件：不是符号链接且只有一个硬链接，避免链接把读写引向别处；可附加大小上限。 */

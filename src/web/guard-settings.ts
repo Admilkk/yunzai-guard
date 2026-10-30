@@ -1,16 +1,25 @@
 import fs from "node:fs"
 import path from "node:path"
-import { parseSettings } from "../config/index.js"
+import { parseSettings, settingsDefaults } from "../config/index.js"
+import {
+  parseSettingsSource,
+  parseSettingsText,
+  readSettingsSource,
+  renderSettings,
+  settingsFiles,
+  starterSettingsText,
+  writeSettingsText,
+  type SettingsSource,
+} from "../config/settings-file.js"
 import type { GuardSettings } from "../shared/types.js"
 import { M } from "../shared/messages.js"
-import { writeJsonFile } from "../shared/files.js"
 
 export interface SettingsDocument {
   path: string
-  /** 可直接编辑的 JSON 对象；文件缺失时以当前生效配置作为起点。 */
+  /** 可直接编辑的配置对象；文件缺失时以当前生效配置作为起点。 */
   document: Record<string, unknown>
   normalized?: Record<string, unknown>
-  /** 磁盘原文，供“原始配置”页面直接编辑。 */
+  /** 磁盘原文（settings.yaml，尚未转换时为旧版 settings.json），供“原始配置”页面直接编辑。 */
   text: string
   source: "file" | "defaults"
   valid: boolean
@@ -23,11 +32,9 @@ export interface SettingsSaveResult {
   backup: string | null
 }
 
-const maxSettingsBytes = 1024 * 1024
-
 /** 返回 Guard 配置文件路径。 */
 export function guardSettingsPath(stateDir: string): string {
-  return path.join(stateDir, "settings.json")
+  return path.join(stateDir, settingsFiles.user)
 }
 
 /** 把配置转为可序列化的普通对象。 */
@@ -47,64 +54,60 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
 
 /** 读取磁盘上的配置；只有宿主能读这个目录，面板因此也运行在宿主进程。 */
 export function readSettingsDocument(stateDir: string, active: GuardSettings): SettingsDocument {
-  const file = guardSettingsPath(stateDir)
   const fallback = serializeSettings(active)
-  let text: string | undefined
+  let source: SettingsSource | undefined
   try {
-    const info = fs.statSync(file)
-    if (info.isFile() && info.size <= maxSettingsBytes) text = fs.readFileSync(file, "utf8")
+    source = readSettingsSource(stateDir)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
-  }
-  if (!text?.trim())
     return {
-      path: file,
+      path: guardSettingsPath(stateDir),
       document: fallback,
-      text: `${JSON.stringify(fallback, null, 2)}\n`,
+      text: "",
+      source: "defaults",
+      valid: false,
+      error: (error as Error).message,
+      pendingRestart: false,
+    }
+  }
+  if (!source?.text.trim())
+    return {
+      path: guardSettingsPath(stateDir),
+      document: fallback,
+      text: source?.text ?? starterSettingsText(),
       source: "defaults",
       valid: true,
       pendingRestart: false,
     }
-  let parsed: unknown
+  let parsed: Record<string, unknown>
   try {
-    parsed = JSON.parse(text)
+    parsed = parseSettingsSource(source)
   } catch (error) {
     return {
-      path: file,
+      path: source.file,
       document: fallback,
-      text,
+      text: source.text,
       source: "defaults",
       valid: false,
-      error: `settings.json 不是合法 JSON：${(error as Error).message}`,
+      error: (error as Error).message,
       pendingRestart: false,
     }
   }
-  if (!isPlainObject(parsed))
-    return {
-      path: file,
-      document: fallback,
-      text,
-      source: "defaults",
-      valid: false,
-      error: "settings.json 顶层必须是 JSON 对象",
-      pendingRestart: false,
-    }
   try {
     const normalized = parseSettings(parsed)
     return {
-      path: file,
+      path: source.file,
       document: parsed,
       normalized: serializeSettings(normalized),
-      text,
+      text: source.text,
       source: "file",
       valid: true,
       pendingRestart: canonical(normalized) !== canonical(active),
     }
   } catch (error) {
     return {
-      path: file,
+      path: source.file,
       document: parsed,
-      text,
+      text: source.text,
       source: "file",
       valid: false,
       error: (error as Error).message,
@@ -114,25 +117,27 @@ export function readSettingsDocument(stateDir: string, active: GuardSettings): S
 }
 
 const historyKeep = 30
+const backupName = /^settings-[\w-]+\.(?:json|yaml)$/
 
 /** 历史备份目录。 */
-function historyDirectory(file: string): string {
-  return path.join(path.dirname(file), "settings-history")
+function historyDirectory(stateDir: string): string {
+  return path.join(stateDir, "settings-history")
 }
 
 /** 备份当前配置文件：覆盖最近一份 .bak，并在历史目录保留最近 30 份，返回备份路径。 */
-function backupFile(file: string): string | null {
+function backupFile(stateDir: string): string | null {
   try {
-    if (!fs.existsSync(file)) return null
-    const target = `${file}.bak`
-    fs.copyFileSync(file, target)
-    const directory = historyDirectory(file)
+    const source = readSettingsSource(stateDir)
+    if (!source) return null
+    const target = `${source.file}.bak`
+    fs.copyFileSync(source.file, target)
+    const directory = historyDirectory(stateDir)
     fs.mkdirSync(directory, { recursive: true })
     const stamp = new Date().toISOString().replace(/[:.]/g, "-")
-    fs.copyFileSync(file, path.join(directory, `settings-${stamp}.json`))
+    fs.copyFileSync(source.file, path.join(directory, `settings-${stamp}.${source.format}`))
     const names = fs
       .readdirSync(directory)
-      .filter(name => /^settings-[\w-]+\.json$/.test(name))
+      .filter(name => backupName.test(name))
       .sort()
     for (const name of names.slice(0, Math.max(0, names.length - historyKeep)))
       fs.rmSync(path.join(directory, name), { force: true })
@@ -150,11 +155,11 @@ export interface SettingsBackup {
 
 /** 列出历史配置备份，新的在前。 */
 export function listSettingsBackups(stateDir: string): SettingsBackup[] {
-  const directory = historyDirectory(guardSettingsPath(stateDir))
+  const directory = historyDirectory(stateDir)
   try {
     return fs
       .readdirSync(directory)
-      .filter(name => /^settings-[\w-]+\.json$/.test(name))
+      .filter(name => backupName.test(name))
       .sort()
       .reverse()
       .map(id => {
@@ -166,27 +171,42 @@ export function listSettingsBackups(stateDir: string): SettingsBackup[] {
   }
 }
 
-/** 读取一份历史备份的文本；编号只接受备份文件名。 */
-export function readSettingsBackup(stateDir: string, id: string): string | undefined {
-  if (!/^settings-[\w-]+\.json$/.test(id)) return undefined
+/** 读取一份历史备份；编号只接受备份文件名。YAML 备份同时返回原文，恢复时可保留注释。 */
+export function readSettingsBackup(
+  stateDir: string,
+  id: string,
+): { document: Record<string, unknown>; raw?: string } | undefined {
+  if (!backupName.test(id)) return undefined
+  let text: string
   try {
-    return fs.readFileSync(path.join(historyDirectory(guardSettingsPath(stateDir)), id), "utf8")
+    text = fs.readFileSync(path.join(historyDirectory(stateDir), id), "utf8")
   } catch {
     return undefined
   }
+  if (id.endsWith(".yaml")) return { document: parseSettingsText(text, id), raw: text }
+  return { document: parseSettingsSource({ file: id, format: "json", text }) }
 }
 
-/** 校验后原子写入，配置应用由宿主处理。 */
+/**
+ * 校验后原子写入，配置应用由宿主处理。传入 raw 时按原文写入；否则在现有 settings.yaml 上
+ * 只改变化的值，保留注释与顺序，并且不新增与默认值相同的项。
+ */
 export function writeSettingsDocument(
   stateDir: string,
   active: GuardSettings,
   value: unknown,
+  raw?: string,
 ): SettingsSaveResult {
   if (!isPlainObject(value)) throw new TypeError(M.web.settingsObject)
   const normalized = validateSettingsDocument(stateDir, value)
-  const file = guardSettingsPath(stateDir)
-  const backup = backupFile(file)
-  writeJsonFile(file, value, { pretty: true })
+  const source = readSettingsSource(stateDir)
+  // 尚未转换的旧版 settings.json 先完整转换（保留其中所有项），再在其上应用修改。
+  const previous =
+    source?.format === "json" ? renderSettings(parseSettingsSource(source)) : source?.text
+  const text =
+    raw ?? renderSettings(value, { previous, defaults: settingsDefaults(), omitDefaults: true })
+  const backup = backupFile(stateDir)
+  writeSettingsText(stateDir, text)
   return { pendingRestart: canonical(normalized) !== canonical(active), backup }
 }
 
