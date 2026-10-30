@@ -15,8 +15,8 @@ import {
   type AdapterRegistration,
   type AdapterSelector,
   type AdapterValue,
-} from "./adapter-protocol.js"
-import { M } from "../shared/messages.js"
+} from "./protocol.js"
+import { M } from "../../shared/messages.js"
 
 type Row = Record<string, unknown>
 interface OwnedAccount {

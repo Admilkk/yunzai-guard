@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { performance } from "node:perf_hooks"
-import { adapterDto } from "./adapter-protocol.js"
+import { adapterDto } from "../adapter/protocol.js"
 import {
   decodeMediaBase64,
   imageMime,
@@ -8,13 +8,13 @@ import {
   mediaObject,
   mediaRequestId,
   nativeMediaLimits,
-} from "./media-protocol.js"
+} from "./protocol.js"
 import {
   parseImageSource,
   transformImageSourceArgs,
   type NativeImageSource,
-} from "./media-source-protocol.js"
-import type { NativeMediaGuestOptions } from "./media-guest.js"
+} from "./source-protocol.js"
+import type { NativeMediaGuestOptions } from "./guest.js"
 
 export type NativeMediaSourceService = (
   service: "media-source",

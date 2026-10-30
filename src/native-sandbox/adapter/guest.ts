@@ -21,7 +21,7 @@ import {
   type AdapterRegistration,
   type AdapterSelector,
   type AdapterValue,
-} from "./adapter-protocol.js"
+} from "./protocol.js"
 
 type Row = Record<string, unknown>
 type Method = (...args: unknown[]) => unknown

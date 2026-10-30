@@ -10,8 +10,8 @@ import {
   parseBotEventHandle,
   type NativeBotEventFrame,
   type NativeBotEventValue,
-} from "./bot-events-protocol.js"
-import { M } from "../shared/messages.js"
+} from "./protocol.js"
+import { M } from "../../shared/messages.js"
 
 type Callback = (...args: unknown[]) => unknown
 interface Subscription {

@@ -5,7 +5,7 @@ import {
   nativeMediaLimits,
   parseImageOpen,
   type NativeImageOpen,
-} from "./media-protocol.js"
+} from "./protocol.js"
 
 export interface NativeImageSource extends NativeImageOpen {
   $type: "NativeImageSource"

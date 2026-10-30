@@ -6,13 +6,13 @@ import path from "node:path"
 import http from "node:http"
 import { createHash, randomUUID } from "node:crypto"
 import { pathToFileURL } from "node:url"
-import { NativeMediaHost } from "../dist/native-sandbox/media-host.js"
-import { NativeMediaGuest } from "../dist/native-sandbox/media-guest.js"
+import { NativeMediaHost } from "../dist/native-sandbox/media/host.js"
+import { NativeMediaGuest } from "../dist/native-sandbox/media/guest.js"
 import {
   imageMime,
   nativeMediaLimits as limits,
   parseMediaReply,
-} from "../dist/native-sandbox/media-protocol.js"
+} from "../dist/native-sandbox/media/protocol.js"
 import { installInstrumentation } from "../dist/instrumentation/index.js"
 import { parseSettings } from "../dist/config/index.js"
 

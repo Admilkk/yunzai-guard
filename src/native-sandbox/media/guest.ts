@@ -19,7 +19,7 @@ import {
   type NativeMediaMethod,
   type NativeReplyArguments,
   type NativeReplySegment,
-} from "./media-protocol.js"
+} from "./protocol.js"
 
 export type NativeMediaService = (
   service: "media",

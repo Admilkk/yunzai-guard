@@ -6,8 +6,8 @@ import {
   parseBotEventArguments,
   parseBotEventFrame,
   type NativeBotEventValue,
-} from "./bot-events-protocol.js"
-import { M } from "../shared/messages.js"
+} from "./protocol.js"
+import { M } from "../../shared/messages.js"
 
 type Listener = (...args: unknown[]) => unknown
 interface OwnedListener {

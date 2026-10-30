@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { performance } from "node:perf_hooks"
-import { adapterDto, type AdapterValue } from "./adapter-protocol.js"
-import { sha256 } from "../shared/hash.js"
+import { adapterDto, type AdapterValue } from "../adapter/protocol.js"
+import { sha256 } from "../../shared/hash.js"
 import {
   imageMime,
   mediaArgument,
@@ -10,14 +10,14 @@ import {
   mediaObject,
   mediaRequestId,
   nativeMediaLimits,
-} from "./media-protocol.js"
+} from "./protocol.js"
 import {
   parseImageSource,
   sourceHandle,
   transformImageSourceArgs,
   type NativeImageSource,
   type NativeImageSourceChunk,
-} from "./media-source-protocol.js"
+} from "./source-protocol.js"
 
 interface SourceRecord {
   tag: NativeImageSource

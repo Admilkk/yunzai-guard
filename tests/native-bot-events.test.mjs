@@ -9,10 +9,10 @@ import path from "node:path"
 const moduleRoot = process.env.GUARD_BOT_EVENTS_MODULE_ROOT
   ? pathToFileURL(`${path.resolve(process.env.GUARD_BOT_EVENTS_MODULE_ROOT)}${path.sep}`)
   : new URL("../dist/native-sandbox/", import.meta.url)
-const { NativeBotEventsHost } = await import(new URL("bot-events-host.js", moduleRoot))
-const { NativeBotEventsGuest } = await import(new URL("bot-events-guest.js", moduleRoot))
+const { NativeBotEventsHost } = await import(new URL("bot-events/host.js", moduleRoot))
+const { NativeBotEventsGuest } = await import(new URL("bot-events/guest.js", moduleRoot))
 const { parseBotEventFrame, parseBotEventArguments, botEventHandle, nativeBotEventLimits } =
-  await import(new URL("bot-events-protocol.js", moduleRoot))
+  await import(new URL("bot-events/protocol.js", moduleRoot))
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const clone = value => JSON.parse(JSON.stringify(value))

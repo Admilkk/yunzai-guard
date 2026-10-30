@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { performance } from "node:perf_hooks"
-import { sha256 } from "../shared/hash.js"
+import { sha256 } from "../../shared/hash.js"
 import {
   decodeMediaBase64,
   imageMime,
@@ -16,7 +16,7 @@ import {
   type NativeImageOpen,
   type NativeImageTag,
   type NativeReplySegment,
-} from "./media-protocol.js"
+} from "./protocol.js"
 
 interface StoredImage extends NativeImageOpen {
   requestId: string

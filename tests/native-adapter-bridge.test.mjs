@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { NativeAdapterGuest } from "../dist/native-sandbox/adapter-guest.js"
-import { NativeAdapterHost } from "../dist/native-sandbox/adapter-host.js"
-import { validateAdapterFrame, adapterDto } from "../dist/native-sandbox/adapter-protocol.js"
+import { NativeAdapterGuest } from "../dist/native-sandbox/adapter/guest.js"
+import { NativeAdapterHost } from "../dist/native-sandbox/adapter/host.js"
+import { validateAdapterFrame, adapterDto } from "../dist/native-sandbox/adapter/protocol.js"
 
 const clone = value => JSON.parse(JSON.stringify(value))
 function hostBot() {

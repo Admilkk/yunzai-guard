@@ -1,4 +1,4 @@
-import type { NativeBotEventValue } from "./bot-events-protocol.js"
+import type { NativeBotEventValue } from "./bot-events/protocol.js"
 import { M } from "../shared/messages.js"
 
 type Row = Record<string, unknown>

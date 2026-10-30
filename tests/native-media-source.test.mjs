@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
-import { NativeMediaHost } from "../dist/native-sandbox/media-host.js"
-import { NativeMediaGuest } from "../dist/native-sandbox/media-guest.js"
-import { NativeMediaSourceHost } from "../dist/native-sandbox/media-source-host.js"
-import { NativeMediaSourceGuest } from "../dist/native-sandbox/media-source-guest.js"
-import { nativeMediaLimits as limits } from "../dist/native-sandbox/media-protocol.js"
+import { NativeMediaHost } from "../dist/native-sandbox/media/host.js"
+import { NativeMediaGuest } from "../dist/native-sandbox/media/guest.js"
+import { NativeMediaSourceHost } from "../dist/native-sandbox/media/source-host.js"
+import { NativeMediaSourceGuest } from "../dist/native-sandbox/media/source-guest.js"
+import { nativeMediaLimits as limits } from "../dist/native-sandbox/media/protocol.js"
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=",

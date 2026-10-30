@@ -1,5 +1,5 @@
 import { object, keys } from "../config/validation.js"
-import { adapterId, type AdapterId } from "./adapter-protocol.js"
+import { adapterId, type AdapterId } from "./adapter/protocol.js"
 import { M } from "../shared/messages.js"
 
 export interface NativeBotSnapshot {
