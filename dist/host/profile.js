@@ -1,7 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { matchGlob } from "../config/policy.js";
+import { readJsonFile, writeJsonFile } from "../shared/files.js";
 const rank = { low: 0, medium: 1, high: 2 };
 const hour = 3600000;
 const alpha = 0.2;
@@ -117,7 +116,8 @@ export class BehaviorProfile {
         this.#settings = options.settings;
         this.#clock = options.clock ?? Date.now;
         try {
-            const value = JSON.parse(fs.readFileSync(this.#file, "utf8"));
+            // 画像按插件累积，写入没有总大小上限；不能套用小型状态文件的默认限额。
+            const value = readJsonFile(this.#file, Infinity);
             if (value?.plugins && typeof value.plugins === "object" && !Array.isArray(value.plugins))
                 for (const [plugin, profile] of Object.entries(value.plugins))
                     if (validProfile(profile))
@@ -402,12 +402,7 @@ export class BehaviorProfile {
             return;
         this.#dirty = false;
         try {
-            fs.mkdirSync(path.dirname(this.#file), { recursive: true });
-            const temporary = `${this.#file}.${randomBytes(4).toString("hex")}.tmp`;
-            fs.writeFileSync(temporary, JSON.stringify({ version: 1, plugins: this.#plugins }), {
-                mode: 0o600,
-            });
-            fs.renameSync(temporary, this.#file);
+            writeJsonFile(this.#file, { version: 1, plugins: this.#plugins });
         }
         catch {
             // 写盘失败只影响重启后的画像延续。

@@ -3,6 +3,7 @@ import net from "node:net";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { M } from "../shared/messages.js";
+import { writeJsonFile } from "../shared/files.js";
 const maxSettingsBytes = 64 * 1024;
 /** 返回面板配置文件路径。 */
 export function panelSettingsPath(stateDir) {
@@ -71,16 +72,7 @@ function normalize(value) {
 }
 /** 原子写入面板配置。 */
 function writeSettings(file, settings) {
-    const temporary = `${file}.${randomBytes(6).toString("hex")}.tmp`;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
-    try {
-        fs.renameSync(temporary, file);
-    }
-    finally {
-        if (fs.existsSync(temporary))
-            fs.rmSync(temporary, { force: true });
-    }
+    writeJsonFile(file, settings, { pretty: true });
 }
 /** 字段损坏时回落到默认值并立即规范化落盘，避免面板因手改配置而无法启动。 */
 export function loadPanelSettings(stateDir) {

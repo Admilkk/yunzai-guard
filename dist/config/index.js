@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { action, boolean, keys, number, object, rule, string } from "./validation.js";
 import { parsePluginSandbox } from "../plugin-sandbox/config.js";
@@ -7,8 +6,8 @@ import { newWeakSet, weakSetAdd, weakSetHas } from "../protect/intrinsics.js";
 import { defaultTargets } from "./targets.js";
 import { parseAlerts, parseBaseline, parseSources } from "./extras.js";
 import { M } from "../shared/messages.js";
+import { parseSettingsSource, prepareSettingsFiles, readSettingsSource } from "./settings-file.js";
 import { parseWindow } from "../shared/update-window.js";
-const maxSettingsBytes = 1024 * 1024;
 const parsedSettings = newWeakSet();
 const cloneData = globalThis.structuredClone;
 /** 只复制已校验配置；不在业务运行后重新依赖可变的解析入口。 */
@@ -205,26 +204,23 @@ export function parseSettings(value) {
     weakSetAdd(parsedSettings, result);
     return result;
 }
-/** 此文件由宿主管理；调用方应向 worker 传递已验证快照。 */
+/** 当前版本的默认配置，序列化为普通对象。 */
+export function settingsDefaults() {
+    return JSON.parse(JSON.stringify(parseSettings({})));
+}
+/** 宿主启动时整理配置文件，见 prepareSettingsFiles；返回需要提示用户的信息。 */
+export function prepareSettings(stateDir) {
+    return prepareSettingsFiles(stateDir, settingsDefaults());
+}
+/**
+ * 读取并校验配置：优先 settings.yaml，只有旧版 settings.json 时直接读取它。
+ * 此文件由宿主管理；调用方应向 worker 传递已验证快照。
+ */
 export function loadSettings(stateDir) {
-    const filename = path.join(stateDir, "settings.json");
-    let input;
-    try {
-        const stat = fs.statSync(filename);
-        if (!stat.isFile() || stat.size > maxSettingsBytes)
-            throw new TypeError(M.config.fileSize);
-        input = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(fs.readFileSync(filename));
-    }
-    catch (error) {
-        if (error.code === "ENOENT")
-            return parseSettings({});
-        throw error;
-    }
-    if (input.charCodeAt(0) === 0xfeff)
-        throw new TypeError(M.config.encoding);
-    return parseSettings(JSON.parse(input));
+    const source = readSettingsSource(stateDir);
+    return parseSettings(source ? parseSettingsSource(source) : {});
 }
 //# sourceMappingURL=index.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "../protect/objects.js"
-__guardRegisterExports("config/index.ts", { snapshotSettings, parseSettings, loadSettings })
+__guardRegisterExports("config/index.ts", { snapshotSettings, parseSettings, settingsDefaults, prepareSettings, loadSettings })

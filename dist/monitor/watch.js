@@ -1,5 +1,9 @@
 import { types } from "node:util";
-import { apply, objectDefine as define, objectDescriptor as descriptor, objectPrototype as prototype, objectExtensible as extensible, ownKeys, newMap, mapSet, mapGet, mapEach, mapSize, newWeakMap, weakMapGet, weakMapSet, newSet, setAdd, setDelete, setEach, arrayEach, arrayMap, arrayPush, string, stringStartsWith, stringEndsWith, sameDescriptor as same, isReference, } from "../protect/intrinsics.js";
+import { apply, cleanDescriptor, claimReflectionHooks, objectDescriptor as descriptor, objectPrototype as prototype, objectExtensible as extensible, ownKeys, newMap, mapSet, mapGet, mapEach, mapSize, newWeakMap, weakMapGet, weakMapSet, newSet, setAdd, setDelete, setEach, arrayEach, arrayMap, arrayPush, string, stringStartsWith, stringEndsWith, sameDescriptor as same, isReference, } from "../protect/intrinsics.js";
+// 安装/卸载反射包装器时不能递归进入自身；此原始入口不对外暴露。
+const nativeDefine = Object.defineProperty;
+const define = (object, key, descriptor) => nativeDefine(object, key, cleanDescriptor(descriptor));
+const bindReflection = claimReflectionHooks();
 const isProxy = types.isProxy;
 const slots = [
     [Object, "defineProperty"],
@@ -167,6 +171,8 @@ export function installHookWatch() {
         notify(result === false ? "rejected" : "returned");
         return result;
     }
+    let observedDefine;
+    let observedFreeze;
     try {
         arrayEach(slots, slot => {
             const object = slot[0];
@@ -182,12 +188,21 @@ export function installHookWatch() {
             });
             define(object, key, { ...property, value });
             arrayPush(patches, { object, key, value, original: property });
+            if (object === Object && key === "defineProperty")
+                observedDefine = value;
+            if (object === Object && key === "freeze")
+                observedFreeze = value;
         });
     }
     catch (error) {
         arrayEach(patches, patch => define(patch.object, patch.key, patch.original));
         throw error;
     }
+    // 直接保存已安装的包装器，不依赖业务可修改的全局属性。
+    const releaseReflection = bindReflection({
+        defineProperty: observedDefine,
+        freeze: observedFreeze,
+    });
     return {
         /** 登记对象监听，返回取消函数。 */
         track(object, listener, key) {
@@ -217,6 +232,7 @@ export function installHookWatch() {
                 if (current?.value === patch.value && (current.configurable || current.writable))
                     define(patch.object, patch.key, patch.original);
             });
+            releaseReflection();
         },
     };
 }

@@ -1,7 +1,11 @@
 import { types } from "node:util";
 import * as intrinsics from "./intrinsics.js";
-import { objectDefine as define, objectDescriptors as descriptors, objectFreeze as freeze, ownKeys, objectDescriptor as getDescriptor, reflectGet as get, objectEntries as entries, objectValues as values, objectBase, string, error, newMap, mapSet, mapEach, newWeakSet, weakSetHas, weakSetAdd, newWeakMap, weakMapHas, weakMapGet, weakMapSet, arrayEach, } from "./intrinsics.js";
+import { cleanDescriptor, objectDefine, objectDescriptors as descriptors, objectFreeze, ownKeys, objectDescriptor as getDescriptor, reflectGet as get, objectEntries as entries, objectValues as values, objectBase, string, error, newMap, mapSet, mapEach, newWeakSet, weakSetHas, weakSetAdd, newWeakMap, weakMapHas, weakMapGet, weakMapSet, arrayEach, } from "./intrinsics.js";
 import { M } from "../shared/messages.js";
+// 自保护安装与加固需要绕开自身的观察器；原始反射入口仅保留在本模块闭包中。
+const nativeDefine = Object.defineProperty;
+const freeze = Object.freeze;
+const define = (object, key, descriptor) => nativeDefine(object, key, cleanDescriptor(descriptor));
 const isProxy = types.isProxy;
 const registered = newMap();
 const hardened = newWeakSet();
@@ -37,6 +41,10 @@ export function refuse(operation, target) {
 }
 /** 仅固定 Guard 自有函数槽，不冻结整个 Node 模块或业务对象。 */
 export function seal(object, key, value, label = string(key), allowCopy = false) {
+    sealSlot(object, key, value, label, allowCopy, objectDefine);
+}
+/** 内部加固使用私有写入口；公开 seal 使用经过监控的写入口。 */
+function sealSlot(object, key, value, label, allowCopy, write) {
     const descriptor = getDescriptor(object, key);
     if (descriptor && !descriptor.configurable) {
         if ("value" in descriptor && descriptor.value === value && !descriptor.writable) {
@@ -50,7 +58,7 @@ export function seal(object, key, value, label = string(key), allowCopy = false)
         receiver !== object &&
         receiver !== null &&
         (typeof receiver === "object" || typeof receiver === "function");
-    define(object, key, {
+    write(object, key, {
         configurable: false,
         enumerable: descriptor?.enumerable ?? true,
         /** 副本读取自身包装，原对象读取原始值。 */
@@ -98,7 +106,7 @@ function harden(value, label) {
                         return;
                     const member = getDescriptor(prototype, name);
                     if (typeof member.value === "function" && member.configurable) {
-                        seal(prototype, name, member.value, `${label}.prototype.${string(name)}`);
+                        sealSlot(prototype, name, member.value, `${label}.prototype.${string(name)}`, false, define);
                         harden(member.value, `${label}.${string(name)}`);
                     }
                 });
@@ -107,7 +115,7 @@ function harden(value, label) {
             }
         }
         else if (typeof descriptor.value === "function" && descriptor.configurable) {
-            seal(value, key, descriptor.value, `${label}.${string(key)}`);
+            sealSlot(value, key, descriptor.value, `${label}.${string(key)}`, false, define);
             harden(descriptor.value, `${label}.${string(key)}`);
         }
         else if (typeof descriptor.value === "function")
@@ -143,7 +151,7 @@ export function freezeData(value) {
             if ("value" in descriptor)
                 visit(descriptor.value);
         });
-        freeze(item);
+        objectFreeze(item);
     };
     visit(value);
     return value;

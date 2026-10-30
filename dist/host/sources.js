@@ -3,6 +3,8 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { matchGlob } from "../config/policy.js";
 import { hashFile } from "../shared/hash.js";
+import { readJsonFile, writeJsonFile } from "../shared/files.js";
+import { field, listed, notice } from "../shared/notice.js";
 const gitTimeoutMs = 8000;
 const maxDirtyFiles = 20;
 const statusConfig = new Set([
@@ -160,7 +162,7 @@ export class SourceWatch {
         this.#options = options;
         this.#file = path.join(options.stateDir, "sources.json");
         try {
-            const value = JSON.parse(fs.readFileSync(this.#file, "utf8"));
+            const value = readJsonFile(this.#file);
             if (value && typeof value === "object" && !Array.isArray(value))
                 Object.assign(this.#stored, value);
         }
@@ -294,13 +296,13 @@ export class SourceWatch {
                 this.#options.onChange({
                     plugin: item.plugin,
                     type: "remote",
-                    text: `插件 ${item.plugin} 的远端仓库地址已变更：${before.remote ?? "无"} → ${item.remote ?? "无"}。如非本人操作，请核实插件来源。`,
+                    text: notice("📦 插件远端地址已变更", field("插件", item.plugin), field("原地址", before.remote ?? "无"), field("现地址", item.remote ?? "无"), "如非本人操作，请核实插件来源"),
                 });
             if (notify.commit && before.commit !== item.commit)
                 this.#options.onChange({
                     plugin: item.plugin,
                     type: "commit",
-                    text: `插件 ${item.plugin} 的当前提交已变更：${before.commit?.slice(0, 8)} → ${item.commit.slice(0, 8)}。如非本人更新，请核实改动内容。`,
+                    text: notice("📦 插件版本已变更", field("插件", item.plugin), field("提交", `${before.commit?.slice(0, 8)} → ${item.commit.slice(0, 8)}`), "如非本人更新，请核实改动内容"),
                 });
             if (!notify.dirty || !item.dirty)
                 continue;
@@ -313,14 +315,13 @@ export class SourceWatch {
                     plugin: item.plugin,
                     type: "dirty",
                     text: before.dirty
-                        ? `插件 ${item.plugin} 又有 ${fresh.length} 个文件发生改动（${fresh.slice(0, 3).join("、")}），当前共 ${item.dirty} 个文件与仓库版本不一致。如非本人修改，请核实文件内容。`
-                        : `插件 ${item.plugin} 有 ${item.dirty} 个文件与仓库版本不一致（${(item.dirtyFiles ?? []).slice(0, 3).join("、")}）。如非本人修改，请核实文件内容。`,
+                        ? notice("📦 插件文件再次被改动", field("插件", item.plugin), field("新改动", listed(fresh)), field("累计", `${item.dirty} 个文件与仓库版本不一致`), "如非本人修改，请核实文件内容")
+                        : notice("📦 插件文件被改动", field("插件", item.plugin), field("文件", listed(item.dirtyFiles ?? [], item.dirty)), "如非本人修改，请核实文件内容"),
                 });
         }
         this.#stored = next;
         try {
-            fs.mkdirSync(this.#options.stateDir, { recursive: true });
-            fs.writeFileSync(this.#file, JSON.stringify(next), { mode: 0o600 });
+            writeJsonFile(this.#file, next);
         }
         catch {
             // 记录写入失败时，下次扫描会重复提示一次变化。

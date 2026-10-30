@@ -1,4 +1,4 @@
-import type { NativeBotEventValue } from "./bot-events-protocol.js";
+import type { NativeBotEventValue } from "./bot-events/protocol.js";
 type Row = Record<string, unknown>;
 /** 仅复制自有值数据；支持的 SDK 事件根对象使用明确的内容白名单。 */
 export declare function snapshotEvent(event: Row | undefined, protectedObjects?: ReadonlySet<object>): Row;

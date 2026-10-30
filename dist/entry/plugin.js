@@ -13,6 +13,7 @@ import { createBootstrapExitPlan } from "../host/bootstrap/exit-plan.js";
 import { consoleRelayTimeout } from "../host/bootstrap/console-relay.js";
 import { prepareNode } from "../dependencies/node.js";
 import { M } from "../shared/messages.js";
+import { guardCommandPatterns } from "../shared/commands.js";
 /** 读取核心当前的 Redis 客户端。 */
 const originalRedisClient = () => globalThis.redis;
 const bootstrapStarted = new WeakSet();
@@ -100,59 +101,27 @@ function startConsoleRelay(hostPid, offset) {
     });
 }
 export class YunzaiGuard extends plugin {
-    /** 以最高优先级注册为 Yunzai 插件。 */
+    /**
+     * 以普通 Yunzai 插件注册，只承担冷接管入口与兜底提示。
+     * 受管运行时会在核心加载本插件时换成运行时子类，命令与受限脚本分派都在其中处理；
+     * 走到下面的规则，说明尚未接管或核心加载器桥接不可用。
+     */
     constructor() {
         super({
             name: "Yunzai Guard",
             event: "message",
             priority: -1000000,
-            rule: [
-                { reg: "^#?guard(强制)?更新$", fnc: "update", permission: "master" },
-                { reg: "^#?guard(回滚|还原)$", fnc: "rollback", permission: "master" },
-                { reg: "^#?guard(登录|登陆|登入|面板)$", fnc: "login", permission: "master" },
-            ],
+            rule: Object.values(guardCommandPatterns).map(pattern => ({
+                reg: new RegExp(pattern),
+                fnc: "unavailable",
+                permission: "master",
+            })),
         });
     }
-    /** 把消息交给独立插件沙箱分派，已处理时拦截后续插件。 */
-    async accept(event) {
-        const context = globalThis[contextKey];
-        return (await context?.sandboxDispatch?.(event)) ? "return" : false;
-    }
-    /**
-     * 主人的 #guard更新 / #guard强制更新：转交宿主执行，结果由宿主通知主人。
-     * 需要重启业务进程的更新默认等空闲时生效；有等待生效的更新时再次发送即马上执行。
-     */
-    async update() {
-        const context = globalThis[contextKey];
-        if (!context?.requestUpdate) {
-            await this.reply(M.entry.updateUnavailable);
-            return true;
-        }
-        const force = Boolean(this.e?.msg?.includes("强制"));
-        context.requestUpdate(force);
-        await this.reply(force ? M.entry.updateForced : M.entry.updateRequested);
-        return true;
-    }
-    /** 主人的 #guard回滚：还原到上一版本，结果由宿主通知主人。 */
-    async rollback() {
-        const context = globalThis[contextKey];
-        if (!context?.requestRollback) {
-            await this.reply(M.entry.updateUnavailable);
-            return true;
-        }
-        context.requestRollback();
-        await this.reply(M.entry.rollbackRequested);
-        return true;
-    }
-    /** 主人的 #guard登录：宿主生成一次性链接并私聊主人，群聊里只提示已发送。 */
-    async login() {
-        const context = globalThis[contextKey];
-        if (!context?.requestLoginLink) {
-            await this.reply(M.entry.loginUnavailable);
-            return true;
-        }
-        context.requestLoginLink();
-        await this.reply(M.entry.loginSent);
+    /** 兜底：说明当前无法通过聊天执行 Guard 命令。 */
+    async unavailable() {
+        const managed = Boolean(globalThis[contextKey]);
+        await this.reply(managed ? M.entry.bridgeUnavailable : M.entry.commandUnavailable);
         return true;
     }
     /** 插件初始化：检查平台与配置，并在核心就绪后交接给受管宿主。 */

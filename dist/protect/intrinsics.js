@@ -1,3 +1,4 @@
+import { M } from "../shared/messages.js";
 /** 在业务插件加载前捕获入口，仅供 Guard 内部调用，不冻结业务内建对象。 */
 const call = Reflect.apply;
 const ObjectClass = Object;
@@ -60,10 +61,29 @@ const captures = {
     max: Math.max,
     iso: Date.prototype.toISOString,
 };
+let reflection = { defineProperty: captures.define, freeze: captures.freeze };
+let reflectionClaimed = false;
+/** 反射观察器在模块初始化时领取一次配置能力；能力本身只留在其闭包中。 */
+export function claimReflectionHooks() {
+    if (reflectionClaimed) {
+        const failure = new ErrorClass(M.protect.reflectionClaimed);
+        captures.define(failure, "code", { value: "ERR_GUARD_SELF_PROTECTION" });
+        throw failure;
+    }
+    reflectionClaimed = true;
+    return hooks => {
+        const previous = reflection;
+        reflection = hooks;
+        return () => {
+            if (reflection === hooks)
+                reflection = previous;
+        };
+    };
+}
 /** 使用预先捕获的 Reflect.apply 调用函数。 */
 export const apply = (fn, receiver, args) => call(fn, receiver, args);
 /** 内部描述符只采用自有字段，隔绝 Object.prototype 上的同名属性。 */
-function cleanDescriptor(descriptor) {
+export function cleanDescriptor(descriptor) {
     const clean = captures.create(null);
     const fields = ["value", "get", "set", "writable", "enumerable", "configurable"];
     for (let index = 0; index < fields.length; index++) {
@@ -73,8 +93,8 @@ function cleanDescriptor(descriptor) {
     }
     return clean;
 }
-/** 使用清洗后的描述符定义属性。 */
-export const objectDefine = (object, key, descriptor) => captures.define(object, key, cleanDescriptor(descriptor));
+/** 使用清洗后的描述符定义属性；经过已安装的反射监控，不导出原始写入口。 */
+export const objectDefine = (object, key, descriptor) => call(reflection.defineProperty, ObjectClass, [object, key, cleanDescriptor(descriptor)]);
 /** 使用捕获的 Object.create 创建对象。 */
 export const objectCreate = (...args) => call(captures.create, undefined, args);
 /** 判断对象是否有自有属性。 */
@@ -110,8 +130,8 @@ export function objectDescriptors(object) {
     }
     return result;
 }
-/** 冻结对象。 */
-export const objectFreeze = (object) => captures.freeze(object);
+/** 冻结对象，同样经过反射监控。 */
+export const objectFreeze = (object) => call(reflection.freeze, ObjectClass, [object]);
 /** 列出自有可枚举键值对。 */
 export const objectEntries = (object) => captures.entries(object);
 /** 列出自有可枚举值。 */

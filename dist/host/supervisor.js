@@ -41,6 +41,7 @@ import { parseSettings } from "../config/index.js";
 import { snapshotPrevious, workPaths } from "../update/install.js";
 import { syncFiles } from "../update/plan.js";
 import { M } from "../shared/messages.js";
+import { field, notice } from "../shared/notice.js";
 let settings = initialSettings;
 installHostLog(stateDir, { maxBytes: settings.log.maxBytes });
 assertPlatform(settings.isolationMode);
@@ -281,7 +282,7 @@ const sourceWatch = new SourceWatch({
     settings: () => configuration.active.sources,
     /** 插件来源变化走“来源”类告警。 */
     onChange(change) {
-        alerts.raise("source", change.plugin, `【Yunzai Guard】${change.text}`, {
+        alerts.raise("source", change.plugin, change.text, {
             key: `source:${change.plugin}:${change.type}`,
             plugin: change.plugin,
         });
@@ -345,7 +346,7 @@ function handleAnomaly(anomaly) {
     });
     if (!atLeast(anomaly.severity, configuration.active.baseline.minSeverity))
         return;
-    alerts.raise("anomaly", `${anomaly.plugin} ${anomalyLabels[anomaly.type]}`, `【Yunzai Guard】${anomaly.plugin} ${anomalyLabels[anomaly.type]}（${anomaly.severity === "high" ? "高" : anomaly.severity === "medium" ? "中" : "低"}风险）：${anomaly.key}。${anomaly.detail}`, {
+    alerts.raise("anomaly", `${anomaly.plugin} ${anomalyLabels[anomaly.type]}`, notice(`🔍 ${anomalyLabels[anomaly.type]}`, field("插件", anomaly.plugin), field("风险", { high: "高", medium: "中", low: "低" }[anomaly.severity] ?? anomaly.severity), field("对象", anomaly.key), field("说明", anomaly.detail)), {
         key: `anomaly:${anomaly.plugin}:${anomaly.type}:${anomaly.kind}:${anomaly.key}`,
         plugin: anomaly.plugin,
         severity: anomaly.severity,
@@ -1001,7 +1002,7 @@ function trip(reason) {
         console.error(M.host.recoveryPersist);
     }
     record("recovery-tripped", { reason, failures: recovery.failures.length });
-    alerts.raise("tripped", "业务进程熔断", M.host.trippedAlert(describeTrip(redact(reason))));
+    alerts.raise("tripped", "业务进程熔断", notice(M.host.trippedTitle, field("原因", describeTrip(redact(reason))), M.host.trippedPaused, M.host.trippedHint));
 }
 /** 把熔断原因代码换成说明，代码后附带的细节放在括号内；未收录的代码原样返回。 */
 function describeTrip(reason) {
@@ -1069,26 +1070,26 @@ function pruneLogs() {
         record("log-prune-failed", { message: error.message });
     }
 }
+/** 把未执行或失败的更新请求告知主人。 */
+function refuseUpdate(result, verb) {
+    updates.notify(notice(result.failed ? `❌ ${verb}失败` : `⚠️ 未执行${verb}`, result.to && field("版本", `${updates.state().current} → ${result.to}`), field("原因", result.message)));
+}
 /** 处理主人命令触发的更新，拒绝原因回复给主人；强制更新不等待空闲。 */
 async function requestUpdate(force) {
     const result = await updates.apply(force, force);
     if (!result.ok)
-        updates.notify(`【Yunzai Guard】${result.message}`);
+        refuseUpdate(result, "更新");
 }
 /** 处理主人的 #guard登录：链接只经宿主私聊主人，不回传给工作进程里的调用方。 */
 async function sendLoginLink() {
     let text;
     try {
         const { urls, ttlSeconds } = await core.loginLink();
-        text = [
-            "【Yunzai Guard】Web 控制台登录链接",
-            ...urls,
-            `有效期 ${Math.round(ttlSeconds / 60)} 分钟，仅可使用一次，请勿转发。`,
-        ].join("\n");
+        text = notice("🔑 Web 控制台登录链接", ...urls, `有效期 ${Math.round(ttlSeconds / 60)} 分钟，仅可使用一次，请勿转发`);
         record("panel-login-link", { urls: urls.length });
     }
     catch (error) {
-        text = `【Yunzai Guard】${error.message}`;
+        text = notice("❌ 登录链接生成失败", field("原因", error.message));
     }
     noticeToMasters(text);
 }
@@ -1096,7 +1097,7 @@ async function sendLoginLink() {
 async function requestRollback() {
     const result = await updates.rollback();
     if (!result.ok)
-        updates.notify(`【Yunzai Guard】${result.message}`);
+        refuseUpdate(result, "还原");
 }
 /** 宿主能否用新文件重新启动自己：冷启动可自行拉起，外部管理器会在宿主退出后重新执行。 */
 function canRelaunch() {

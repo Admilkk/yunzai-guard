@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import { createHash } from "node:crypto";
+/** 计算数据的 SHA-256 摘要，返回小写十六进制。 */
+export function sha256(data) {
+    return createHash("sha256").update(data).digest("hex");
+}
 /**
  * 分块计算文件的 SHA-256 摘要，读取缓冲区固定为 64 KiB。
  * @param file 要校验的文件路径；路径与文件类型由调用方校验。
@@ -22,4 +26,4 @@ export function hashFile(file) {
 //# sourceMappingURL=hash.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "../protect/objects.js"
-__guardRegisterExports("shared/hash.ts", { hashFile })
+__guardRegisterExports("shared/hash.ts", { sha256, hashFile })

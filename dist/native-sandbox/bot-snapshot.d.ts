@@ -1,4 +1,4 @@
-import { type AdapterId } from "./adapter-protocol.js";
+import { type AdapterId } from "./adapter/protocol.js";
 export interface NativeBotSnapshot {
     uin: AdapterId[];
 }

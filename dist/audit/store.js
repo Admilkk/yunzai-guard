@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { assertAuditFiles, initializeAuditDatabase, openAuditDatabase } from "./database.js";
 import { storedAuditRecord } from "./record.js";
 import { copyAuditData } from "./protocol.js";
 import { M } from "../shared/messages.js";
+import { sha256 } from "../shared/hash.js";
+import { isOrdinaryFile } from "../shared/files.js";
 const insertSql = `INSERT OR IGNORE INTO events
   (origin,sequence,host_pid,time,type,plugin,kind,operation,target,action,rule_id,blocked,search,payload,bytes,loss_reported)
   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
@@ -126,7 +127,7 @@ export class SqliteAuditSink {
             let handle;
             try {
                 const info = fs.lstatSync(file);
-                if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
+                if (!isOrdinaryFile(info)) {
                     report.filesSkipped++;
                     continue;
                 }
@@ -171,7 +172,7 @@ export class SqliteAuditSink {
                             : line;
                         records.push({
                             value,
-                            origin: `legacy:${createHash("sha256").update(identity).digest("hex")}`,
+                            origin: `legacy:${sha256(identity)}`,
                         });
                     }
                     catch {

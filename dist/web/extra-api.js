@@ -179,21 +179,21 @@ export async function handleExtra(context, route, url, request, response) {
         return true;
     }
     if (route === "GET /api/settings/backup") {
-        const text = readSettingsBackup(stateDir, url.searchParams.get("id") ?? "");
-        if (text === undefined)
+        const backup = readSettingsBackup(stateDir, url.searchParams.get("id") ?? "");
+        if (backup === undefined)
             throw fail(404, M.web.notFound);
-        sendJson(response, 200, { document: JSON.parse(text) });
+        sendJson(response, 200, { document: backup.document });
         return true;
     }
     if (route === "POST /api/settings/restore") {
         const body = await context.readBody(request);
         context.checkSettingsRevision(body);
-        const text = readSettingsBackup(stateDir, isPlainObject(body) ? String(body.id) : "");
-        if (text === undefined)
+        const backup = readSettingsBackup(stateDir, isPlainObject(body) ? String(body.id) : "");
+        if (backup === undefined)
             throw fail(404, M.web.notFound);
-        const value = JSON.parse(text);
-        const normalized = validateSettingsDocument(stateDir, value);
-        const result = writeSettingsDocument(stateDir, active(), value);
+        const normalized = validateSettingsDocument(stateDir, backup.document);
+        // YAML 备份按原文恢复，连同注释一起还原。
+        const result = writeSettingsDocument(stateDir, active(), backup.document, backup.raw);
         context.audit?.("panel-settings-restored", { pendingRestart: result.pendingRestart });
         const apply = context.applySettings?.(normalized);
         sendJson(response, 200, { ok: true, ...result, apply });

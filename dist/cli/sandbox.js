@@ -3,8 +3,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { parseSettings } from "../config/index.js";
 import { loadSandboxSources } from "../plugin-sandbox/filesystem.js";
-import { directory, readConfig, parseConfig, unchanged, createFile, removeOwned, maxSettingsBytes, } from "./settings.js";
+import { directory, readUserConfig, configOrigin, configUnchanged, syncLegacy, createFile, removeOwned, maxSettingsBytes, } from "./settings.js";
 import { M } from "../shared/messages.js";
+import { renderSettings } from "../config/settings-file.js";
 const storageDirectory = "data/yunzai-guard-strict";
 /** 离线管理配置，不导入或执行业务脚本。 */
 export async function sandboxCommand(args, root) {
@@ -14,9 +15,8 @@ export async function sandboxCommand(args, root) {
         (command === "init" && !id))
         throw new Error(M.cli.sandboxUsage);
     const state = directory(root, ["data", "yunzai-guard"], false);
-    const filename = path.join(state, "settings.json");
     if (command !== "init") {
-        const raw = parseConfig(readConfig(filename));
+        const raw = readUserConfig(state).value;
         const settings = parseSettings(raw).pluginSandbox;
         if (command === "list")
             return {
@@ -51,8 +51,8 @@ export async function sandboxCommand(args, root) {
     }
     const rollback = [];
     try {
-        const original = readConfig(filename);
-        const raw = parseConfig(original);
+        const config = readUserConfig(state);
+        const { filename, original, value: raw } = config;
         if (Object.hasOwn(raw, "strictJs"))
             throw new Error(M.cli.legacyStrictJs);
         const parsed = parseSettings(raw);
@@ -65,23 +65,24 @@ export async function sandboxCommand(args, root) {
             pluginSandbox: { ...sandbox, plugins: [...(sandbox.plugins ?? []), plugin] },
         };
         parseSettings(updated);
-        const encoded = `${JSON.stringify(updated, null, 2)}\n`;
+        const encoded = renderSettings(updated, { previous: config.text });
         if (Buffer.byteLength(encoded) > maxSettingsBytes)
             throw new Error(M.cli.settingsTooLarge);
         const scripts = directory(root, ["data", "yunzai-guard", "scripts"], true);
         const sourceName = path.join(scripts, `${id}.js`);
         const template = `// 插件沙箱脚本：仅通过 guard API 请求已授权操作。\n// 本模板只授权 reply；文件写入需要在该插件 capabilities 中显式增加 writeText。\nglobalThis.onMessage = event => {\n  guard.reply(${JSON.stringify(`${id} 沙箱运行正常`)})\n}\n`;
         rollback.push(createFile(sourceName, template));
+        const origin = configOrigin(config);
         const suffix = randomUUID();
-        const backup = original ? path.join(state, `settings.json.backup-${suffix}`) : undefined;
+        const backup = origin ? `${origin.filename}.backup-${suffix}` : undefined;
         if (backup)
-            rollback.push(createFile(backup, original));
+            rollback.push(createFile(backup, origin.bytes));
         const staged = createFile(path.join(state, `.settings-${suffix}.tmp`), encoded);
         rollback.push(staged);
         // CLI 锁保证命令串行；管理期间应停止外部编辑。
         directory(root, ["data", "yunzai-guard"], false);
         directory(root, ["data", "yunzai-guard", "scripts"], false);
-        unchanged(filename, original);
+        configUnchanged(config);
         if (original)
             fs.renameSync(staged.name, filename);
         else {
@@ -91,6 +92,7 @@ export async function sandboxCommand(args, root) {
             removeOwned(staged);
         }
         rollback.length = 0;
+        syncLegacy(state, updated);
         return {
             command,
             plugin,

@@ -1,4 +1,4 @@
-import type { AdapterMethodCall } from "./adapter-protocol.js";
+import type { AdapterMethodCall } from "./adapter/protocol.js";
 import { type Channel } from "./protocol.js";
 export { ProtocolError as NativeGuestError, maxFrameBytes as maxNativeFrameBytes, toDto, fromDto, type Dto, type Channel as GuestChannel, } from "./protocol.js";
 export declare class NativeGuest {

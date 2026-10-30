@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { M } from "../shared/messages.js";
+import { sha256 } from "../shared/hash.js";
+import { isOrdinaryFile } from "../shared/files.js";
 /** 拒绝 reparse/symlink 路径分量；外层项目视为可信安装。 */
 function directory(root, parts, create, allowMissing = false) {
     // AppContainer 启动前，宿主与身份模块已将 root 规范化。
@@ -45,13 +47,13 @@ export function loadSandboxSources(root, settings) {
         .map(plugin => {
         const file = path.join(base, `${plugin.id}.js`);
         const stat = fs.lstatSync(file);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 65536)
+        if (!isOrdinaryFile(stat, 65536))
             throw new Error(M.pluginSandbox.source(plugin.id));
         const bytes = fs.readFileSync(file);
         if (bytes.length > 65536)
             throw new Error(M.pluginSandbox.sourceTooLarge);
         const source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-        return { ...plugin, source, sha256: createHash("sha256").update(bytes).digest("hex") };
+        return { ...plugin, source, sha256: sha256(bytes) };
     });
     if (Buffer.byteLength(JSON.stringify(sources)) > 32768)
         throw new Error(M.pluginSandbox.sourcesBudget);
@@ -75,7 +77,7 @@ export function sandboxWriteTarget(root, id, file, create = true) {
     const target = path.join(base, file);
     try {
         const stat = fs.lstatSync(target);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)
+        if (!isOrdinaryFile(stat))
             throw new Error(M.pluginSandbox.fileAlias);
     }
     catch (error) {
@@ -91,7 +93,7 @@ export function writeSandboxText(root, id, file, text) {
     for (const entry of fs.readdirSync(path.dirname(target))) {
         const existing = path.join(path.dirname(target), entry);
         const stat = fs.lstatSync(existing);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)
+        if (!isOrdinaryFile(stat))
             throw new Error(M.pluginSandbox.storageAlias);
         if (entry !== file) {
             count++;

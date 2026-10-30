@@ -13,6 +13,7 @@ import { addCounter, createCanonicalObserver, createTransportCounters, } from ".
 import { writeControl, forwardOutput, disposeProcess } from "./windows/transport.js";
 import { within } from "../protect/paths.js";
 import { M } from "../shared/messages.js";
+import { sha256 } from "../shared/hash.js";
 const path = Object.freeze({ ...nodePath });
 const createDirectory = fs.mkdirSync.bind(fs);
 const createTemporary = fs.mkdtempSync.bind(fs);
@@ -291,12 +292,12 @@ export function spawnWindowsSandbox(projectRoot, settings, options) {
         const runtime = safeDirectory(path.join(session, "runtime"));
         const executable = path.join(runtime, "node.exe");
         const executableBytes = fs.readFileSync(options.executable);
-        const sourceDigest = createHash("sha256").update(executableBytes).digest("hex");
+        const sourceDigest = sha256(executableBytes);
         if (options.expectedExecutableSha256 !== undefined &&
             options.expectedExecutableSha256 !== sourceDigest)
             throw new Error(M.sandbox.executableChanged);
         writeOwned(executable, executableBytes);
-        if (createHash("sha256").update(fs.readFileSync(executable)).digest("hex") !== sourceDigest)
+        if (sha256(fs.readFileSync(executable)) !== sourceDigest)
             throw new Error(M.sandbox.executableDigest);
         const writable = writablePaths.map(safeDirectory);
         const reads = [runtime];

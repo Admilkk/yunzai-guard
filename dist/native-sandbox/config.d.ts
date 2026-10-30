@@ -1,4 +1,6 @@
 import type { NativeSandboxSettings, NativeRedisPermissions } from "./types.js";
+/** 核心目录与 Guard 自身，不能作为原生沙盒对象；控制台据此标记，避免给出会被拒绝的入口。 */
+export declare const reservedDirectories: ReadonlySet<string>;
 export declare const nativeRedisReservedPrefixes: readonly string[];
 /** Redis 授权使用区分大小写的字面键名或前缀，不接受通用 glob 或正则。 */
 export declare function parseNativeRedisPermissions(value?: unknown, location?: string): NativeRedisPermissions;

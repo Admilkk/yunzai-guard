@@ -1,6 +1,11 @@
+type ReflectionHooks = Pick<typeof Object, "defineProperty" | "freeze">;
+/** 反射观察器在模块初始化时领取一次配置能力；能力本身只留在其闭包中。 */
+export declare function claimReflectionHooks(): (hooks: ReflectionHooks) => () => void;
 /** 使用预先捕获的 Reflect.apply 调用函数。 */
 export declare const apply: (fn: Function, receiver: unknown, args: ArrayLike<unknown>) => any;
-/** 使用清洗后的描述符定义属性。 */
+/** 内部描述符只采用自有字段，隔绝 Object.prototype 上的同名属性。 */
+export declare function cleanDescriptor(descriptor: PropertyDescriptor): PropertyDescriptor;
+/** 使用清洗后的描述符定义属性；经过已安装的反射监控，不导出原始写入口。 */
 export declare const objectDefine: typeof Object.defineProperty;
 /** 使用捕获的 Object.create 创建对象。 */
 export declare const objectCreate: typeof Object.create;
@@ -14,7 +19,7 @@ export declare function sameDescriptor(a?: PropertyDescriptor, b?: PropertyDescr
 export declare function objectDescriptor(object: object, key: PropertyKey): PropertyDescriptor | undefined;
 /** 读取全部清洗后的自有属性描述符。 */
 export declare function objectDescriptors(object: object): Record<PropertyKey, PropertyDescriptor>;
-/** 冻结对象。 */
+/** 冻结对象，同样经过反射监控。 */
 export declare const objectFreeze: <T>(object: T) => Readonly<T>;
 /** 列出自有可枚举键值对。 */
 export declare const objectEntries: <T>(object: Record<string, T>) => [string, T][];
@@ -138,3 +143,4 @@ export declare const promiseResolve: <T>(value: T | PromiseLike<T>) => Promise<A
 export declare const promiseReject: (reason: unknown) => Promise<never>;
 /** 注册 Promise 回调。 */
 export declare const promiseThen: <T, U>(promise: Promise<T>, visit: (value: T) => U | PromiseLike<U>, rejected?: (reason: unknown) => U | PromiseLike<U>) => Promise<U>;
+export {};

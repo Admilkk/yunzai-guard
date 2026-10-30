@@ -1,5 +1,5 @@
 import { object, keys } from "../config/validation.js";
-import { adapterId } from "./adapter-protocol.js";
+import { adapterId } from "./adapter/protocol.js";
 import { M } from "../shared/messages.js";
 /** 账号标识只是值元数据，不代表以对应账号发送消息的权限。 */
 function identifiers(source, decorated = false) {

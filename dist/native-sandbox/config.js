@@ -1,6 +1,13 @@
 import { action, boolean, keys, number, object, string } from "../config/validation.js";
 import { M } from "../shared/messages.js";
-const reservedDirectories = new Set(["yunzai-guard", "adapter", "system", "other", "example"]);
+/** 核心目录与 Guard 自身，不能作为原生沙盒对象；控制台据此标记，避免给出会被拒绝的入口。 */
+export const reservedDirectories = new Set([
+    "yunzai-guard",
+    "adapter",
+    "system",
+    "other",
+    "example",
+]);
 export const nativeRedisReservedPrefixes = Object.freeze([
     "yunzai-guard:",
     "yunzaiguard:",
@@ -190,4 +197,4 @@ export function nativeSharedWritablePaths(settings, id) {
 //# sourceMappingURL=config.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "../protect/objects.js"
-__guardRegisterExports("native-sandbox/config.ts", { nativeRedisReservedPrefixes, parseNativeRedisPermissions, protectedNativeCoreConfigFiles, validateNativeWritablePaths, validateNativeWritableFiles, validateNativeWriteGrants, parseNativeSandbox, nativeSharedWritablePaths })
+__guardRegisterExports("native-sandbox/config.ts", { reservedDirectories, nativeRedisReservedPrefixes, parseNativeRedisPermissions, protectedNativeCoreConfigFiles, validateNativeWritablePaths, validateNativeWritableFiles, validateNativeWriteGrants, parseNativeSandbox, nativeSharedWritablePaths })

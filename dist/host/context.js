@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { loadSettings } from "../config/index.js";
+import { loadSettings, prepareSettings } from "../config/index.js";
 import { root, stateDir, projectId } from "../shared/identity.js";
 import { M } from "../shared/messages.js";
 // 宿主启动状态：导入即创建状态目录并读取配置，只供 supervisor 使用。
 export { root, stateDir, projectId };
 fs.mkdirSync(stateDir, { recursive: true });
+for (const notice of prepareSettings(stateDir))
+    console.error(notice);
 export const settings = loadSettings(stateDir);
 // 带身份验证的控制端点与项目单例锁相互独立。
 export const controlPort = settings.controlPort ?? 0;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import sqlite from "node:sqlite";
 import { M } from "../shared/messages.js";
+import { isOrdinaryFile } from "../shared/files.js";
 export const auditDatabaseName = "events.sqlite";
 export const auditApplicationId = 0x59475244;
 export const auditSchemaVersion = 1;
@@ -17,7 +18,7 @@ export function assertAuditFiles(file) {
     for (const suffix of ["", "-wal", "-shm", "-journal"]) {
         try {
             const info = fs.lstatSync(file + suffix);
-            if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1)
+            if (!isOrdinaryFile(info))
                 throw new Error(M.audit.dbFiles);
         }
         catch (error) {

@@ -1,0 +1,26 @@
+# Yunzai Guard 配置
+# 只需写要修改的项，没写的项使用当前版本的默认值；全部配置项、默认值与说明见同目录的 settings.default.yaml。
+# 直接修改本文件后需重启机器人才会生效；在 Web 控制台的“设置”页修改可立即生效，并会保留这里的注释与顺序。
+# settings.json 由 Guard 自动生成，仅供回退到旧版本时读取，请勿编辑。
+
+# 受限脚本沙箱：data/yunzai-guard/scripts 下的脚本只能通过授权的接口操作。
+pluginSandbox:
+  defaults:
+    # 一次脚本调用的最长执行时间。单位：毫秒。
+    timeoutMs: 1000
+    # 受限脚本执行器的内存上限。单位：MiB。
+    memoryMiB: 16
+    # 脚本尝试修改桥接对象时的处理。
+    hookAction: deny
+    # 脚本违反权限或执行限制时的处理。
+    violationAction: deny
+  # 受限脚本列表，可执行 node plugins/yunzai-guard/dist/cli.js sandbox init <id> 添加。
+  plugins:
+    - id: echo
+      enabled: true
+      match: "#echo*"
+      capabilities:
+        - reply
+        - writeText
+      hookAction: audit
+      rules: []

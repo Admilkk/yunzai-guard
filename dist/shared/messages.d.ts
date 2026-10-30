@@ -9,7 +9,11 @@
  */
 export declare const tag = "[Yunzai Guard]";
 declare const messages: {
+    files: {
+        jsonOversize: (file: unknown) => string;
+    };
     protect: {
+        reflectionClaimed: string;
         exposeInternals: string;
         inspectorOpen: string;
         denied: (operation: unknown, target: unknown) => string;
@@ -39,8 +43,13 @@ declare const messages: {
         rules: string;
         rulesDuplicate: string;
         recoveryDelay: string;
-        fileSize: string;
+        fileSize: (name: unknown) => string;
         encoding: string;
+        yamlSyntax: (name: unknown, detail: unknown) => string;
+        yamlRoot: (name: unknown) => string;
+        migrated: string;
+        migrationTooLarge: string;
+        legacyEdited: string;
         object: (location: unknown) => string;
         plainObject: (location: unknown) => string;
         plainProperties: (location: unknown) => string;
@@ -260,11 +269,12 @@ declare const messages: {
         tripped: string;
         /** 熔断原因代码的说明，用于推送给主人的告警；未收录的代码原样显示。 */
         tripReasons: Record<string, string>;
-        trippedAlert: (reason: unknown) => string;
+        trippedTitle: string;
+        trippedPaused: string;
+        trippedHint: string;
         rollbackFailed: string;
         auditWriteFailed: string;
         event: (label: unknown, reason: unknown) => string;
-        recoveryOversize: string;
         recoveryState: string;
         failureRecord: string;
         previousWorker: string;
@@ -283,9 +293,9 @@ declare const messages: {
         noExitHook: string;
     };
     entry: {
-        updateUnavailable: string;
+        commandUnavailable: string;
+        bridgeUnavailable: string;
         loginSent: string;
-        loginUnavailable: string;
         rollbackRequested: string;
         updateRequested: string;
         updateForced: string;
@@ -373,7 +383,6 @@ declare const messages: {
         jsonRequired: string;
         csrf: string;
         revision: string;
-        jsonParse: (detail: unknown) => string;
         writeFailed: (detail: unknown) => string;
         bodyObject: string;
         codeRate: string;
@@ -882,7 +891,11 @@ declare const messages: {
     };
 };
 export declare const M: {
+    files: {
+        jsonOversize: (file: unknown) => string;
+    };
     protect: {
+        reflectionClaimed: string;
         exposeInternals: string;
         inspectorOpen: string;
         denied: (operation: unknown, target: unknown) => string;
@@ -912,8 +925,13 @@ export declare const M: {
         rules: string;
         rulesDuplicate: string;
         recoveryDelay: string;
-        fileSize: string;
+        fileSize: (name: unknown) => string;
         encoding: string;
+        yamlSyntax: (name: unknown, detail: unknown) => string;
+        yamlRoot: (name: unknown) => string;
+        migrated: string;
+        migrationTooLarge: string;
+        legacyEdited: string;
         object: (location: unknown) => string;
         plainObject: (location: unknown) => string;
         plainProperties: (location: unknown) => string;
@@ -1133,11 +1151,12 @@ export declare const M: {
         tripped: string;
         /** 熔断原因代码的说明，用于推送给主人的告警；未收录的代码原样显示。 */
         tripReasons: Record<string, string>;
-        trippedAlert: (reason: unknown) => string;
+        trippedTitle: string;
+        trippedPaused: string;
+        trippedHint: string;
         rollbackFailed: string;
         auditWriteFailed: string;
         event: (label: unknown, reason: unknown) => string;
-        recoveryOversize: string;
         recoveryState: string;
         failureRecord: string;
         previousWorker: string;
@@ -1156,9 +1175,9 @@ export declare const M: {
         noExitHook: string;
     };
     entry: {
-        updateUnavailable: string;
+        commandUnavailable: string;
+        bridgeUnavailable: string;
         loginSent: string;
-        loginUnavailable: string;
         rollbackRequested: string;
         updateRequested: string;
         updateForced: string;
@@ -1246,7 +1265,6 @@ export declare const M: {
         jsonRequired: string;
         csrf: string;
         revision: string;
-        jsonParse: (detail: unknown) => string;
         writeFailed: (detail: unknown) => string;
         bodyObject: string;
         codeRate: string;

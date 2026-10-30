@@ -9,14 +9,14 @@ import { launchNativeSandbox, nativeStartupTimeoutMs, nativeStartupCleanupConfir
 import { toDto, maxFrameBytes } from "./protocol.js";
 import { NativeIngressBudget } from "./transport.js";
 import { executeNativeRedis } from "./redis.js";
-import { NativeAdapterHost } from "./adapter-host.js";
+import { NativeAdapterHost } from "./adapter/host.js";
 import { validateNativeBehaviorEvent } from "./behavior-host.js";
-import { NativeMediaHost } from "./media-host.js";
-import { NativeMediaSourceHost } from "./media-source-host.js";
+import { NativeMediaHost } from "./media/host.js";
+import { NativeMediaSourceHost } from "./media/source-host.js";
 import { snapshotNativeBot } from "./bot-snapshot.js";
 import { nativeSharedWritablePaths } from "./config.js";
 import { requireNativeRestartCapability } from "./core-control.js";
-import { NativeBotEventsHost } from "./bot-events-host.js";
+import { NativeBotEventsHost } from "./bot-events/host.js";
 import { snapshotEvent, snapshotBotEventArguments } from "./event-snapshot.js";
 import { M } from "../shared/messages.js";
 export { snapshotEvent } from "./event-snapshot.js";

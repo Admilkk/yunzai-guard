@@ -1,8 +1,9 @@
-import fs from "node:fs";
 import path from "node:path";
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { randomCode } from "./panel-settings.js";
 import { M } from "../shared/messages.js";
+import { readJsonFile, writeJsonFile } from "../shared/files.js";
+import { sha256 } from "../shared/hash.js";
 export class PanelError extends Error {
     status;
     retryAfter;
@@ -24,11 +25,9 @@ const linkPattern = /^[A-Za-z0-9_-]{43}$/;
 const maxSessions = 32;
 const maxAttempts = 1024;
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
-/** 计算 SHA-256 摘要。 */
-const digest = (value) => createHash("sha256").update(value).digest("hex");
 /** 以恒定时间比较两个秘密。 */
 function sameSecret(a, b) {
-    return timingSafeEqual(Buffer.from(digest(a), "hex"), Buffer.from(digest(b), "hex"));
+    return timingSafeEqual(Buffer.from(sha256(a), "hex"), Buffer.from(sha256(b), "hex"));
 }
 /** 取字符串并截断，非字符串返回空串。 */
 const text = (value, length) => typeof value === "string" ? value.slice(0, length) : "";
@@ -62,7 +61,7 @@ export class PanelAuth {
     constructor(settings, stateDir, events = {}) {
         this.#settings = settings;
         this.#events = events;
-        this.#secretId = digest(settings().jwtSecret);
+        this.#secretId = sha256(settings().jwtSecret);
         this.#file = stateDir ? path.join(stateDir, "auth-sessions.json") : undefined;
         this.#load();
     }
@@ -96,7 +95,7 @@ export class PanelAuth {
                 break;
             this.#sessions.delete(oldest);
         }
-        this.#sessions.set(digest(token), record);
+        this.#sessions.set(sha256(token), record);
         this.#persist();
         return token;
     }
@@ -132,7 +131,7 @@ export class PanelAuth {
     /** 列出有效会话，标记当前会话。 */
     sessions(currentToken) {
         this.#sweep();
-        const current = typeof currentToken === "string" ? digest(currentToken) : undefined;
+        const current = typeof currentToken === "string" ? sha256(currentToken) : undefined;
         return [...this.#sessions]
             .map(([hash, item]) => ({ ...item, current: hash === current }))
             .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
@@ -152,7 +151,7 @@ export class PanelAuth {
     }
     /** 注销当前会话。 */
     logout(token) {
-        if (typeof token === "string" && this.#sessions.delete(digest(token)))
+        if (typeof token === "string" && this.#sessions.delete(sha256(token)))
             this.#persist();
     }
     /**
@@ -185,7 +184,7 @@ export class PanelAuth {
         if (this.#code && this.#code.expires > Date.now())
             throw new PanelError(429, M.web.codeActive);
         const value = randomCode(16);
-        this.#code = { hash: digest(value), expires: Date.now() + codeTtlSeconds * 1000 };
+        this.#code = { hash: sha256(value), expires: Date.now() + codeTtlSeconds * 1000 };
         return value;
     }
     /**
@@ -197,7 +196,7 @@ export class PanelAuth {
         if (this.#link && now - this.#link.issuedAt < linkCooldownMs)
             throw new PanelError(429, M.web.linkCooldown);
         const token = randomBytes(32).toString("base64url");
-        this.#link = { hash: digest(token), issuedAt: now, expires: now + linkTtlSeconds * 1000 };
+        this.#link = { hash: sha256(token), issuedAt: now, expires: now + linkTtlSeconds * 1000 };
         return { token, ttlSeconds: linkTtlSeconds };
     }
     /** 校验登录链接令牌并签发会话；成功后立即作废。 */
@@ -205,7 +204,7 @@ export class PanelAuth {
         this.#ensureAllowed(address);
         const token = typeof input === "string" && linkPattern.test(input) ? input : "";
         const link = this.#link;
-        if (!token || !link || link.expires <= Date.now() || !sameSecret(link.hash, digest(token))) {
+        if (!token || !link || link.expires <= Date.now() || !sameSecret(link.hash, sha256(token))) {
             this.#fail(address);
             throw new PanelError(401, M.web.linkInvalid);
         }
@@ -223,7 +222,7 @@ export class PanelAuth {
             this.#fail(address);
             throw new PanelError(401, M.web.codeExpired);
         }
-        if (!sameSecret(this.#code.hash, digest(code))) {
+        if (!sameSecret(this.#code.hash, sha256(code))) {
             this.#fail(address);
             throw new PanelError(401, M.web.codeWrong);
         }
@@ -236,11 +235,11 @@ export class PanelAuth {
     #get(token) {
         if (typeof token !== "string" || !tokenPattern.test(token))
             return undefined;
-        const record = this.#sessions.get(digest(token));
+        const record = this.#sessions.get(sha256(token));
         if (!record)
             return undefined;
         if (record.expiresAt <= Date.now()) {
-            this.#sessions.delete(digest(token));
+            this.#sessions.delete(sha256(token));
             this.#persist();
             return undefined;
         }
@@ -308,9 +307,9 @@ export class PanelAuth {
         if (!this.#file)
             return;
         try {
-            if (fs.statSync(this.#file).size > 64 * 1024)
-                throw new Error("oversized");
-            const document = JSON.parse(fs.readFileSync(this.#file, "utf8"));
+            const document = readJsonFile(this.#file, 64 * 1024);
+            if (document === undefined)
+                return;
             if (document?.version !== 1 ||
                 typeof document.secretId !== "string" ||
                 !Array.isArray(document.sessions) ||
@@ -328,11 +327,9 @@ export class PanelAuth {
                     this.#sessions.set(entry.hash, entry.session);
             }
         }
-        catch (error) {
-            if (error.code !== "ENOENT") {
-                this.#sessions.clear();
-                throw new PanelError(500, M.web.sessionsCorrupt);
-            }
+        catch {
+            this.#sessions.clear();
+            throw new PanelError(500, M.web.sessionsCorrupt);
         }
     }
     /** 原子写入持久化会话。 */
@@ -342,16 +339,7 @@ export class PanelAuth {
         const sessions = [...this.#sessions]
             .filter(([, session]) => session.remember)
             .map(([hash, session]) => ({ hash, session }));
-        const temporary = `${this.#file}.${randomBytes(6).toString("hex")}.tmp`;
-        fs.mkdirSync(path.dirname(this.#file), { recursive: true });
-        fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, secretId: this.#secretId, sessions })}\n`, { mode: 0o600 });
-        try {
-            fs.renameSync(temporary, this.#file);
-        }
-        finally {
-            if (fs.existsSync(temporary))
-                fs.rmSync(temporary, { force: true });
-        }
+        writeJsonFile(this.#file, { version: 1, secretId: this.#secretId, sessions });
     }
 }
 //# sourceMappingURL=auth.js.map

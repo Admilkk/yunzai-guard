@@ -3,7 +3,6 @@ import http from "node:http";
 import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { defaultTargets } from "../config/targets.js";
 import { PanelAuth, PanelError } from "./auth.js";
@@ -15,6 +14,9 @@ import { handleExtra } from "./extra-api.js";
 import { isLocalAddress } from "./network.js";
 import { compareAudit } from "./compare.js";
 import { M } from "../shared/messages.js";
+import { field, notice } from "../shared/notice.js";
+import { sha256 } from "../shared/hash.js";
+import { parseSettingsText } from "../config/settings-file.js";
 const maxBodyBytes = 1024 * 1024;
 const staticDir = fileURLToPath(new URL("../panel/", import.meta.url));
 const staticFiles = new Map([
@@ -116,7 +118,7 @@ function setSessionCookie(request, response, token, remembered, expiresAt = Date
 }
 /** 计算配置文本的版本摘要。 */
 function revision(text) {
-    return createHash("sha256").update(text).digest("hex");
+    return sha256(text);
 }
 /** 发送 JSON 响应。 */
 function sendJson(response, status, body) {
@@ -189,7 +191,7 @@ export class GuardPanel {
         this.#settings = loadPanelSettings(options.stateDir);
         this.#auth = new PanelAuth(() => this.#settings, options.stateDir, {
             failed: address => this.#options.audit?.("panel-login-failed", { address }),
-            blocked: (address, seconds) => this.#notify("面板登录被锁定", `【Yunzai Guard】控制台登录连续失败，已暂时锁定来源 ${address}（${Math.round(seconds / 60)} 分钟）`, `login-blocked:${address}`),
+            blocked: (address, seconds) => this.#notify("面板登录被锁定", notice("🔒 控制台登录已锁定", field("来源", address), field("时长", `${Math.round(seconds / 60)} 分钟`), field("原因", "连续登录失败")), `login-blocked:${address}`),
         });
         this.#auth.importVolatile(options.handover);
     }
@@ -351,7 +353,7 @@ export class GuardPanel {
             const method = request.method ?? "GET";
             const address = clientAddress(request, this.#settings.trustProxy);
             if (!this.#settings.allowExternal && !isLocalAddress(address)) {
-                this.#notify("外网访问被拒绝", `【Yunzai Guard】已拒绝来自 ${address} 的控制台访问（默认只开放本机和局域网）`, `external-denied:${address}`);
+                this.#notify("外网访问被拒绝", notice("🚫 已拒绝控制台访问", field("来源", address), "默认只开放本机和局域网"), `external-denied:${address}`);
                 throw new PanelError(403, M.web.externalDenied);
             }
             if (method === "GET" || method === "HEAD") {
@@ -451,7 +453,7 @@ export class GuardPanel {
             const expiresAt = Number(payload.exp) * 1000;
             setSessionCookie(request, response, token, false, expiresAt);
             this.#options.audit?.("panel-login", { method: "chat-link" });
-            this.#notify("面板登录", `【Yunzai Guard】控制台已通过聊天链接登录：${deviceName(String(request.headers["user-agent"] ?? ""))}，来源 ${address}`, `login:${address}`);
+            this.#notify("面板登录", notice("🔐 控制台已登录", field("方式", "聊天登录链接"), field("设备", deviceName(String(request.headers["user-agent"] ?? ""))), field("来源", address)), `login:${address}`);
             return sendJson(response, 200, {
                 ok: true,
                 expiresAt,
@@ -472,7 +474,7 @@ export class GuardPanel {
             this.#clearCodeFile();
             const address = clientAddress(request, this.#settings.trustProxy);
             this.#options.audit?.("panel-login", { remembered: payload.remember === true });
-            this.#notify("面板登录", `【Yunzai Guard】控制台已登录：${deviceName(String(request.headers["user-agent"] ?? ""))}，来源 ${address}`, `login:${address}`);
+            this.#notify("面板登录", notice("🔐 控制台已登录", field("方式", "验证码"), field("设备", deviceName(String(request.headers["user-agent"] ?? ""))), field("来源", address)), `login:${address}`);
             return sendJson(response, 200, {
                 ok: true,
                 expiresAt,
@@ -632,8 +634,12 @@ export class GuardPanel {
         }
         if (route === "POST /api/settings/validate") {
             const body = await readBody(request);
-            const value = isPlainObject(body) ? body.document : undefined;
             try {
+                const value = isPlainObject(body) && typeof body.raw === "string"
+                    ? parseSettingsText(body.raw)
+                    : isPlainObject(body)
+                        ? body.document
+                        : undefined;
                 validateSettingsDocument(this.#options.stateDir, value);
             }
             catch (error) {
@@ -645,19 +651,13 @@ export class GuardPanel {
             const body = await readBody(request);
             const active = this.#options.getSettings?.() ?? this.#options.settings;
             this.#checkSettingsRevision(body);
-            let value = isPlainObject(body) ? body.document : undefined;
-            if (isPlainObject(body) && typeof body.raw === "string") {
-                try {
-                    value = JSON.parse(body.raw);
-                }
-                catch (error) {
-                    throw new PanelError(400, M.web.jsonParse(error.message));
-                }
-            }
+            // 原始配置页提交 YAML 原文，按原文写入以保留注释；表单提交配置对象。
+            const raw = isPlainObject(body) && typeof body.raw === "string" ? body.raw : undefined;
+            const value = raw !== undefined ? parseSettingsText(raw) : isPlainObject(body) ? body.document : undefined;
             let result;
             const normalized = validateSettingsDocument(this.#options.stateDir, value);
             try {
-                result = writeSettingsDocument(this.#options.stateDir, active, value);
+                result = writeSettingsDocument(this.#options.stateDir, active, value, raw);
             }
             catch (error) {
                 if (error instanceof TypeError)

@@ -3,6 +3,13 @@ import { swapPackage, type StagedRelease } from "../update/install.js";
 import { type UpdateLevel } from "../update/plan.js";
 type UpdateSettings = GuardSettings["update"];
 type Phase = "idle" | "downloading" | "installing" | "restarting" | "pending" | "failed";
+/** 更新请求的结果；failed 区分执行中出错与未执行（如已是最新），to 为目标版本。 */
+export interface UpdateResult {
+    ok: boolean;
+    message: string;
+    failed?: boolean;
+    to?: string;
+}
 /** 更新完成的方式：热替换、重启业务进程、宿主重新启动，或宿主仍需手动重启。 */
 export type FinishMode = "hot" | "worker" | "relaunch" | "host-pending";
 export interface UpdateSummary {
@@ -75,6 +82,8 @@ export declare function pendingDue(input: {
     lastActivityAt: number;
     now: number;
 }): boolean;
+/** 把更新说明整理成分类条目，去掉 Markdown 链接与提交引用；每类最多 3 条。 */
+export declare function changelog(notes: string): string[];
 /**
  * 版本检查与更新编排：周期查询公开发布、通知主人、暂存发布包。
  * 文件替换由宿主生命周期队列在业务进程停止后执行。
@@ -101,18 +110,12 @@ export declare class UpdateService {
      * immediate 为真时，需要重启业务进程的更新马上执行，不等待空闲。
      * 已有等待生效的更新时，再次请求更新即视为要求马上生效。
      */
-    apply(force: boolean, immediate?: boolean): Promise<{
-        ok: boolean;
-        message: string;
-    }>;
+    apply(force: boolean, immediate?: boolean): Promise<UpdateResult>;
     /**
      * 还原到上一版本：同样按组件比较，能热替换时不重启。
      * 有等待生效的更新时，还原即取消这次更新，控制台回到当前文件。
      */
-    rollback(): Promise<{
-        ok: boolean;
-        message: string;
-    }>;
+    rollback(): Promise<UpdateResult>;
     /** 由生命周期队列在业务进程停止后调用，执行文件替换。 */
     swap(staged: StagedRelease): ReturnType<typeof swapPackage>;
     /** 业务侧更新改为等待：控制台已换成新版本，业务进程择时重启。 */

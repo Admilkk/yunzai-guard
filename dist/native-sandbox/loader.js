@@ -7,6 +7,7 @@ import { validateNativeDescriptor } from "./validation.js";
 import { NativeRegistrationBudget } from "./registrations.js";
 import { parseNativePriority } from "./priority.js";
 import { M } from "../shared/messages.js";
+import { LoaderHooks } from "../monitor/loader-hooks.js";
 import { detectCoreProfile } from "../monitor/loader.js";
 const metadataKeys = new Set([
     "name",
@@ -381,27 +382,26 @@ export class NativePluginLoader {
     attach(loader) {
         this.loader = loader;
         const manager = this;
-        if (detectCoreProfile(this.root).id === "jiuli" &&
-            this.settings.pluginSandbox.native.plugins.some(item => item.enabled)) {
-            if (typeof loader.deal !== "function")
-                throw new Error(M.runtime.loaderExport);
-            const originalDeal = loader.deal;
-            loader.deal = function (...args) {
+        const hooks = LoaderHooks.of(loader);
+        // JiuLi 在一条消息内复用插件实例，须在消息结束时统一释放沙箱侧实例。
+        const scoped = detectCoreProfile(this.root).id === "jiuli" &&
+            this.settings.pluginSandbox.native.plugins.some(item => item.enabled);
+        if (scoped &&
+            !hooks.around("deal", (next, ...args) => {
                 const scope = new Map();
                 return manager.messageScope.run(scope, async () => {
                     try {
-                        return await Reflect.apply(originalDeal, this, args);
+                        return await next(...args);
                     }
                     finally {
                         await manager.releaseInstances(scope);
                     }
                 });
-            };
-        }
-        const originalImport = loader.importPlugin;
-        loader.importPlugin = async function (file, packageErrors) {
+            }))
+            throw new Error(M.runtime.loaderExport);
+        hooks.around("importPlugin", async function (next, file, packageErrors) {
             if (!manager.configuration(file.name))
-                return Reflect.apply(originalImport, this, [file, packageErrors]);
+                return next(file, packageErrors);
             const selected = manager.configuration(file.name);
             if (manager.loadedFiles.get(selected.id)?.has(file.name)) {
                 if (/[?#]/.test(file.path)) {
@@ -442,7 +442,10 @@ export class NativePluginLoader {
                 // 失败时拒绝加载，错误路径不得调用原导入器。
                 const config = manager.configuration(file.name);
                 manager.failedPlugins.add(config.id);
-                const affected = new Set([file.name, ...(manager.loadedFiles.get(config.id) ?? [])]);
+                const affected = new Set([
+                    file.name,
+                    ...(manager.loadedFiles.get(config.id) ?? []),
+                ]);
                 for (const item of this.priority)
                     if (manager.configuration(item.key)?.id === config.id)
                         affected.add(item.key);
@@ -477,13 +480,13 @@ export class NativePluginLoader {
             finally {
                 this.load_time[file.name] = performance.now() - start;
             }
-        };
-        const originalUnload = loader.unloadPlugin;
+        });
+        const originalUnload = hooks.original("unloadPlugin");
         this.originalUnload = originalUnload;
-        loader.unloadPlugin = async function (key, ...args) {
+        hooks.around("unloadPlugin", async (next, key, ...args) => {
             let unloaded = false;
             try {
-                const result = await Reflect.apply(originalUnload, this, [key, ...args]);
+                const result = await next(key, ...args);
                 unloaded = true;
                 return result;
             }
@@ -512,17 +515,16 @@ export class NativePluginLoader {
                     }
                 }
             }
-        };
-        const originalChange = loader.changePlugin;
-        loader.changePlugin = function (key, ...args) {
+        });
+        hooks.around("changePlugin", (next, key, ...args) => {
             if (!manager.configuration(key))
-                return Reflect.apply(originalChange, this, [key, ...args]);
+                return next(key, ...args);
             // 核心私有卸载路径绕过公开生命周期桥接，因此保留旧
             // 进程直至完整受控重启，不将修改后的源码重新加载到核心。
             const logger = Reflect.get(globalThis, "logger");
             logger?.warn?.(M.nativeSandbox.restartToApply(key));
             return false;
-        };
+        });
     }
     /** 关闭全部沙箱会话。 */
     async close() {

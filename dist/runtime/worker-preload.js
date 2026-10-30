@@ -23,9 +23,20 @@ import { shutdownBootstrapResources } from "../host/bootstrap/shutdown.js";
 import { AuditSender } from "../audit/sender.js";
 import { createAuditDeadline, parseAuditFrame } from "../audit/protocol.js";
 import { RuntimeBus } from "./bus.js";
+import { attachGuardPlugin } from "./guard-plugin.js";
+import { LoaderHooks } from "../monitor/loader-hooks.js";
 import { EventCoalescer } from "./coalesce.js";
 import { seal, registerModule } from "../protect/objects.js";
 import { M } from "../shared/messages.js";
+/** Guard 安装目录。 */
+const guardRoot = fileURLToPath(new URL("../../", import.meta.url));
+/** 主人命令对应的宿主控制指令。 */
+const guardCommandTypes = Object.freeze({
+    update: "update-request",
+    "force-update": "update-force-request",
+    rollback: "rollback-request",
+    login: "login-link-request",
+});
 // 共享运行时根据父进程提供的元数据安装嵌套 Worker 监控。
 // 仅 Yunzai 主线程执行宿主握手及核心生命周期桥接。
 if (isMainThread) {
@@ -100,6 +111,7 @@ if (isMainThread) {
         hello.sandboxSources.some((item, index) => item.id !== settings.pluginSandbox.plugins.filter(item => item.enabled)[index]?.id))
         throw new Error(M.runtime.sandboxHandshake);
     const storage = new AsyncLocalStorage();
+    const run = (name, callback) => storage.run(name, callback);
     // 仍可观察旧测试及旧父进程，但不能签发有序的宿主回执。
     const auditChannelNonce = hello.auditChannelNonce ?? randomBytes(24).toString("hex");
     let auditClose;
@@ -141,14 +153,10 @@ if (isMainThread) {
         generation: hello.generation,
         settings,
         send: bus.send,
-        run: (name, callback) => storage.run(name, callback),
-        sandboxDispatch: (event) => sandboxDispatcher.dispatch(event),
-        requestRollback: () => bus.command({ type: "rollback-request" }),
-        requestLoginLink: () => bus.command({ type: "login-link-request" }),
-        requestUpdate: (force) => bus.command({ type: force ? "update-force-request" : "update-request" }),
     });
     registerModule("runtime-context", {
         ...context,
+        run,
         audit: bus.audit,
         command: bus.command,
         notify: bus.notify,
@@ -181,7 +189,7 @@ if (isMainThread) {
         try {
             moduleAudit = installModuleAudit({
                 root,
-                guardRoot: fileURLToPath(new URL("../../", import.meta.url)),
+                guardRoot,
                 contextPlugin: () => storage.getStore(),
                 originalFunction: value => plugins.originalFunction(value),
                 intervalMs: settings.protect.intervalMs,
@@ -254,7 +262,7 @@ if (isMainThread) {
     const bridgeKey = Symbol.for("yunzai.guard.loader.bridge.v1");
     const coreProfile = detectCoreProfile(root);
     const coreLoaderUrl = pathToFileURL(path.join(root, coreProfile.loaderFile)).href;
-    const plugins = new PluginMonitor(context, emit, () => monitor.check(), runtime.watch, () => storage.getStore());
+    const plugins = new PluginMonitor({ settings, run }, emit, () => monitor.check(), runtime.watch, () => storage.getStore());
     const nativePlugins = new NativePluginLoader(root, settings, emit, () => bus.command({ type: "restart-request" }));
     /** 汇总监控覆盖并发送给宿主，超长时截断插件条目。 */
     function reportMonitoring() {
@@ -273,13 +281,21 @@ if (isMainThread) {
     }
     const reportTimer = setInterval(reportMonitoring, 2000);
     reportTimer.unref();
-    /** 首次拿到核心加载器时接入插件与原生沙箱监控。 */
+    /** 首次拿到核心加载器时接入钩子，由外到内：Guard 自有插件、插件监控、原生沙箱。 */
     function attachLoader(loader) {
         if (roots.PluginsLoader)
             return loader;
         roots.PluginsLoader = loader;
-        nativePlugins.attach(loader);
+        const hooks = LoaderHooks.of(loader);
+        attachGuardPlugin(hooks, {
+            entry: path.join(guardRoot, "index.js"),
+            loaderDirectory: path.dirname(path.join(root, coreProfile.loaderFile)),
+            command: command => bus.command({ type: guardCommandTypes[command] }),
+            dispatch: event => sandboxDispatcher.dispatch(event),
+        });
         plugins.attach(loader);
+        nativePlugins.attach(loader);
+        hooks.lock();
         return loader;
     }
     Object.defineProperty(globalThis, bridgeKey, {

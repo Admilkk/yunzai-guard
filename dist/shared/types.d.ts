@@ -144,17 +144,9 @@ export interface GuardSettings {
 }
 export type EmitEvent = (event: GuardEvent) => void;
 export interface GuardContext {
-    generation: number;
-    settings: GuardSettings;
-    send: (type: string, extra?: Record<string, unknown>) => void;
-    run: <T>(pluginName: string, callback: () => T) => T;
-    sandboxDispatch?: (event: Record<string, unknown>) => Promise<boolean>;
-    /** 请求宿主检查并应用更新；结果由宿主通过主人通知回复。 */
-    requestUpdate?: (force: boolean) => void;
-    /** 请求还原到上一版本。 */
-    requestRollback?: () => void;
-    /** 请求一次性面板登录链接；链接由宿主直接私聊主人，调用方拿不到。 */
-    requestLoginLink?: () => void;
+    readonly generation: number;
+    readonly settings: GuardSettings;
+    readonly send: (type: string, extra?: Record<string, unknown>) => void;
 }
 export interface CoreBot {
     restart: () => Promise<unknown>;

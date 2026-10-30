@@ -1,4 +1,5 @@
 import { evaluatePolicy, GuardDeniedError } from "../config/policy.js";
+import { LoaderHooks } from "./loader-hooks.js";
 const apply = Reflect.apply;
 const descriptor = Object.getOwnPropertyDescriptor;
 const define = Object.defineProperty;
@@ -17,6 +18,7 @@ export class PluginMonitor {
     #entries = new Map();
     #wrapped = new WeakMap();
     #instances = new WeakMap();
+    #hooks;
     #truncated = false;
     /** 创建插件入口监控。 */
     constructor(context, emit, check, watch, currentPlugin) {
@@ -95,6 +97,8 @@ export class PluginMonitor {
     }
     /** Yunzai 为每条消息新建处理器实例，须保留原 new.target。 */
     construct(constructor, args, name) {
+        if (this.#hooks?.trusted(name))
+            return Reflect.construct(constructor, args);
         return this.#invoke(name, "plugin.construct", constructor.name, () => {
             const instance = Reflect.construct(constructor, args);
             this.attachInstance(instance, name);
@@ -158,15 +162,16 @@ export class PluginMonitor {
                 row.unwrapped = increment(row.unwrapped);
         }
     }
-    /** 仅桥接加载器实例，不修改构造器或磁盘核心源码。 */
+    /** 经钩子引擎桥接加载器实例，不修改构造器或磁盘核心源码；Guard 自有插件原样放行。 */
     attach(loader) {
         const monitor = this;
-        const importPlugin = loader.importPlugin;
-        loader.importPlugin = function (file, ...args) {
-            return monitor.#invoke(file.name, "plugin.import", "module", () => apply(importPlugin, this, [file, ...args]));
-        };
-        const loadPlugin = loader.loadPlugin;
-        loader.loadPlugin = function (file, constructor) {
+        const hooks = (this.#hooks = LoaderHooks.of(loader));
+        hooks.around("importPlugin", (next, file, ...args) => hooks.trusted(file.name)
+            ? next(file, ...args)
+            : monitor.#invoke(file.name, "plugin.import", "module", () => next(file, ...args)));
+        hooks.around("loadPlugin", (next, file, constructor) => {
+            if (hooks.trusted(file.name))
+                return next(file, constructor);
             const prototype = constructor?.prototype;
             if (prototype)
                 for (const key of names(prototype))
@@ -176,13 +181,12 @@ export class PluginMonitor {
                 monitor.#observe(prototype, file.name, "prototype");
             if (typeof constructor === "function")
                 monitor.#observe(constructor, file.name, "constructor");
-            return monitor.#invoke(file.name, "plugin.load", constructor?.name ?? "unknown", () => apply(loadPlugin, this, [file, constructor]));
-        };
-        const registerHandlers = loader.registerHandlers;
-        loader.registerHandlers = function (instance, ...args) {
+            return monitor.#invoke(file.name, "plugin.load", constructor?.name ?? "unknown", () => next(file, constructor));
+        });
+        hooks.around("registerHandlers", function (next, instance, ...args) {
             const entries = this.priority;
             const name = monitor.#instances.get(instance) ?? entries?.find(row => row.plugin === instance)?.key;
-            if (name) {
+            if (name && !hooks.trusted(name)) {
                 if (!monitor.#instances.has(instance)) {
                     const row = monitor.#entry(name);
                     if (row)
@@ -190,17 +194,17 @@ export class PluginMonitor {
                 }
                 monitor.attachInstance(instance, name);
             }
-            return apply(registerHandlers, this, [instance, ...args]);
-        };
-        const collectTask = loader.collectTask;
-        loader.collectTask = function (task, name, key) {
-            for (const item of Array.isArray(task) ? task : [task])
-                if (item && typeof item === "object") {
-                    monitor.#wrap(item, "fnc", key, "plugin.task");
-                    monitor.#observe(item, key, "task");
-                }
-            return apply(collectTask, this, [task, name, key]);
-        };
+            return next(instance, ...args);
+        });
+        hooks.around("collectTask", (next, task, name, key) => {
+            if (!hooks.trusted(key))
+                for (const item of Array.isArray(task) ? task : [task])
+                    if (item && typeof item === "object") {
+                        monitor.#wrap(item, "fnc", key, "plugin.task");
+                        monitor.#observe(item, key, "task");
+                    }
+            return next(task, name, key);
+        });
     }
 }
 //# sourceMappingURL=plugin.js.map

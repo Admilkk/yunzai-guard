@@ -1,17 +1,12 @@
 export declare class YunzaiGuard extends plugin {
-    /** 以最高优先级注册为 Yunzai 插件。 */
-    constructor();
-    /** 把消息交给独立插件沙箱分派，已处理时拦截后续插件。 */
-    accept(event: Record<string, unknown>): Promise<"return" | false>;
     /**
-     * 主人的 #guard更新 / #guard强制更新：转交宿主执行，结果由宿主通知主人。
-     * 需要重启业务进程的更新默认等空闲时生效；有等待生效的更新时再次发送即马上执行。
+     * 以普通 Yunzai 插件注册，只承担冷接管入口与兜底提示。
+     * 受管运行时会在核心加载本插件时换成运行时子类，命令与受限脚本分派都在其中处理；
+     * 走到下面的规则，说明尚未接管或核心加载器桥接不可用。
      */
-    update(): Promise<boolean>;
-    /** 主人的 #guard回滚：还原到上一版本，结果由宿主通知主人。 */
-    rollback(): Promise<boolean>;
-    /** 主人的 #guard登录：宿主生成一次性链接并私聊主人，群聊里只提示已发送。 */
-    login(): Promise<boolean>;
+    constructor();
+    /** 兜底：说明当前无法通过聊天执行 Guard 命令。 */
+    unavailable(): Promise<boolean>;
     /** 插件初始化：检查平台与配置，并在核心就绪后交接给受管宿主。 */
     init(): Promise<string | undefined>;
     /**

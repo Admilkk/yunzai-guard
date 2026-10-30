@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHmac, randomBytes } from "node:crypto";
+import { field, notice } from "../shared/notice.js";
+import { readJsonFile, writeJsonFile } from "../shared/files.js";
 const kindLabels = {
     network: "网络访问",
     filesystem: "文件写入",
@@ -91,7 +93,7 @@ export class AlertService {
     #loadState() {
         const empty = { readBefore: 0, read: [], mutes: [] };
         try {
-            const value = JSON.parse(fs.readFileSync(this.#stateFile, "utf8"));
+            const value = (readJsonFile(this.#stateFile) ?? {});
             return {
                 readBefore: Number.isFinite(value.readBefore) ? Number(value.readBefore) : 0,
                 read: Array.isArray(value.read)
@@ -113,8 +115,7 @@ export class AlertService {
     }
     #saveState() {
         try {
-            fs.mkdirSync(this.#options.stateDir, { recursive: true });
-            fs.writeFileSync(this.#stateFile, JSON.stringify(this.#state), { mode: 0o600 });
+            writeJsonFile(this.#stateFile, this.#state);
         }
         catch {
             // 状态写入失败只影响重启后的已读与静默。
@@ -165,13 +166,13 @@ export class AlertService {
         const top = entries
             .slice(0, 3)
             .map(([key, count]) => `${key.split(":").slice(1).join(":")} ×${count}`)
-            .join("；");
+            .join("、");
         this.#deliver({
             id: newId(Date.now()),
             time: Date.now(),
             category: "digest",
             title: "告警合并",
-            text: `【Yunzai Guard】过去 ${minutes} 分钟内另有 ${total} 条告警已合并发送，主要为：${top}。`,
+            text: notice("📋 告警合并", `过去 ${minutes} 分钟另有 ${total} 条告警未单独推送`, field("主要", top)),
         });
     }
     /** 写入历史，并送达主人与 Webhook。 */
@@ -202,9 +203,7 @@ export class AlertService {
             return;
         const label = kindLabels[kind] ?? kind;
         const rule = clip(event.ruleId, 80) || (kind === "self-protection" ? "自保护" : "默认策略");
-        const text = action === "deny"
-            ? `【Yunzai Guard】已拦截 ${plugin}：${label} ${target}（规则 ${rule}）`
-            : `【Yunzai Guard】${plugin} 触发了重启规则 ${rule}（${label} ${target}），业务进程将重建`;
+        const text = notice(action === "deny" ? "🛡️ 已拦截" : "🔁 触发重启规则", field("插件", plugin), field("行为", `${label} ${target}`), field("规则", rule), action === "restart" && "业务进程将重建");
         this.raise(action, `${plugin} ${label}`, text, {
             key: `${action}:${plugin}:${clip(event.operation, 60)}:${rule}`,
             plugin,
@@ -258,7 +257,7 @@ export class AlertService {
         try {
             const status = await this.#send(url, {
                 type: "yunzai-guard.test",
-                text: "【Yunzai Guard】这是一条测试消息",
+                text: notice("🔔 测试消息", "收到这条消息说明推送配置正常"),
             });
             return { ok: status >= 200 && status < 300, status };
         }

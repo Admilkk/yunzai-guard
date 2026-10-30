@@ -1,0 +1,241 @@
+# Yunzai Guard 配置
+# 只需写要修改的项，没写的项使用当前版本的默认值；全部配置项、默认值与说明见同目录的 settings.default.yaml。
+# 直接修改本文件后需重启机器人才会生效；在 Web 控制台的“设置”页修改可立即生效，并会保留这里的注释与顺序。
+# settings.json 由 Guard 自动生成，仅供回退到旧版本时读取，请勿编辑。
+
+# 配置格式版本，请勿修改。
+schemaVersion: 1
+
+# 等待业务进程启动就绪的最长时间。单位：毫秒。
+startupTimeout: 60000
+
+# 等待业务进程退出和子进程回收的最长时间。单位：毫秒。
+shutdownTimeout: 10000
+
+# 首次接管时，等待原进程交接的最长时间。单位：毫秒。
+handshakeTimeout: 5000
+
+# 兼容托管保持原插件运行方式；系统沙箱限制整个业务进程。
+isolationMode: managed
+
+# 受限脚本沙箱：data/yunzai-guard/scripts 下的脚本只能通过授权的接口操作。
+pluginSandbox:
+  # 一次脚本调用的最长执行时间。单位：毫秒。
+  timeoutMs: 1000
+  # 受限脚本执行器的内存上限。单位：MiB。
+  memoryMiB: 16
+  # 脚本违反权限或执行限制时的处理。
+  violationAction: deny
+  # 脚本尝试修改桥接对象时的处理。
+  hookAction: deny
+  # 受限脚本列表，可执行 node plugins/yunzai-guard/dist/cli.js sandbox init <id> 添加。
+  plugins: []
+  # 原生插件沙箱：选定的插件在独立进程中运行。
+  native:
+    # 放入独立进程的插件，可执行 node plugins/yunzai-guard/dist/cli.js native enable <目录名> 添加。
+    plugins: []
+
+# 系统沙箱，仅在 isolationMode 为 os-sandbox 时生效。
+sandbox:
+  # 整个业务进程的网络权限，仅用于系统沙箱。
+  network: none
+  # 系统沙箱允许写入的项目相对目录。
+  writablePaths: [data, temp, logs, config/config]
+
+# 业务进程异常退出后的自动恢复；时间窗内重启次数超过上限即熔断，需手动解除。
+recovery:
+  # 统计窗口内的故障恢复上限，超过后停止自动拉起。
+  maxRestarts: 3
+  # 故障恢复次数的统计时段。单位：毫秒。
+  windowMs: 60000
+  # 首次故障恢复的等待时间，连续故障时逐步延长。单位：毫秒。
+  baseDelayMs: 250
+  # 故障恢复等待时间的上限。单位：毫秒。
+  maxDelayMs: 30000
+
+# 审计日志。
+audit:
+  # 审计写入速率上限，高峰期事件排队提交。
+  maxEventsPerSecond: 1000
+  # 待提交事件的数量上限，过小容易在高峰期丢失记录。
+  maxQueue: 5000
+  # 同时用作审计缓冲字节上限；乘以保留倍数得到事件保留预算。单位：字节。
+  maxBytes: 10485760
+  # 基础保留容量的倍数，超出后删除最旧事件；索引和 WAL 另占空间。
+  maxFiles: 3
+  # 审计事件的保留天数，早于此的事件每小时清理一次。与容量上限同时生效，先到先清；0 表示只按容量淘汰。
+  maxDays: 0
+  # 窗口内完全相同的普通记录只写第一条，其余合并成一条“重复 N 次”。拦截与重启始终逐条记录。热循环里的大量重复调用不再挤满队列。单位：毫秒。
+  coalesceMs: 1000
+  # 自适应：含拦截或重启的批次强制落盘，普通记录交给系统缓存，进程崩溃不丢，只有断电可能丢最后几批。每批强制落盘最稳，但事件量大时写盘压力高。
+  durability: adaptive
+
+# 宿主日志 host.log。
+log:
+  # 宿主日志 host.log 的单文件上限，写满后保留尾部并轮转为 host.log.1。单位：字节。
+  maxBytes: 4194304
+  # host.log 与 host.log.1 超过此天数没有再写入时删除，每小时检查一次；0 表示不按天数清理。
+  maxDays: 0
+
+# 拦截规则，自上而下匹配，第一条命中的规则生效；建议在 Web 控制台的“规则”页编辑。
+rules: []
+
+# 监控范围。
+monitor:
+  # 记录插件经 fs 路径入口的文件操作；读取量通常较大，可按需开启。原生扩展内部的文件访问不在此范围。
+  files: write
+  # 宿主定期从进程外读取业务进程树的读写字节与 TCP 连接，覆盖原生扩展；新的外部连接写入审计。只观察，不拦截。
+  process: true
+
+# 版本检查与自动更新。
+update:
+  # 定期读取公开发布信息，发现新版本后提示。只检查，不会自动安装。
+  check: true
+  # 发现新版本时给主人发一条消息，同一版本只通知一次。更新结果始终会通知。
+  notify: true
+  # 两次检查之间的间隔，最短 1 分钟。使用 ETag 条件请求，未变化时不占用 GitHub 限额。单位：毫秒。
+  intervalMs: 300000
+  # 控制台与宿主的更新会热替换，不影响业务。只有改动了 Yunzai 进程内代码的更新才需要重启业务进程一次，这里决定何时重启：业务空闲时、维护时段内，或马上。等待期间再次发送 #guard更新 或点击“马上生效”即可提前执行。
+  workerRestart: idle
+  # 连续这么多秒没有插件处理消息，视为业务空闲。
+  idleSeconds: 60
+  # 按“业务空闲时”等待的上限，超过后不再等待空闲，直接重启业务进程使更新生效。
+  maxWaitHours: 6
+  # “维护时段内”使用的本地时间段，格式 HH:MM-HH:MM，可跨午夜，例如 23:00-02:00。
+  window: 03:00-06:00
+
+# 告警推送：私聊主人与 Webhook。
+alerts:
+  # 总开关。关闭后不推送任何告警，也不转发 Webhook。
+  enabled: true
+  # 通过机器人私聊主人。业务进程不在线时暂存，上线后补发。
+  masters: true
+  # 把告警转发到 Webhook。
+  webhook:
+    # 收到告警时向该地址 POST。JSON 格式包含类别、标题、正文与实例信息；纯文本格式只发正文。
+    url: ""
+    # 填写后每个请求都带 X-Guard-Signature: sha256=<HMAC>，接收方可据此验证来源。该值不会下发给业务进程，导出配置时默认去掉。
+    secret: ""
+    # 推送格式：json 或 text。
+    format: json
+  # 按类别开关告警。
+  on:
+    # 插件操作被拦截。
+    deny: true
+    # 触发重启规则。
+    restart: true
+    # 业务进程熔断。
+    tripped: true
+    # 受保护函数被改动。
+    integrity: true
+    # 插件行为偏离基线。
+    anomaly: true
+    # 插件文件或 Git 来源变化。
+    source: true
+    # 发现新版本与更新结果。
+    update: true
+    # 控制台登录与访问相关事件。
+    security: true
+  # 除告警外，额外转发到 Webhook 的审计事件。
+  forward:
+    # 除告警外，把这些处理结果的审计事件成批转发到 Webhook（每 5 秒一批，每批最多 100 条）。
+    actions: [deny, restart]
+    # 只转发这些类型的事件，留空表示全部类型。
+    kinds: []
+  # 告警限流：时间窗内同类告警超过上限后合并为一条摘要。
+  throttle:
+    # 同一类告警在窗口内只发一次，其余计数；窗口结束时发一条合并摘要。单位：毫秒。
+    windowMs: 60000
+    # 窗口内最多推送的不同告警数，超出的进入合并摘要，避免刷屏。
+    maxPerWindow: 5
+
+# 行为基线：学习插件的正常行为，出现偏离时告警。
+baseline:
+  # 学习每个插件常访问的域名、端口、进程、原生扩展与目录。学习期后出现新行为、频率突增、非常规时段活动或批量新目标时提示。只提示，不拦截。
+  enabled: false
+  # 每个插件从第一次出现行为开始计算学习期，期间只记录不提示。也可以在行为画像页手动结束学习。
+  learnHours: 72
+  # 参与画像的行为类型。文件写入通常较杂，默认不纳入。
+  kinds: [network, listen, process, native]
+  # 这些行为不参与画像，格式为 类型:对象，支持 *，例如 network:*.qq.com、process:git。也可直接写完整目标。
+  ignore: []
+  # 这些插件不建立画像，支持 *。
+  ignorePlugins: []
+  # 新行为提示一次后自动加入常规画像；关闭则在你点“信任”之前每次都提示。
+  learnAfterAlert: true
+  # 每个插件最多记录的常规行为数，超出时淘汰最久未出现的。
+  maxPerPlugin: 500
+  # 低于该级别的异常只在画像页显示，不推送。原生扩展、端口监听、shell 与裸 IP 连接计为高。
+  minSeverity: medium
+  # 频率突增检测。
+  spike:
+    # 按每个插件自己的历史计算每个统计窗口的平均次数与波动，明显偏高时提示。
+    enabled: true
+    # 超过平均值多少倍标准差才算突增，越小越敏感。
+    zScore: 4
+    # 窗口内次数低于该值不判断突增，避免低频插件误报。
+    minCount: 30
+    # 统计频率的时间窗口。单位：毫秒。
+    windowMs: 600000
+  # 学习期内该插件从未在某个时段前后活动，之后在该时段出现行为时提示，每小时最多一次。至少需要两天的学习数据。
+  offHours: true
+  # 短时间内批量出现新目标的检测。
+  burst:
+    # 学习期后短时间内出现大量新目标时提示一次高风险，常见于扫描或数据外送。
+    enabled: true
+    # 时间范围内新目标达到该数量即提示。
+    count: 8
+    # 统计新目标的时间范围。单位：毫秒。
+    windowMs: 600000
+
+# 插件来源校验：定期比对插件目录与其 Git 仓库，发现文件或来源被改动时提醒。
+sources:
+  # 定期读取 plugins 下 Git 插件的远端、分支、提交与工作区，只读，不执行插件代码。需要系统安装 git。
+  enabled: true
+  # 两次扫描的间隔。单位：毫秒。
+  intervalMs: 600000
+  # 不检查的插件目录名，支持 *。
+  ignore: []
+  # 按变化类型开关提醒。
+  notify:
+    # 插件的提交变化时通知。正常更新插件也会触发，默认关闭。
+    commit: false
+    # 受跟踪的文件被改动、与仓库不一致时通知，例如被其他插件或脚本篡改。
+    dirty: true
+    # 插件的远端地址被改动时通知。
+    remote: true
+
+# 关键函数完整性观察。
+protect:
+  # 观察指定业务函数的变化；Guard 自保护始终启用。
+  enabled: true
+  # 业务函数的定期检查间隔，越短开销越高。单位：毫秒。
+  intervalMs: 1000
+  # 业务函数变化时的默认动作，变化后检测无法保证撤销 Hook。
+  action: audit
+  # 需要观察的函数路径，不支持表达式。
+  targets:
+    - Bot.sendFriendMsg
+    - Bot.sendGroupMsg
+    - Bot.sendMasterMsg
+    - Bot.sendForwardMsg
+    - Bot.fileToUrl
+    - Bot.serverAuth
+    - Bot.exitEvent
+    - PluginsLoader.load
+    - PluginsLoader.importPlugin
+    - PluginsLoader.loadPlugin
+    - PluginsLoader.unloadPlugin
+    - PluginsLoader.changePlugin
+    - PluginsLoader.registerHandlers
+    - PluginsLoader.dealEvent
+    - PluginsLoader.filtPermission
+    - PluginsLoader.checkBlack
+    - PluginsLoader.checkDisable
+    - PluginsLoader.checkLimit
+    - PluginsLoader.collectTask
+    - PluginsLoader.startTask
+    - Global.plugin.prototype.reply
+    - Global.plugin.prototype.renderImg
+  # 检查网络、子进程等监控入口是否被替换。
+  monitorInstrumentation: true

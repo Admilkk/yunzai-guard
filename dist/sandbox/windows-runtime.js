@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { M } from "../shared/messages.js";
+import { sha256 } from "../shared/hash.js";
+import { isOrdinaryFile } from "../shared/files.js";
 /** 保留早期管道候选供显式选择，不授予元数据能力。 */
 export const privateWindowsRuntimeCandidate = Object.freeze({
     directory: ".cache/private-node/v24.22.1-appcontainer-win-x64/runtime",
@@ -19,12 +20,10 @@ export const privateWindowsCanonicalRuntimeCandidate = Object.freeze({
     buildManifestSha256: "573a989fcf1d2e5f791f3f806a837432666eab9b2022607f21c94d8053c25008",
     osVerificationSha256: "98ff99fb613e73f2360425752249213d2d06c08d3e5c933ea646822b09d3d735",
 });
-/** 计算 SHA-256 摘要。 */
-const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 /** 读取有大小上限的普通文件。 */
 function ordinaryFile(file, maximum) {
     const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > maximum)
+    if (!isOrdinaryFile(stat, maximum))
         throw new Error(M.sandbox.privateFiles);
     return fs.readFileSync(file);
 }
@@ -46,12 +45,12 @@ export function verifyPrivateWindowsRuntime(selection, host = process) {
         fs.realpathSync.native(directory).toLowerCase() !== directory.toLowerCase())
         throw new Error(M.sandbox.privateReparse);
     const manifestBytes = ordinaryFile(path.join(directory, "build-manifest.json"), 65536);
-    if (digest(manifestBytes) !== candidate.buildManifestSha256)
+    if (sha256(manifestBytes) !== candidate.buildManifestSha256)
         throw new Error(M.sandbox.privateBuild);
     const manifest = JSON.parse(manifestBytes.toString("utf8"));
     const verificationBytes = ordinaryFile(path.join(directory, "os-verification.json"), 65536);
     if (canonical &&
-        digest(verificationBytes) !== privateWindowsCanonicalRuntimeCandidate.osVerificationSha256)
+        sha256(verificationBytes) !== privateWindowsCanonicalRuntimeCandidate.osVerificationSha256)
         throw new Error(M.sandbox.privateOs);
     const verification = JSON.parse(verificationBytes.toString("utf8"));
     if (manifest.platform !== "win32" ||
@@ -82,7 +81,7 @@ export function verifyPrivateWindowsRuntime(selection, host = process) {
             verification.originalGuestExitZero !== true))
         throw new Error(M.sandbox.privateMetadata);
     const executable = path.join(directory, "node.exe");
-    if (digest(ordinaryFile(executable, 256 * 1024 * 1024)) !== candidate.sha256)
+    if (sha256(ordinaryFile(executable, 256 * 1024 * 1024)) !== candidate.sha256)
         throw new Error(M.sandbox.privateDigest);
     return {
         executable,
