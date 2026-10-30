@@ -11,6 +11,7 @@ import test from "node:test"
 const repository = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const build = process.env.GUARD_TEST_STARTUP_BUILD || path.join(repository, "dist")
 const { M } = await import(pathToFileURL(path.join(build, "shared/messages.js")).href)
+const { field, notice } = await import(pathToFileURL(path.join(build, "shared/notice.js")).href)
 
 // 使用自有模拟资源执行真实编译函数体，不启动顶层 supervisor 服务、进程处理器或应用。
 function evaluate(file, names, bindings) {
@@ -23,8 +24,8 @@ function evaluate(file, names, bindings) {
     assert.equal(matches.length, 1, name)
     return matches[0].getText(parsed).replace(/^export\s+(?=(?:async\s+)?function\b)/, "")
   })
-  // 编译后的函数体通过模块导入的 M 取文案。
-  const context = vm.createContext({ M, ...bindings })
+  // 编译后的函数体通过模块导入的 M 取文案，通过 notice 排版通知。
+  const context = vm.createContext({ M, field, notice, ...bindings })
   const source = functions
     .join("\n")
     .replaceAll("import.meta.url", JSON.stringify(pathToFileURL(file).href))
@@ -398,7 +399,10 @@ test("trip removes a queued recovery while preserving an explicit stop request",
   f.trip("cleanup-unconfirmed")
   assert.equal(f.context.pending, undefined)
   // 推送给主人的熔断告警使用原因说明，不显示内部代码。
-  assert.match(f.alertsRaised.at(-1).text, /原因：无法确认上一个业务进程及其子进程已全部退出。/)
+  assert.match(
+    f.alertsRaised.at(-1).text,
+    /🚨 业务进程已熔断\n原因：无法确认上一个业务进程及其子进程已全部退出\n/,
+  )
   assert.doesNotMatch(f.alertsRaised.at(-1).text, /cleanup-unconfirmed/)
   assert.equal(
     f.describeTrip("configuration-rollback-failed:磁盘已满"),

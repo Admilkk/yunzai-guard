@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import type { GuardSettings } from "../shared/types.js"
 import { M } from "../shared/messages.js"
+import { field, notice } from "../shared/notice.js"
 import { inWindow } from "../shared/update-window.js"
 import { compareVersions } from "../shared/version.js"
 import { fetchRelease, gitBranch, gitSync, releaseBranch, versionAt } from "../update/git.js"
@@ -19,6 +20,13 @@ import { planUpdate, readManifest, type UpdateLevel, type UpdatePlan } from "../
 
 type UpdateSettings = GuardSettings["update"]
 type Phase = "idle" | "downloading" | "installing" | "restarting" | "pending" | "failed"
+/** 更新请求的结果；failed 区分执行中出错与未执行（如已是最新），to 为目标版本。 */
+export interface UpdateResult {
+  ok: boolean
+  message: string
+  failed?: boolean
+  to?: string
+}
 /** 更新完成的方式：热替换、重启业务进程、宿主重新启动，或宿主仍需手动重启。 */
 export type FinishMode = "hot" | "worker" | "relaunch" | "host-pending"
 
@@ -115,14 +123,44 @@ function readVersion(pluginDir: string): string {
   }
 }
 
-/** 取更新说明的开头部分，去掉 Markdown 装饰。 */
-function brief(notes: string): string {
-  const lines = notes
+/** 把更新说明整理成分类条目，去掉 Markdown 链接与提交引用；每类最多 3 条。 */
+export function changelog(notes: string): string[] {
+  /** 去掉 Markdown 链接、提交引用、作用域前缀与强调符号。 */
+  const plain = (text: string) =>
+    text
+      .replace(/\s*\(\[[0-9a-f]{7,}\]\([^)]*\)\)/g, "")
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/^\*\*[^*]+:\*\*\s*/, "")
+      .replace(/[*_`]/g, "")
+      .trim()
+  const sections: { title: string; items: string[] }[] = []
+  for (const line of notes.replace(/\r/g, "").split("\n")) {
+    const heading = /^#{3,}\s+(.+)$/.exec(line)
+    const item = /^\s*[*-]\s+(.+)$/.exec(line)
+    if (heading) sections.push({ title: plain(heading[1]), items: [] })
+    else if (item) {
+      if (!sections.length) sections.push({ title: "", items: [] })
+      sections.at(-1)!.items.push(plain(item[1]))
+    }
+  }
+  const lines = sections
+    .filter(section => section.items.length)
+    .slice(0, 4)
+    .flatMap(section => [
+      section.title,
+      ...section.items.slice(0, 3).map(text => `· ${text.slice(0, 80)}`),
+      section.items.length > 3 ? `· 等 ${section.items.length} 项` : "",
+    ])
+    .filter(Boolean)
+  if (lines.length) return lines
+  // 非约定格式的说明：保留前几行纯文本。
+  return notes
     .replace(/\r/g, "")
     .split("\n")
-    .map(line => line.replace(/^[#>*\-\s]+/, "").trim())
+    .map(line => plain(line.replace(/^[#>*\-\s]+/, "")))
     .filter(Boolean)
-  return lines.slice(0, 6).join("\n").slice(0, 400)
+    .slice(0, 4)
+    .map(line => line.slice(0, 80))
 }
 
 /**
@@ -259,12 +297,13 @@ export class UpdateService {
    * immediate 为真时，需要重启业务进程的更新马上执行，不等待空闲。
    * 已有等待生效的更新时，再次请求更新即视为要求马上生效。
    */
-  async apply(force: boolean, immediate = false): Promise<{ ok: boolean; message: string }> {
+  async apply(force: boolean, immediate = false): Promise<UpdateResult> {
     if (this.#pending) return this.applyPending()
     if (this.#busy) return { ok: false, message: M.update.busy }
     const state = this.state()
     if (!state.autoUpdate) return { ok: false, message: M.update.gitSource }
     this.#busy = true
+    let target: string | undefined
     try {
       this.#phase = "downloading"
       this.#message = undefined
@@ -273,6 +312,7 @@ export class UpdateService {
       const release = this.#stored.release
       if (!release) throw new Error(this.#error ?? M.update.fetchFailed("无发布信息"))
       const current = state.current
+      target = release.version
       if ((compareVersions(release.version, current) ?? 0) < 0)
         throw new Error(M.update.downgrade(current, release.version))
       if (!force && !isNewer(release.version, current)) {
@@ -299,7 +339,7 @@ export class UpdateService {
       return this.#install(staged, current, false, immediate, force)
     } catch (error) {
       this.#fail((error as Error).message)
-      return { ok: false, message: (error as Error).message }
+      return { ok: false, message: (error as Error).message, failed: true, to: target }
     }
   }
 
@@ -334,8 +374,23 @@ export class UpdateService {
       changed: plan.changed.length,
       reason: plan.reason,
     })
+    const impact = {
+      static: ["仅更新 Web 控制台，机器人不受影响"],
+      core: ["热替换 Web 控制台，机器人不受影响"],
+      worker: deferred
+        ? ["Web 控制台先行更新，业务侧在机器人空闲时生效", "如需立即生效，请再次发送 #guard更新"]
+        : ["业务进程将重启一次"],
+      host: ["宿主将重启一次，机器人会短暂离线"],
+    }[plan.level]
     const text = `开始${verb}：${current} → ${staged.version}。${effect}`
-    this.notify(`【Yunzai Guard】${text}`)
+    this.notify(
+      notice(
+        `🔄 开始${verb}`,
+        field("版本", `${current} → ${staged.version}`),
+        field("影响", impact[0]),
+        impact[1],
+      ),
+    )
     this.#options.install({ ...staged, plan }, current, rollback, immediate)
     return { ok: true, message: text }
   }
@@ -382,7 +437,7 @@ export class UpdateService {
    * 还原到上一版本：同样按组件比较，能热替换时不重启。
    * 有等待生效的更新时，还原即取消这次更新，控制台回到当前文件。
    */
-  async rollback(): Promise<{ ok: boolean; message: string }> {
+  async rollback(): Promise<UpdateResult> {
     const pending = this.#pending
     if (pending) {
       this.#pending = undefined
@@ -406,7 +461,7 @@ export class UpdateService {
       return this.#install(staged, current, true, true)
     } catch (error) {
       this.#fail((error as Error).message)
-      return { ok: false, message: (error as Error).message }
+      return { ok: false, message: (error as Error).message, failed: true, to: previous.version }
     }
   }
 
@@ -440,7 +495,12 @@ export class UpdateService {
     this.#message = undefined
     this.#options.record("update-deferred", { from, to: staged.version })
     this.notify(
-      `【Yunzai Guard】Web 控制台已${rollback ? "还原" : "更新"}至 ${staged.version}，业务侧更新将在机器人空闲时生效；如需立即生效，请再次发送 #guard更新。`,
+      notice(
+        "⏳ 等待空闲生效",
+        field("版本", `${from} → ${staged.version}`),
+        `Web 控制台已${rollback ? "还原" : "更新"}，业务侧更新将在机器人空闲时生效`,
+        "如需立即生效，请再次发送 #guard更新",
+      ),
     )
   }
 
@@ -524,14 +584,15 @@ export class UpdateService {
     this.#message = result.ok ? undefined : result.message
     const verb = result.rollback ? "还原" : "更新"
     const effect = {
-      hot: "，机器人运行未中断。",
-      worker: "，业务进程已重启。",
-      relaunch: "，宿主已重新启动。",
-      "host-pending": "，需重启宿主后完全生效。",
+      hot: "机器人运行未中断",
+      worker: "业务进程已重启",
+      relaunch: "宿主已重新启动",
+      "host-pending": "需重启宿主后完全生效",
     }[result.mode]
+    const version = field("版本", `${result.from} → ${result.to}`)
     const text = result.ok
-      ? `【Yunzai Guard】已${verb}至 ${result.to}（原版本 ${result.from}）${effect}`
-      : `【Yunzai Guard】${verb}失败：${result.message ?? "原因未知"}。`
+      ? notice(`✅ ${verb}完成`, version, effect)
+      : notice(`❌ ${verb}失败`, version, field("原因", result.message ?? "原因未知"))
     this.#stored.lastResult = {
       ok: result.ok,
       version: result.to,
@@ -591,14 +652,13 @@ export class UpdateService {
       this.#stored.notified = release.version
       this.#options.record("update-available", { current, latest: release.version })
       this.notify(
-        [
-          `【Yunzai Guard】发现新版本 ${release.version}（当前版本 ${current}）`,
-          brief(release.notes),
-          "如需更新，请发送 #guard更新。",
-          release.url,
-        ]
-          .filter(Boolean)
-          .join("\n"),
+        notice(
+          "🆕 发现新版本",
+          field("版本", `${current} → ${release.version}`),
+          ...changelog(release.notes),
+          "发送 #guard更新 开始更新",
+          field("详情", release.url),
+        ),
       )
     }
     this.#save()

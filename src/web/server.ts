@@ -31,6 +31,7 @@ import { handleExtra } from "./extra-api.js"
 import { isLocalAddress } from "./network.js"
 import { compareAudit } from "./compare.js"
 import { M } from "../shared/messages.js"
+import { field, notice } from "../shared/notice.js"
 
 export interface PanelOptions {
   root: string
@@ -239,7 +240,12 @@ export class GuardPanel {
       blocked: (address, seconds) =>
         this.#notify(
           "面板登录被锁定",
-          `【Yunzai Guard】控制台登录连续失败，已暂时锁定来源 ${address}（${Math.round(seconds / 60)} 分钟）`,
+          notice(
+            "🔒 控制台登录已锁定",
+            field("来源", address),
+            field("时长", `${Math.round(seconds / 60)} 分钟`),
+            field("原因", "连续登录失败"),
+          ),
           `login-blocked:${address}`,
         ),
     })
@@ -413,7 +419,7 @@ export class GuardPanel {
       if (!this.#settings.allowExternal && !isLocalAddress(address)) {
         this.#notify(
           "外网访问被拒绝",
-          `【Yunzai Guard】已拒绝来自 ${address} 的控制台访问（默认只开放本机和局域网）`,
+          notice("🚫 已拒绝控制台访问", field("来源", address), "默认只开放本机和局域网"),
           `external-denied:${address}`,
         )
         throw new PanelError(403, M.web.externalDenied)
@@ -524,7 +530,12 @@ export class GuardPanel {
       this.#options.audit?.("panel-login", { method: "chat-link" })
       this.#notify(
         "面板登录",
-        `【Yunzai Guard】控制台已通过聊天链接登录：${deviceName(String(request.headers["user-agent"] ?? ""))}，来源 ${address}`,
+        notice(
+          "🔐 控制台已登录",
+          field("方式", "聊天登录链接"),
+          field("设备", deviceName(String(request.headers["user-agent"] ?? ""))),
+          field("来源", address),
+        ),
         `login:${address}`,
       )
       return sendJson(response, 200, {
@@ -549,7 +560,12 @@ export class GuardPanel {
       this.#options.audit?.("panel-login", { remembered: payload.remember === true })
       this.#notify(
         "面板登录",
-        `【Yunzai Guard】控制台已登录：${deviceName(String(request.headers["user-agent"] ?? ""))}，来源 ${address}`,
+        notice(
+          "🔐 控制台已登录",
+          field("方式", "验证码"),
+          field("设备", deviceName(String(request.headers["user-agent"] ?? ""))),
+          field("来源", address),
+        ),
         `login:${address}`,
       )
       return sendJson(response, 200, {

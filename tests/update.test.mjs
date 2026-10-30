@@ -12,7 +12,7 @@ import { parseSettings } from "../dist/config/index.js"
 import { planSettingsUpdate } from "../dist/config/update.js"
 import { crossesMajor, isNewer, parseRelease } from "../dist/update/release.js"
 import { assetName, checksumFor, stageRelease, swapPackage } from "../dist/update/install.js"
-import { pendingDue, UpdateService } from "../dist/host/update.js"
+import { changelog, pendingDue, UpdateService } from "../dist/host/update.js"
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "guard-update-"))
 const write = (file, text) => {
@@ -352,7 +352,10 @@ test("等待中的业务侧更新：再次请求更新即马上执行，还原�
   service.defer(staged, "1.0.0", false)
   assert.equal(service.state().phase, "pending")
   assert.equal(service.state().pending.version, "1.1.0")
-  assert.match(sent.at(-1), /业务侧更新将在机器人空闲时生效；如需立即生效，请再次发送 #guard更新/)
+  assert.match(
+    sent.at(-1),
+    /⏳ 等待空闲生效\n版本：1\.0\.0 → 1\.1\.0\n[^\n]*业务侧更新将在机器人空闲时生效\n如需立即生效，请再次发送 #guard更新$/,
+  )
   // 有等待中的更新时不再联网检查，直接执行等待中的那次。
   const applied = await service.apply(false)
   assert.equal(applied.ok, true)
@@ -372,9 +375,9 @@ test("等待中的业务侧更新：再次请求更新即马上执行，还原�
 test("更新结果按完成方式说明业务是否中断", t => {
   const { service, sent } = deferredService(t)
   const cases = [
-    ["hot", false, /已更新至 1\.1\.0（原版本 1\.0\.0），机器人运行未中断/],
+    ["hot", false, /✅ 更新完成\n版本：1\.0\.0 → 1\.1\.0\n机器人运行未中断$/],
     ["worker", false, /业务进程已重启/],
-    ["relaunch", true, /已还原至 1\.1\.0（原版本 1\.0\.0），宿主已重新启动/],
+    ["relaunch", true, /✅ 还原完成\n版本：1\.0\.0 → 1\.1\.0\n宿主已重新启动$/],
     ["host-pending", false, /需重启宿主后完全生效/],
   ]
   for (const [mode, rollback, pattern] of cases) {
@@ -383,7 +386,7 @@ test("更新结果按完成方式说明业务是否中断", t => {
     assert.equal(service.state().hostRestartPending, mode === "host-pending")
   }
   service.finish({ ok: false, from: "1.0.0", to: "1.1.0", mode: "hot", message: "坏了" })
-  assert.match(sent.at(-1), /更新失败：坏了/)
+  assert.match(sent.at(-1), /❌ 更新失败\n版本：1\.0\.0 → 1\.1\.0\n原因：坏了$/)
   assert.equal(service.state().phase, "failed")
 })
 
@@ -424,4 +427,31 @@ test("业务侧更新按配置择时执行", () => {
   const window = settings({ workerRestart: "window", window: "03:00-06:00" })
   assert.equal(pendingDue({ ...base, settings: window, now: at(4) }), true)
   assert.equal(pendingDue({ ...base, settings: window, now: at(10, 2) + 7 * hour }), false)
+})
+
+test("新版本通知的更新说明去掉链接与提交引用，每类最多三条", () => {
+  const notes = [
+    "## [1.3.0](https://github.com/o/r/compare/v1.2.0...v1.3.0) (2026-10-29)",
+    "",
+    "### ✨ 新功能",
+    "",
+    "* **windows:** 冷接管后原窗口保持前台体验 ([a02cd5a](https://github.com/o/r/commit/a02cd5a9aa69126b52b4f51129ef3eb4c3c7b8e4))",
+    "",
+    "### 🐛 问题修复",
+    "",
+    "* **runtime:** 修复一 ([261de03](https://github.com/o/r/commit/261de03))",
+    "* 修复二，见 [文档](https://example.com)",
+    "* 修复三",
+    "* 修复四",
+  ].join("\r\n")
+  assert.deepEqual(changelog(notes), [
+    "✨ 新功能",
+    "· 冷接管后原窗口保持前台体验",
+    "🐛 问题修复",
+    "· 修复一",
+    "· 修复二，见 文档",
+    "· 修复三",
+    "· 等 4 项",
+  ])
+  assert.deepEqual(changelog("**手写说明**\n第二行"), ["手写说明", "第二行"])
 })

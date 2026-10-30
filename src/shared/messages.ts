@@ -286,8 +286,10 @@ const messages = {
       "lifecycle-failed": "宿主内部流程出错",
       "recovery-state-write-failed": "无法保存恢复状态",
     } as Record<string, string>,
-    trippedAlert: (reason: unknown) =>
-      `【Yunzai Guard】业务进程已熔断，自动恢复已暂停。原因：${reason}。请排查原因后，在 Web 控制台解除熔断，或执行 node plugins/yunzai-guard/dist/cli.js resume。`,
+    trippedTitle: "🚨 业务进程已熔断",
+    trippedPaused: "自动恢复已暂停",
+    trippedHint:
+      "排查原因后，在 Web 控制台解除熔断，或执行 node plugins/yunzai-guard/dist/cli.js resume",
     rollbackFailed: "配置回退失败",
     auditWriteFailed: `${tag} 审计日志写入失败，可通过 status 查看 logAvailable`,
     event: (label: unknown, reason: unknown) => `${tag} 宿主 ${label}：${reason}`,
