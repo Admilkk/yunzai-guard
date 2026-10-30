@@ -9,6 +9,7 @@ import { validateNativeDescriptor } from "./validation.js"
 import { NativeRegistrationBudget } from "./registrations.js"
 import { parseNativePriority } from "./priority.js"
 import { M } from "../shared/messages.js"
+import { LoaderHooks } from "../monitor/loader-hooks.js"
 import { detectCoreProfile } from "../monitor/loader.js"
 
 type Row = Record<string, any>
@@ -435,107 +436,110 @@ export class NativePluginLoader {
   attach(loader: Row): void {
     this.loader = loader
     const manager = this
-    if (
+    const hooks = LoaderHooks.of(loader)
+    // JiuLi 在一条消息内复用插件实例，须在消息结束时统一释放沙箱侧实例。
+    const scoped =
       detectCoreProfile(this.root).id === "jiuli" &&
       this.settings.pluginSandbox.native.plugins.some(item => item.enabled)
-    ) {
-      if (typeof loader.deal !== "function") throw new Error(M.runtime.loaderExport)
-      const originalDeal = loader.deal
-      loader.deal = function (this: Row, ...args: unknown[]) {
+    if (
+      scoped &&
+      !hooks.around("deal", (next, ...args: unknown[]) => {
         const scope = new Map<object, MessageInstance>()
         return manager.messageScope.run(scope, async () => {
           try {
-            return await Reflect.apply(originalDeal, this, args)
+            return await next(...args)
           } finally {
             await manager.releaseInstances(scope)
           }
         })
-      }
-    }
-    const originalImport = loader.importPlugin
-    loader.importPlugin = async function (
-      file: { name: string; path: string },
-      packageErrors?: unknown[],
-    ) {
-      if (!manager.configuration(file.name))
-        return Reflect.apply(originalImport, this, [file, packageErrors])
-      const selected = manager.configuration(file.name)!
-      if (manager.loadedFiles.get(selected.id)?.has(file.name)) {
-        if (/[?#]/.test(file.path)) {
-          const logger = Reflect.get(globalThis, "logger") as Row | undefined
-          logger?.warn?.(M.nativeSandbox.restartToApply(file.name))
-          return false
-        }
-        return true
-      }
-      let client: NativePluginClient | undefined
-      this.pluginCountMap.set(file.name, 0)
-      const start = performance.now()
-      try {
-        client = manager.client(file.name)
-        if (/[?#]/.test(file.path)) throw new Error(M.nativeSandbox.sourceRestart)
-        const entry = fs.realpathSync.native(path.resolve(manager.root, "lib/plugins", file.path))
-        const relative = path.relative(client.pluginRoot, entry)
-        if (
-          !relative ||
-          relative.startsWith(`..${path.sep}`) ||
-          relative === ".." ||
-          path.isAbsolute(relative)
-        )
-          throw new Error(M.nativeSandbox.entryEscapes)
-        const result = await client.load(entry)
-        if (!result.classes.length) throw new Error(M.nativeSandbox.noClasses(file.name))
-        manager.registrations.reserve(client.config.id, file.name, result.classes)
-        for (const descriptor of result.classes)
-          await this.loadPlugin(file, manager.constructorProxy(client, descriptor, file.name))
-        const files = manager.loadedFiles.get(client.config.id) ?? new Set<string>()
-        files.add(file.name)
-        manager.loadedFiles.set(client.config.id, files)
-        return true
-      } catch (error) {
-        const logger = Reflect.get(globalThis, "logger") as Row | undefined
-        logger?.error?.(M.nativeSandbox.loadError(file.name, String((error as Error).message)))
-        // 失败时拒绝加载，错误路径不得调用原导入器。
-        const config = manager.configuration(file.name)!
-        manager.failedPlugins.add(config.id)
-        const affected = new Set<string>([file.name, ...(manager.loadedFiles.get(config.id) ?? [])])
-        for (const item of this.priority as Row[])
-          if (manager.configuration(item.key)?.id === config.id) affected.add(item.key)
-        let rollbackFailed = false
-        for (const key of affected) {
-          try {
-            await Reflect.apply(originalUnload, this, [key])
-          } catch (cleanupError) {
-            rollbackFailed = true
-            logger?.error?.(M.nativeSandbox.removeFailed(key, (cleanupError as Error).message))
+      })
+    )
+      throw new Error(M.runtime.loaderExport)
+    hooks.around(
+      "importPlugin",
+      async function (next, file: { name: string; path: string }, packageErrors?: unknown[]) {
+        if (!manager.configuration(file.name)) return next(file, packageErrors)
+        const selected = manager.configuration(file.name)!
+        if (manager.loadedFiles.get(selected.id)?.has(file.name)) {
+          if (/[?#]/.test(file.path)) {
+            const logger = Reflect.get(globalThis, "logger") as Row | undefined
+            logger?.warn?.(M.nativeSandbox.restartToApply(file.name))
+            return false
           }
+          return true
         }
-        if (rollbackFailed) {
-          manager.loadedFiles.set(config.id, affected)
-          manager.emit({
-            kind: "plugin-sandbox",
-            plugin: config.id,
-            operation: "native.registration-cleanup-unconfirmed",
-            target: config.id,
-            action: "restart",
-          })
-        } else {
-          manager.loadedFiles.delete(config.id)
-          manager.registrations.release(config.id)
+        let client: NativePluginClient | undefined
+        this.pluginCountMap.set(file.name, 0)
+        const start = performance.now()
+        try {
+          client = manager.client(file.name)
+          if (/[?#]/.test(file.path)) throw new Error(M.nativeSandbox.sourceRestart)
+          const entry = fs.realpathSync.native(path.resolve(manager.root, "lib/plugins", file.path))
+          const relative = path.relative(client.pluginRoot, entry)
+          if (
+            !relative ||
+            relative.startsWith(`..${path.sep}`) ||
+            relative === ".." ||
+            path.isAbsolute(relative)
+          )
+            throw new Error(M.nativeSandbox.entryEscapes)
+          const result = await client.load(entry)
+          if (!result.classes.length) throw new Error(M.nativeSandbox.noClasses(file.name))
+          manager.registrations.reserve(client.config.id, file.name, result.classes)
+          for (const descriptor of result.classes)
+            await this.loadPlugin(file, manager.constructorProxy(client, descriptor, file.name))
+          const files = manager.loadedFiles.get(client.config.id) ?? new Set<string>()
+          files.add(file.name)
+          manager.loadedFiles.set(client.config.id, files)
+          return true
+        } catch (error) {
+          const logger = Reflect.get(globalThis, "logger") as Row | undefined
+          logger?.error?.(M.nativeSandbox.loadError(file.name, String((error as Error).message)))
+          // 失败时拒绝加载，错误路径不得调用原导入器。
+          const config = manager.configuration(file.name)!
+          manager.failedPlugins.add(config.id)
+          const affected = new Set<string>([
+            file.name,
+            ...(manager.loadedFiles.get(config.id) ?? []),
+          ])
+          for (const item of this.priority as Row[])
+            if (manager.configuration(item.key)?.id === config.id) affected.add(item.key)
+          let rollbackFailed = false
+          for (const key of affected) {
+            try {
+              await Reflect.apply(originalUnload, this, [key])
+            } catch (cleanupError) {
+              rollbackFailed = true
+              logger?.error?.(M.nativeSandbox.removeFailed(key, (cleanupError as Error).message))
+            }
+          }
+          if (rollbackFailed) {
+            manager.loadedFiles.set(config.id, affected)
+            manager.emit({
+              kind: "plugin-sandbox",
+              plugin: config.id,
+              operation: "native.registration-cleanup-unconfirmed",
+              target: config.id,
+              action: "restart",
+            })
+          } else {
+            manager.loadedFiles.delete(config.id)
+            manager.registrations.release(config.id)
+          }
+          await client?.close()
+          manager.clients.delete(config.id)
+          return false
+        } finally {
+          this.load_time[file.name] = performance.now() - start
         }
-        await client?.close()
-        manager.clients.delete(config.id)
-        return false
-      } finally {
-        this.load_time[file.name] = performance.now() - start
-      }
-    }
-    const originalUnload = loader.unloadPlugin
+      },
+    )
+    const originalUnload = hooks.original("unloadPlugin")!
     this.originalUnload = originalUnload
-    loader.unloadPlugin = async function (key: string, ...args: unknown[]) {
+    hooks.around("unloadPlugin", async (next, key: string, ...args: unknown[]) => {
       let unloaded = false
       try {
-        const result = await Reflect.apply(originalUnload, this, [key, ...args])
+        const result = await next(key, ...args)
         unloaded = true
         return result
       } finally {
@@ -562,16 +566,15 @@ export class NativePluginLoader {
           }
         }
       }
-    }
-    const originalChange = loader.changePlugin
-    loader.changePlugin = function (key: string, ...args: unknown[]) {
-      if (!manager.configuration(key)) return Reflect.apply(originalChange, this, [key, ...args])
+    })
+    hooks.around("changePlugin", (next, key: string, ...args: unknown[]) => {
+      if (!manager.configuration(key)) return next(key, ...args)
       // 核心私有卸载路径绕过公开生命周期桥接，因此保留旧
       // 进程直至完整受控重启，不将修改后的源码重新加载到核心。
       const logger = Reflect.get(globalThis, "logger") as Row | undefined
       logger?.warn?.(M.nativeSandbox.restartToApply(key))
       return false
-    }
+    })
   }
 
   /** 关闭全部沙箱会话。 */

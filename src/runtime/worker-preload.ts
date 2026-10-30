@@ -29,10 +29,23 @@ import { shutdownBootstrapResources } from "../host/bootstrap/shutdown.js"
 import { AuditSender } from "../audit/sender.js"
 import { createAuditDeadline, parseAuditFrame, type AuditSealFrame } from "../audit/protocol.js"
 import type { WorkerAuditCloseOptions } from "./worker-monitor.js"
-import { RuntimeBus } from "./bus.js"
+import { RuntimeBus, type Command } from "./bus.js"
+import { attachGuardPlugin } from "./guard-plugin.js"
+import { LoaderHooks } from "../monitor/loader-hooks.js"
+import type { GuardCommand } from "../shared/commands.js"
 import { EventCoalescer } from "./coalesce.js"
 import { seal, registerModule } from "../protect/objects.js"
 import { M } from "../shared/messages.js"
+
+/** Guard 安装目录。 */
+const guardRoot = fileURLToPath(new URL("../../", import.meta.url))
+/** 主人命令对应的宿主控制指令。 */
+const guardCommandTypes: Readonly<Record<GuardCommand, Command["type"]>> = Object.freeze({
+  update: "update-request",
+  "force-update": "update-force-request",
+  rollback: "rollback-request",
+  login: "login-link-request",
+})
 
 // 共享运行时根据父进程提供的元数据安装嵌套 Worker 监控。
 // 仅 Yunzai 主线程执行宿主握手及核心生命周期桥接。
@@ -162,11 +175,6 @@ if (isMainThread) {
     settings,
     send: bus.send,
     run: <T>(name: string, callback: () => T): T => storage.run(name, callback),
-    sandboxDispatch: (event: Record<string, unknown>) => sandboxDispatcher.dispatch(event),
-    requestRollback: () => bus.command({ type: "rollback-request" }),
-    requestLoginLink: () => bus.command({ type: "login-link-request" }),
-    requestUpdate: (force: boolean) =>
-      bus.command({ type: force ? "update-force-request" : "update-request" }),
   })
   registerModule("runtime-context", {
     ...context,
@@ -211,7 +219,7 @@ if (isMainThread) {
     try {
       moduleAudit = installModuleAudit({
         root,
-        guardRoot: fileURLToPath(new URL("../../", import.meta.url)),
+        guardRoot,
         contextPlugin: () => storage.getStore(),
         originalFunction: value => plugins.originalFunction(value),
         intervalMs: settings.protect.intervalMs,
@@ -327,12 +335,18 @@ if (isMainThread) {
   }
   const reportTimer = setInterval(reportMonitoring, 2000)
   reportTimer.unref()
-  /** 首次拿到核心加载器时接入插件与原生沙箱监控。 */
+  /** 首次拿到核心加载器时接入钩子，由外到内：Guard 自有插件、插件监控、原生沙箱。 */
   function attachLoader(loader: Dynamic): Dynamic {
     if (roots.PluginsLoader) return loader
     roots.PluginsLoader = loader
-    nativePlugins.attach(loader)
+    attachGuardPlugin(LoaderHooks.of(loader), {
+      entry: path.join(guardRoot, "index.js"),
+      loaderDirectory: path.dirname(path.join(root, coreProfile.loaderFile)),
+      command: command => bus.command({ type: guardCommandTypes[command] }),
+      dispatch: event => sandboxDispatcher.dispatch(event),
+    })
     plugins.attach(loader)
+    nativePlugins.attach(loader)
     return loader
   }
   Object.defineProperty(globalThis, bridgeKey, {

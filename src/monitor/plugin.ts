@@ -1,6 +1,7 @@
 import { evaluatePolicy, GuardDeniedError } from "../config/policy.js"
 import type { EmitEvent, GuardContext } from "../shared/types.js"
 import type { HookWatch } from "./watch.js"
+import { LoaderHooks } from "./loader-hooks.js"
 
 type Dynamic = Record<string, unknown>
 export interface PluginActivity {
@@ -35,6 +36,7 @@ export class PluginMonitor {
   readonly #entries = new Map<string, PluginActivity>()
   readonly #wrapped = new WeakMap<Function, { original: Function; name: string }>()
   readonly #instances = new WeakMap<object, string>()
+  #hooks?: LoaderHooks
   #truncated = false
 
   /** 创建插件入口监控。 */
@@ -122,6 +124,7 @@ export class PluginMonitor {
 
   /** Yunzai 为每条消息新建处理器实例，须保留原 new.target。 */
   construct(constructor: Function, args: unknown[], name: string): object {
+    if (this.#hooks?.trusted(name)) return Reflect.construct(constructor, args) as object
     return this.#invoke(name, "plugin.construct", constructor.name, () => {
       const instance = Reflect.construct(constructor, args) as Dynamic
       this.attachInstance(instance, name)
@@ -183,17 +186,17 @@ export class PluginMonitor {
     }
   }
 
-  /** 仅桥接加载器实例，不修改构造器或磁盘核心源码。 */
+  /** 经钩子引擎桥接加载器实例，不修改构造器或磁盘核心源码；Guard 自有插件原样放行。 */
   attach(loader: Dynamic): void {
     const monitor = this
-    const importPlugin = loader.importPlugin as Function
-    loader.importPlugin = function (this: Dynamic, file: { name: string }, ...args: unknown[]) {
-      return monitor.#invoke(file.name, "plugin.import", "module", () =>
-        apply(importPlugin, this, [file, ...args]),
-      )
-    }
-    const loadPlugin = loader.loadPlugin as Function
-    loader.loadPlugin = function (this: Dynamic, file: { name: string }, constructor: Function) {
+    const hooks = (this.#hooks = LoaderHooks.of(loader))
+    hooks.around("importPlugin", (next, file: { name: string }, ...args: unknown[]) =>
+      hooks.trusted(file.name)
+        ? next(file, ...args)
+        : monitor.#invoke(file.name, "plugin.import", "module", () => next(file, ...args)),
+    )
+    hooks.around("loadPlugin", (next, file: { name: string }, constructor: Function) => {
+      if (hooks.trusted(file.name)) return next(file, constructor)
       const prototype = constructor?.prototype as Dynamic | undefined
       if (prototype)
         for (const key of names(prototype))
@@ -201,31 +204,30 @@ export class PluginMonitor {
       if (prototype) monitor.#observe(prototype, file.name, "prototype")
       if (typeof constructor === "function") monitor.#observe(constructor, file.name, "constructor")
       return monitor.#invoke(file.name, "plugin.load", constructor?.name ?? "unknown", () =>
-        apply(loadPlugin, this, [file, constructor]),
+        next(file, constructor),
       )
-    }
-    const registerHandlers = loader.registerHandlers as Function
-    loader.registerHandlers = function (this: Dynamic, instance: Dynamic, ...args: unknown[]) {
+    })
+    hooks.around("registerHandlers", function (next, instance: Dynamic, ...args: unknown[]) {
       const entries = this.priority as Array<{ plugin: object; key: string }> | undefined
       const name =
         monitor.#instances.get(instance) ?? entries?.find(row => row.plugin === instance)?.key
-      if (name) {
+      if (name && !hooks.trusted(name)) {
         if (!monitor.#instances.has(instance)) {
           const row = monitor.#entry(name)
           if (row) row.registered = increment(row.registered)
         }
         monitor.attachInstance(instance, name)
       }
-      return apply(registerHandlers, this, [instance, ...args])
-    }
-    const collectTask = loader.collectTask as Function
-    loader.collectTask = function (this: unknown, task: unknown, name: unknown, key: string) {
-      for (const item of Array.isArray(task) ? task : [task])
-        if (item && typeof item === "object") {
-          monitor.#wrap(item, "fnc", key, "plugin.task")
-          monitor.#observe(item, key, "task")
-        }
-      return apply(collectTask, this, [task, name, key])
-    }
+      return next(instance, ...args)
+    })
+    hooks.around("collectTask", (next, task: unknown, name: unknown, key: string) => {
+      if (!hooks.trusted(key))
+        for (const item of Array.isArray(task) ? task : [task])
+          if (item && typeof item === "object") {
+            monitor.#wrap(item, "fnc", key, "plugin.task")
+            monitor.#observe(item, key, "task")
+          }
+      return next(task, name, key)
+    })
   }
 }

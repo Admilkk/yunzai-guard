@@ -312,9 +312,10 @@ const messages = {
     noExitHook: `${tag} 核心未提供 exitEvent 或 exit 监听接口，跳过退出钩子`,
   },
   entry: {
-    updateUnavailable: "当前运行方式不支持在线更新。",
+    commandUnavailable: "当前运行方式不支持通过聊天执行 Guard 命令。",
+    bridgeUnavailable:
+      "当前核心未接入 Guard 加载器桥接，无法通过聊天执行此命令，请在 Web 控制台操作。",
     loginSent: "Web 控制台登录链接已通过私聊发送，请查收。",
-    loginUnavailable: "当前运行方式不支持通过聊天获取登录链接。",
     rollbackRequested: "已开始还原至上一版本，宿主将随后重新启动，结果将另行通知。",
     updateRequested: "已开始检查并安装更新，结果将另行通知。",
     updateForced: "已开始强制更新，将重新安装最新版本，结果将另行通知。",
