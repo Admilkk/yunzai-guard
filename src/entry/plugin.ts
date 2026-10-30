@@ -113,9 +113,9 @@ export class YunzaiGuard extends plugin {
       event: "message",
       priority: -1000000,
       rule: [
-        { reg: "^#?guard(强制)?更新$", fnc: "update", permission: "master" },
-        { reg: "^#?guard(回滚|还原)$", fnc: "rollback", permission: "master" },
-        { reg: "^#?guard(登录|登陆|登入|面板)$", fnc: "login", permission: "master" },
+        { reg: /^#?guard(强制)?更新$/i, fnc: "update", permission: "master" },
+        { reg: /^#?guard(回滚|还原)$/i, fnc: "rollback", permission: "master" },
+        { reg: /^#?guard(登录|登陆|登入|面板)$/i, fnc: "login", permission: "master" },
       ],
     })
   }
