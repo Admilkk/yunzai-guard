@@ -38,7 +38,7 @@ test("钩子按登记顺序由外到内执行，保持同步返回值与 this，
   assert.equal(hooks.original("missing"), undefined)
 })
 
-/** 仿 TRSS 加载器：deal 先算出 e.msg 与 e.isMaster，再按优先级执行 accept 与规则。 */
+/** 仿 TRSS 加载器：dealEvent 算出 e.msg 与 e.isMaster，之后依次是上下文、仅响应 @、accept 与规则。 */
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-plugin-"))
   const loaderDirectory = path.join(root, "lib", "plugins")
@@ -80,9 +80,15 @@ function fixture() {
     },
     registerHandlers() {},
     collectTask() {},
-    async deal(e) {
+    dealEvent(e) {
       e.msg = e.text
       Object.defineProperty(e, "isMaster", { value: e.user_id === 1 })
+    },
+    async deal(e) {
+      this.dealEvent(e)
+      // 别的插件在等上下文，或群里要求 @ 时，核心在 accept 之前就返回。
+      if (e.context) return e.reply("context")
+      if (e.atOnly) return
       for (const i of this.priority)
         if (i.plugin.accept) {
           const result = await Object.assign(new i.class(e), { e }).accept(e)
@@ -119,25 +125,20 @@ function fixture() {
     path: "../../plugins/yunzai-guard/index.js",
     constructor: Shell,
   })
-  const message = (text, user_id = 1) => {
+  const message = (text, user_id = 1, extra = {}) => {
     const replies = []
-    return { text, user_id, replies, reply: value => replies.push(value) }
+    return { text, user_id, replies, reply: value => replies.push(value), ...extra }
   }
   return { loader, hooks, monitor, commands, dispatched, events, message }
 }
 
-test("Guard 入口被换成运行时子类：最先处理主人命令，不进入插件监控", async () => {
+test("Guard 入口被换成运行时子类：分派受限脚本，不进入插件监控", async () => {
   const f = fixture()
   const guard = f.loader.priority.find(item => item.key === "yunzai-guard")
   assert.equal(f.loader.priority[0], guard)
   assert.equal(guard.priority, -Infinity)
   assert.deepEqual(guard.plugin.rule, [])
   assert.ok(f.hooks.trusted("yunzai-guard"))
-
-  const command = f.message("#GUARD强制更新")
-  await f.loader.deal(command)
-  assert.deepEqual(f.commands, ["force-update"])
-  assert.equal(command.replies.length, 1)
 
   await f.loader.deal(f.message("#strict"))
   await f.loader.deal(f.message("hello"))
@@ -149,17 +150,27 @@ test("Guard 入口被换成运行时子类：最先处理主人命令，不进�
   assert.ok(f.events.every(event => event.plugin !== "yunzai-guard"))
 })
 
-test("非主人、伪造事件与重复调用都不会触发命令", async () => {
+test("主人命令在 dealEvent 之后立即处理，先于上下文、仅响应 @ 与全部插件", async () => {
   const f = fixture()
-  await f.loader.deal(f.message("#guard更新", 2))
+  const command = f.message("#GUARD强制更新", 1, { context: true })
+  await f.loader.deal(command)
+  await f.loader.deal(f.message("#guard登录", 1, { atOnly: true }))
+  assert.deepEqual(f.commands, ["force-update", "login"])
+  assert.equal(command.replies.length, 1)
+  assert.notEqual(command.replies[0], "context")
+  assert.deepEqual(f.dispatched, [])
+})
+
+test("非主人与伪造事件都不会触发命令", async () => {
+  const f = fixture()
+  const stranger = f.message("#guard更新", 2)
+  await f.loader.deal(stranger)
+  assert.deepEqual(stranger.replies, [])
   const { class: Guard } = f.loader.priority.find(item => item.key === "yunzai-guard")
   const forged = { msg: "#guard登录", isMaster: true, reply() {} }
-  assert.equal(await new Guard(forged).accept(forged), false)
-
-  const live = f.message("#guard还原")
-  await f.loader.deal(live)
-  assert.equal(await new Guard(live).accept(live), false)
-  assert.deepEqual(f.commands, ["rollback"])
+  await new Guard(forged).accept(forged)
+  assert.throws(() => f.loader.dealEvent({ text: "#guard还原", user_id: 1 }))
+  assert.deepEqual(f.commands, [])
 })
 
 test("同名但不是 Guard 入口文件的插件不会被接管", () => {

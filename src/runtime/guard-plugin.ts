@@ -38,34 +38,40 @@ function located(directory: string, value: unknown): string | undefined {
   }
 }
 
+/** 主人命令已识别：从 dealEvent 抛出，由外层 deal 钩子接住并结束本次分派。 */
+class Intercepted {
+  constructor(
+    readonly event: object,
+    readonly command: GuardCommand,
+  ) {}
+}
+
 /**
  * 接管 Guard 自有插件：核心加载 Guard 入口时换成运行时子类，监控与策略不再统计它。
- * 子类以最高优先级在 accept 中先处理主人命令，再分派受限脚本；命令能力只留在本模块闭包内。
- * 主人身份沿用核心算出的 e.isMaster，且只认核心 deal 实际分派的事件，插件伪造的事件对象无效。
+ * 主人命令在 dealEvent 算出 e.msg 与 e.isMaster 后立即处理并结束分派，
+ * 先于上下文、仅响应 @、分派前钩子与全部插件；只有黑白名单与冷却仍在其前。
+ * 子类以最高优先级在 accept 中分派受限脚本；命令能力只留在本模块闭包内。
  */
 export function attachGuardPlugin(hooks: LoaderHooks, options: GuardPluginOptions): void {
   const entry = located(options.loaderDirectory, options.entry)
-  const live = new WeakSet()
-  const tracked = hooks.around("deal", (next, event: unknown, ...args: unknown[]) => {
-    if (event && typeof event === "object") live.add(event)
-    return next(event, ...args)
-  })
-  // 无法确认事件来源时不接管，保留入口插件的兜底规则。
-  if (!entry || !tracked) return
-
-  /** 处理一条消息；返回 "return" 时核心停止后续分派。 */
-  async function accept(event: Row): Promise<"return" | false> {
-    const command = parseGuardCommand(event?.msg)
-    if (command) {
-      if (!live.has(event) || event.isMaster !== true) return false
-      // 每个事件只触发一次，避免插件拿到主人消息后重复调用。
-      live.delete(event)
-      options.command(command)
-      await event.reply?.(replies[command])
-      return "return"
-    }
-    return (await options.dispatch(event)) ? "return" : false
-  }
+  if (!entry) return
+  const intercepting =
+    hooks.around("deal", async (next, event: Row, ...args: unknown[]) => {
+      try {
+        return await next(event, ...args)
+      } catch (error) {
+        if (!(error instanceof Intercepted) || error.event !== event) throw error
+        options.command(error.command)
+        await event.reply?.(replies[error.command])
+      }
+    }) &&
+    hooks.around("dealEvent", (next, event: Row, ...args: unknown[]) => {
+      const result = next(event, ...args)
+      const command = parseGuardCommand(event?.msg)
+      // 主人身份沿用核心刚算出的 e.isMaster；直接调用 dealEvent 的伪造事件只会收到异常。
+      if (command && event.isMaster === true) throw new Intercepted(event, command)
+      return result
+    })
 
   const own = (file: Row) => located(options.loaderDirectory, file?.path) === entry
   hooks.around("importPlugin", (next, file: Row, ...args: unknown[]) => {
@@ -79,13 +85,13 @@ export function attachGuardPlugin(hooks: LoaderHooks, options: GuardPluginOption
     class GuardPlugin extends base {
       constructor(...args: any[]) {
         super(...args)
-        // 命令改在 accept 中处理，规则留空以免与其他插件重复匹配。
         this.priority = -Infinity
-        this.rule = []
+        // 命令已在分派前处理，规则留空；无法拦截时保留入口插件的兜底规则。
+        if (intercepting) this.rule = []
       }
 
-      accept(event: Row) {
-        return accept(event)
+      async accept(event: Row) {
+        return (await options.dispatch(event)) ? "return" : false
       }
     }
     return next(file, GuardPlugin)
