@@ -74,10 +74,7 @@ export function attachGuardPlugin(hooks: LoaderHooks, options: GuardPluginOption
     })
 
   const own = (file: Row) => located(options.loaderDirectory, file?.path) === entry
-  hooks.around("importPlugin", (next, file: Row, ...args: unknown[]) => {
-    if (own(file)) hooks.trust(file.name)
-    return next(file, ...args)
-  })
+  hooks.trustWhen(own)
   hooks.around("loadPlugin", (next, file: Row, constructor: unknown) => {
     if (typeof constructor !== "function" || !hooks.trusted(file?.name) || !own(file))
       return next(file, constructor)

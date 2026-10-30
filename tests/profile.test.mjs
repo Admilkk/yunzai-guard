@@ -183,6 +183,30 @@ test("risk grows with capability and persistence survives a restart", () => {
   assert.equal(reload.detail("demo"), undefined)
 })
 
+test("超过公共读取默认 4 MiB 限额的合法画像重启后仍保留特征与学习状态", context => {
+  const t = create()
+  const file = path.join(t.directory, "profiles.json")
+  context.after(() => {
+    t.profile.flush()
+    fs.rmSync(file, { force: true })
+    fs.rmdirSync(t.directory)
+  })
+  const settings = parseSettings({ baseline: { enabled: true, learnHours: 24 } }).baseline
+  const names = Array.from({ length: 35 }, (_, index) => `plugin-${index}`)
+  for (const plugin of names)
+    for (let index = 0; index < settings.maxPerPlugin; index++)
+      t.event(`https://host${index}.${"b".repeat(180)}.test/`, { plugin })
+  t.profile.endLearning()
+  t.profile.flush()
+  assert.ok(fs.statSync(file).size > 4 * 1024 * 1024)
+
+  const reload = new BehaviorProfile({ file, settings: () => settings, clock: () => base })
+  assert.deepEqual(reload.summary(), t.profile.summary())
+  for (const plugin of names) assert.deepEqual(reload.detail(plugin), t.profile.detail(plugin))
+  assert.equal(reload.detail(names[0]).learning, false)
+  assert.equal(reload.detail(names[0]).features.length, settings.maxPerPlugin)
+})
+
 test("prototype-named plugins have independent profiles across restart and reset", () => {
   const t = create()
   const names = ["constructor", "__proto__", "toString"]

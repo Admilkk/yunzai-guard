@@ -190,7 +190,8 @@ export class BehaviorProfile {
     this.#settings = options.settings
     this.#clock = options.clock ?? Date.now
     try {
-      const value = readJsonFile(this.#file) as {
+      // 画像按插件累积，写入没有总大小上限；不能套用小型状态文件的默认限额。
+      const value = readJsonFile(this.#file, Infinity) as {
         plugins?: Record<string, unknown>
       } | null
       if (value?.plugins && typeof value.plugins === "object" && !Array.isArray(value.plugins))

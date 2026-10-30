@@ -1,3 +1,5 @@
+import { M } from "../shared/messages.js"
+
 /** 在业务插件加载前捕获入口，仅供 Guard 内部调用，不冻结业务内建对象。 */
 const call = Reflect.apply
 const ObjectClass = Object
@@ -61,11 +63,32 @@ const captures = {
   iso: Date.prototype.toISOString,
 }
 
+type ReflectionHooks = Pick<typeof Object, "defineProperty" | "freeze">
+let reflection: ReflectionHooks = { defineProperty: captures.define, freeze: captures.freeze }
+let reflectionClaimed = false
+
+/** 反射观察器在模块初始化时领取一次配置能力；能力本身只留在其闭包中。 */
+export function claimReflectionHooks(): (hooks: ReflectionHooks) => () => void {
+  if (reflectionClaimed) {
+    const failure = new ErrorClass(M.protect.reflectionClaimed)
+    captures.define(failure, "code", { value: "ERR_GUARD_SELF_PROTECTION" })
+    throw failure
+  }
+  reflectionClaimed = true
+  return hooks => {
+    const previous = reflection
+    reflection = hooks
+    return () => {
+      if (reflection === hooks) reflection = previous
+    }
+  }
+}
+
 /** 使用预先捕获的 Reflect.apply 调用函数。 */
 export const apply = (fn: Function, receiver: unknown, args: ArrayLike<unknown>): any =>
   call(fn, receiver, args)
 /** 内部描述符只采用自有字段，隔绝 Object.prototype 上的同名属性。 */
-function cleanDescriptor(descriptor: PropertyDescriptor): PropertyDescriptor {
+export function cleanDescriptor(descriptor: PropertyDescriptor): PropertyDescriptor {
   const clean = captures.create(null) as PropertyDescriptor
   const fields = ["value", "get", "set", "writable", "enumerable", "configurable"] as const
   for (let index = 0; index < fields.length; index++) {
@@ -74,9 +97,9 @@ function cleanDescriptor(descriptor: PropertyDescriptor): PropertyDescriptor {
   }
   return clean
 }
-/** 使用清洗后的描述符定义属性。 */
+/** 使用清洗后的描述符定义属性；经过已安装的反射监控，不导出原始写入口。 */
 export const objectDefine: typeof Object.defineProperty = (object, key, descriptor) =>
-  captures.define(object, key, cleanDescriptor(descriptor))
+  call(reflection.defineProperty, ObjectClass, [object, key, cleanDescriptor(descriptor)])
 /** 使用捕获的 Object.create 创建对象。 */
 export const objectCreate: typeof Object.create = (...args: unknown[]) =>
   call(captures.create, undefined, args)
@@ -112,8 +135,9 @@ export function objectDescriptors(object: object): Record<PropertyKey, PropertyD
   }
   return result
 }
-/** 冻结对象。 */
-export const objectFreeze = <T>(object: T): Readonly<T> => captures.freeze(object)
+/** 冻结对象，同样经过反射监控。 */
+export const objectFreeze = <T>(object: T): Readonly<T> =>
+  call(reflection.freeze, ObjectClass, [object]) as Readonly<T>
 /** 列出自有可枚举键值对。 */
 export const objectEntries = <T>(object: Record<string, T>): [string, T][] =>
   captures.entries(object)

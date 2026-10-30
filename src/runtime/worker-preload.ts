@@ -132,6 +132,7 @@ if (isMainThread) {
   )
     throw new Error(M.runtime.sandboxHandshake)
   const storage = new AsyncLocalStorage<string>()
+  const run = <T>(name: string, callback: () => T): T => storage.run(name, callback)
   // 仍可观察旧测试及旧父进程，但不能签发有序的宿主回执。
   const auditChannelNonce = hello.auditChannelNonce ?? randomBytes(24).toString("hex")
   let auditClose: WorkerAuditCloseOptions | undefined
@@ -174,10 +175,10 @@ if (isMainThread) {
     generation: hello.generation,
     settings,
     send: bus.send,
-    run: <T>(name: string, callback: () => T): T => storage.run(name, callback),
   })
   registerModule("runtime-context", {
     ...context,
+    run,
     audit: bus.audit,
     command: bus.command,
     notify: bus.notify,
@@ -309,7 +310,7 @@ if (isMainThread) {
   const coreProfile = detectCoreProfile(root)
   const coreLoaderUrl = pathToFileURL(path.join(root, coreProfile.loaderFile)).href
   const plugins = new PluginMonitor(
-    context,
+    { settings, run },
     emit,
     () => monitor.check(),
     runtime.watch,
@@ -339,7 +340,8 @@ if (isMainThread) {
   function attachLoader(loader: Dynamic): Dynamic {
     if (roots.PluginsLoader) return loader
     roots.PluginsLoader = loader
-    attachGuardPlugin(LoaderHooks.of(loader), {
+    const hooks = LoaderHooks.of(loader)
+    attachGuardPlugin(hooks, {
       entry: path.join(guardRoot, "index.js"),
       loaderDirectory: path.dirname(path.join(root, coreProfile.loaderFile)),
       command: command => bus.command({ type: guardCommandTypes[command] }),
@@ -347,6 +349,7 @@ if (isMainThread) {
     })
     plugins.attach(loader)
     nativePlugins.attach(loader)
+    hooks.lock()
     return loader
   }
   Object.defineProperty(globalThis, bridgeKey, {

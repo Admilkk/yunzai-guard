@@ -38,6 +38,36 @@ test("钩子按登记顺序由外到内执行，保持同步返回值与 this，
   assert.equal(hooks.original("missing"), undefined)
 })
 
+test("关闭注册后，已取得的入口也不能新增钩子、信任条件或取得原方法", () => {
+  const loader = {
+    value: 1,
+    read() {
+      return this.value
+    },
+    importPlugin() {},
+  }
+  const hooks = LoaderHooks.of(loader)
+  const register = hooks.around.bind(hooks)
+  const trust = hooks.trustWhen.bind(hooks)
+  const original = hooks.original.bind(hooks)
+  hooks.around("read", next => next() + 1)
+  const read = loader.read
+  hooks.lock()
+  hooks.lock()
+
+  const denied = { code: "ERR_GUARD_SELF_PROTECTION" }
+  assert.throws(() => register("read", () => 99), denied)
+  assert.throws(() => trust(() => true), denied)
+  assert.throws(() => original("read"), denied)
+  assert.throws(() => new LoaderHooks(loader), denied)
+  assert.throws(() => Object.defineProperty(hooks, "trusted", { value: () => true }), TypeError)
+  assert.equal(LoaderHooks.of(loader), hooks)
+  assert.equal(Object.isFrozen(hooks), true)
+  assert.equal(loader.read, read)
+  assert.equal(loader.read(), 2)
+  assert.equal(hooks.trusted("impostor"), false)
+})
+
 /** 仿 TRSS 加载器：dealEvent 算出 e.msg 与 e.isMaster，之后依次是上下文、仅响应 @、accept 与规则。 */
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-plugin-"))
@@ -115,6 +145,8 @@ function fixture() {
     () => {},
   )
   monitor.attach(loader)
+  // 与受管运行时一致：先关闭注册，再导入全部业务插件和 Guard 入口。
+  hooks.lock()
   loader.importPlugin({
     name: "other",
     path: "../../plugins/impostor/index.js",
@@ -171,6 +203,27 @@ test("非主人与伪造事件都不会触发命令", async () => {
   await new Guard(forged).accept(forged)
   assert.throws(() => f.loader.dealEvent({ text: "#guard还原", user_id: 1 }))
   assert.deepEqual(f.commands, [])
+})
+
+test("插件不能追加 dealEvent 钩子伪造主人命令，正常主人命令仍可执行", async () => {
+  const f = fixture()
+  const wrapped = f.loader.dealEvent
+  const hooks = LoaderHooks.of(f.loader)
+  assert.throws(
+    () =>
+      hooks.around("dealEvent", (_next, event) => {
+        event.msg = "#guard强制更新"
+        event.isMaster = true
+      }),
+    { code: "ERR_GUARD_SELF_PROTECTION" },
+  )
+  assert.throws(() => hooks.trustWhen(() => true), { code: "ERR_GUARD_SELF_PROTECTION" })
+  assert.equal(hooks.trusted("other"), false)
+  await f.loader.deal(f.message("#guard强制更新", 2))
+  assert.deepEqual(f.commands, [])
+  assert.equal(f.loader.dealEvent, wrapped)
+  await f.loader.deal(f.message("#guard强制更新"))
+  assert.deepEqual(f.commands, ["force-update"])
 })
 
 test("同名但不是 Guard 入口文件的插件不会被接管", () => {

@@ -4,9 +4,10 @@ import type { HookWatch } from "../monitor/watch.js"
 
 import * as intrinsics from "./intrinsics.js"
 import {
-  objectDefine as define,
+  cleanDescriptor,
+  objectDefine,
   objectDescriptors as descriptors,
-  objectFreeze as freeze,
+  objectFreeze,
   ownKeys,
   objectDescriptor as getDescriptor,
   reflectGet as get,
@@ -29,6 +30,11 @@ import {
 } from "./intrinsics.js"
 import { M } from "../shared/messages.js"
 
+// 自保护安装与加固需要绕开自身的观察器；原始反射入口仅保留在本模块闭包中。
+const nativeDefine = Object.defineProperty
+const freeze = Object.freeze
+const define: typeof Object.defineProperty = (object, key, descriptor) =>
+  nativeDefine(object, key, cleanDescriptor(descriptor))
 const isProxy = types.isProxy
 const registered = newMap<string, Record<string, unknown>>()
 const hardened = newWeakSet<object>()
@@ -70,6 +76,18 @@ export function seal(
   label = string(key),
   allowCopy = false,
 ): void {
+  sealSlot(object, key, value, label, allowCopy, objectDefine)
+}
+
+/** 内部加固使用私有写入口；公开 seal 使用经过监控的写入口。 */
+function sealSlot(
+  object: object,
+  key: PropertyKey,
+  value: unknown,
+  label: string,
+  allowCopy: boolean,
+  write: typeof Object.defineProperty,
+): void {
   const descriptor = getDescriptor(object, key)
   if (descriptor && !descriptor.configurable) {
     if ("value" in descriptor && descriptor.value === value && !descriptor.writable) {
@@ -84,7 +102,7 @@ export function seal(
     receiver !== object &&
     receiver !== null &&
     (typeof receiver === "object" || typeof receiver === "function")
-  define(object, key, {
+  write(object, key, {
     configurable: false,
     enumerable: descriptor?.enumerable ?? true,
     /** 副本读取自身包装，原对象读取原始值。 */
@@ -132,7 +150,14 @@ function harden(value: unknown, label: string): void {
           if (name === "constructor") return
           const member = getDescriptor(prototype, name)!
           if (typeof member.value === "function" && member.configurable) {
-            seal(prototype, name, member.value, `${label}.prototype.${string(name)}`)
+            sealSlot(
+              prototype,
+              name,
+              member.value,
+              `${label}.prototype.${string(name)}`,
+              false,
+              define,
+            )
             harden(member.value, `${label}.${string(name)}`)
           }
         })
@@ -140,7 +165,7 @@ function harden(value: unknown, label: string): void {
         watch?.track(prototype, { before: () => refuse("function-hook", `${label}.prototype`) })
       }
     } else if (typeof descriptor.value === "function" && descriptor.configurable) {
-      seal(value, key, descriptor.value, `${label}.${string(key)}`)
+      sealSlot(value, key, descriptor.value, `${label}.${string(key)}`, false, define)
       harden(descriptor.value, `${label}.${string(key)}`)
     } else if (typeof descriptor.value === "function")
       harden(descriptor.value, `${label}.${string(key)}`)
@@ -180,7 +205,7 @@ export function freezeData<T>(value: T): T {
     arrayEach(values(descriptors(item)), descriptor => {
       if ("value" in descriptor) visit(descriptor.value)
     })
-    freeze(item)
+    objectFreeze(item)
   }
   visit(value)
   return value

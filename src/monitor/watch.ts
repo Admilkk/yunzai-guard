@@ -1,7 +1,8 @@
 import { types } from "node:util"
 import {
   apply,
-  objectDefine as define,
+  cleanDescriptor,
+  claimReflectionHooks,
   objectDescriptor as descriptor,
   objectPrototype as prototype,
   objectExtensible as extensible,
@@ -27,6 +28,12 @@ import {
   sameDescriptor as same,
   isReference,
 } from "../protect/intrinsics.js"
+
+// 安装/卸载反射包装器时不能递归进入自身；此原始入口不对外暴露。
+const nativeDefine = Object.defineProperty
+const define: typeof Object.defineProperty = (object, key, descriptor) =>
+  nativeDefine(object, key, cleanDescriptor(descriptor))
+const bindReflection = claimReflectionHooks()
 
 export interface HookRequest {
   operation: string
@@ -239,6 +246,8 @@ export function installHookWatch(): HookWatch {
     return result
   }
 
+  let observedDefine: typeof Object.defineProperty | undefined
+  let observedFreeze: typeof Object.freeze | undefined
   try {
     arrayEach(slots, slot => {
       const object = slot[0]
@@ -254,11 +263,19 @@ export function installHookWatch(): HookWatch {
       })
       define(object, key, { ...property, value })
       arrayPush(patches, { object, key, value, original: property })
+      if (object === Object && key === "defineProperty")
+        observedDefine = value as typeof Object.defineProperty
+      if (object === Object && key === "freeze") observedFreeze = value as typeof Object.freeze
     })
   } catch (error) {
     arrayEach(patches, patch => define(patch.object, patch.key, patch.original))
     throw error
   }
+  // 直接保存已安装的包装器，不依赖业务可修改的全局属性。
+  const releaseReflection = bindReflection({
+    defineProperty: observedDefine!,
+    freeze: observedFreeze!,
+  })
 
   return {
     /** 登记对象监听，返回取消函数。 */
@@ -286,6 +303,7 @@ export function installHookWatch(): HookWatch {
         if (current?.value === patch.value && (current.configurable || current.writable))
           define(patch.object, patch.key, patch.original)
       })
+      releaseReflection()
     },
   }
 }

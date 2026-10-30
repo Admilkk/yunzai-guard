@@ -294,6 +294,8 @@ export function writeLegacyMirror(stateDir: string, value: Plain): void {
 
 /** 原子写入用户配置，并同步 settings.json 镜像；镜像失败不影响配置本身。 */
 export function writeSettingsText(stateDir: string, text: string): void {
+  if (Buffer.byteLength(text) > maxSettingsBytes)
+    throw new TypeError(M.config.fileSize(settingsFiles.user))
   const value = parseSettingsText(text)
   writeTextFile(path.join(stateDir, settingsFiles.user), text)
   try {
@@ -333,12 +335,14 @@ export function prepareSettingsFiles(stateDir: string, defaults: Plain): string[
       const json = readText(legacy, "json")
       const value: unknown = json === undefined ? undefined : JSON.parse(json)
       if (json !== undefined && !plain(value)) return notices
-      writeTextFile(
-        user,
-        plain(value)
-          ? renderSettings(value, { defaults, omitDefaults: false })
-          : starterSettingsText(),
-      )
+      const converted = plain(value)
+        ? renderSettings(value, { defaults, omitDefaults: false })
+        : starterSettingsText()
+      if (Buffer.byteLength(converted) > maxSettingsBytes) {
+        notices.push(M.config.migrationTooLarge)
+        return notices
+      }
+      writeTextFile(user, converted)
       if (json !== undefined) notices.push(M.config.migrated)
       return notices
     }

@@ -15,6 +15,7 @@ const messages = {
     jsonOversize: (file: unknown) => `JSON 文件超过大小上限：${file}`,
   },
   protect: {
+    reflectionClaimed: "反射监控配置能力已由 Guard 领取，不能再次获取",
     exposeInternals: "自保护要求关闭 --expose-internals",
     inspectorOpen: "自保护要求关闭 Inspector",
     denied: (operation: unknown, target: unknown) => `Guard 自保护已拒绝 ${operation}：${target}`,
@@ -49,6 +50,7 @@ const messages = {
     yamlSyntax: (name: unknown, detail: unknown) => `${name} 格式有误：${detail}`,
     yamlRoot: (name: unknown) => `${name} 顶层必须是键值对象`,
     migrated: `${tag} 配置已转换为 settings.yaml，之后请编辑 settings.yaml；settings.json 保留供回退旧版本使用。`,
+    migrationTooLarge: `${tag} 转换后的 settings.yaml 超过 1 MiB，继续使用原 settings.json；请精简配置后重启以完成转换。`,
     legacyEdited: `${tag} settings.json 的修改不会生效：配置已改用 settings.yaml，请把修改写到 settings.yaml。`,
     object: (location: unknown) => `${location} 须为 JSON 对象`,
     plainObject: (location: unknown) => `${location} 须为普通 JSON 对象`,

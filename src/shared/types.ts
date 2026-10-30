@@ -121,10 +121,9 @@ export interface GuardSettings {
 export type EmitEvent = (event: GuardEvent) => void
 
 export interface GuardContext {
-  generation: number
-  settings: GuardSettings
-  send: (type: string, extra?: Record<string, unknown>) => void
-  run: <T>(pluginName: string, callback: () => T) => T
+  readonly generation: number
+  readonly settings: GuardSettings
+  readonly send: (type: string, extra?: Record<string, unknown>) => void
 }
 
 export interface CoreBot {

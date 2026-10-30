@@ -24,6 +24,51 @@ test("self protection cannot be downgraded by an audit wildcard", () => {
   )
 })
 
+test("导出的反射助手不能绕过即时监控，临时改动恢复后仍有审计，自保护不可降级", () => {
+  const code = `
+    import assert from "node:assert/strict";
+    import fs from "node:fs";
+    import {installRuntime} from ${JSON.stringify(moduleUrl("runtime/index"))};
+    import {parseSettings} from ${JSON.stringify(moduleUrl("config/index"))};
+    import {IntegrityMonitor} from ${JSON.stringify(moduleUrl("monitor/integrity"))};
+    import {objectDefine,objectFreeze,claimReflectionHooks} from ${JSON.stringify(moduleUrl("protect/intrinsics"))};
+    import {seal,freezeData} from ${JSON.stringify(moduleUrl("protect/objects"))};
+    const settings=parseSettings({protect:{targets:["Demo.fn"]}});
+    const runtime=installRuntime({settings,identity:{id:"exported-reflection",generation:1,kind:"yunzai",pid:process.pid,originPlugin:"demo",observability:"js-entrypoints"},emit(){}});
+    const create=()=>{
+      const events=[],object={fn(){return "original"}};
+      const monitor=new IntegrityMonitor(settings,{Demo:object},event=>events.push(event),runtime.watch);
+      monitor.capture();
+      return {object,events,monitor};
+    };
+    const probe=create();
+    const original=Object.getOwnPropertyDescriptor(probe.object,"fn");
+    objectDefine(probe.object,"fn",{...original,value(){return "changed"}});
+    assert.equal(probe.object.fn(),"changed");
+    objectDefine(probe.object,"fn",original);
+    probe.monitor.check();
+    assert.equal(probe.events.length,2);
+    assert.ok(probe.events.every(event=>event.operation==="protected-target-change"&&event.details.detection==="during-call"));
+    probe.monitor.stop();
+    for(const mutate of [objectFreeze,freezeData,object=>seal(object,"fn",()=>"sealed")]){
+      const probe=create();
+      mutate(probe.object);
+      assert.ok(probe.events.some(event=>event.operation==="protected-target-change"&&event.details.detection==="during-call"));
+      probe.monitor.stop();
+    }
+    assert.throws(()=>objectDefine(fs,"writeFileSync",{value(){}}),{code:"ERR_GUARD_SELF_PROTECTION"});
+    assert.throws(()=>claimReflectionHooks(),{code:"ERR_GUARD_SELF_PROTECTION"});
+    assert.throws(()=>objectFreeze(fs.writeFileSync),{code:"ERR_GUARD_SELF_PROTECTION"});
+    assert.throws(()=>freezeData(IntegrityMonitor.prototype),{code:"ERR_GUARD_SELF_PROTECTION"});
+  `
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", code], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 15000,
+  })
+  assert.equal(result.status, 0, `${result.error ?? ""}${result.stderr}`)
+})
+
 test("自保护启用后 promisify 保留子进程结果、重复转换及拒绝规则", () => {
   for (const action of ["audit", "deny"]) {
     const code = `

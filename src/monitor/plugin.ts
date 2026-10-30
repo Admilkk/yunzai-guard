@@ -1,9 +1,14 @@
 import { evaluatePolicy, GuardDeniedError } from "../config/policy.js"
-import type { EmitEvent, GuardContext } from "../shared/types.js"
+import type { EmitEvent, GuardSettings } from "../shared/types.js"
 import type { HookWatch } from "./watch.js"
 import { LoaderHooks } from "./loader-hooks.js"
 
 type Dynamic = Record<string, unknown>
+/** 仅由运行时闭包传入，不挂到公开 GuardContext。 */
+interface PluginContext {
+  settings: GuardSettings
+  run: <T>(name: string, callback: () => T) => T
+}
 export interface PluginActivity {
   name: string
   imports: number
@@ -27,7 +32,7 @@ const increment = (value: number) => Math.min(Number.MAX_SAFE_INTEGER, value + 1
 
 /** 兼容性插桩只记录入口次数及归属，不构成恶意代码防护边界。 */
 export class PluginMonitor {
-  readonly #context: GuardContext
+  readonly #context: PluginContext
   readonly #emit: EmitEvent
   readonly #check: () => void
   readonly #watch?: HookWatch
@@ -41,7 +46,7 @@ export class PluginMonitor {
 
   /** 创建插件入口监控。 */
   constructor(
-    context: GuardContext,
+    context: PluginContext,
     emit: EmitEvent,
     check: () => void,
     watch?: HookWatch,

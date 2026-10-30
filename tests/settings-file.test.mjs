@@ -4,8 +4,18 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { parse } from "yaml"
-import { loadSettings, prepareSettings, settingsDefaults } from "../dist/config/index.js"
-import { renderSettings, settingNote } from "../dist/config/settings-file.js"
+import {
+  loadSettings,
+  parseSettings,
+  prepareSettings,
+  settingsDefaults,
+} from "../dist/config/index.js"
+import {
+  maxSettingsBytes,
+  renderSettings,
+  settingNote,
+  writeSettingsText,
+} from "../dist/config/settings-file.js"
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "guard-settings-file-"))
 const read = (directory, name) => fs.readFileSync(path.join(directory, name), "utf8")
@@ -31,6 +41,52 @@ test("旧版 settings.json 转换为带注释的 settings.yaml，所有项原样
   assert.equal(read(directory, "settings.json"), original)
   assert.deepEqual(prepareSettings(directory), [])
   assert.equal(loadSettings(directory).update.window, "02:00-05:00")
+})
+
+test("合法 JSON 转换后超限时保留原文件继续启动，精简后可重新迁移", () => {
+  const directory = tmp()
+  const legacy = {
+    rules: Array.from({ length: 892 }, (_, index) => ({
+      id: String(index).padStart(100, "r"),
+      plugin: "p".repeat(512),
+      target: "t".repeat(512),
+      action: "deny",
+    })),
+  }
+  const original = JSON.stringify(legacy)
+  assert.ok(Buffer.byteLength(original) <= maxSettingsBytes)
+  assert.ok(Buffer.byteLength(renderSettings(legacy)) > maxSettingsBytes)
+  const expected = parseSettings(legacy)
+  fs.writeFileSync(path.join(directory, "settings.json"), original)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const notices = prepareSettings(directory)
+    assert.match(notices.join(), /超过 1 MiB，继续使用原 settings\.json/)
+    assert.equal(fs.existsSync(path.join(directory, "settings.yaml")), false)
+    assert.equal(read(directory, "settings.json"), original)
+    assert.deepEqual(loadSettings(directory), expected)
+  }
+  legacy.rules.length = 1
+  fs.writeFileSync(path.join(directory, "settings.json"), JSON.stringify(legacy))
+  assert.match(prepareSettings(directory).join(), /已转换为 settings\.yaml/)
+  assert.deepEqual(loadSettings(directory), parseSettings(legacy))
+})
+
+test("配置写入按 UTF-8 字节检查上限，超限时不创建文件或覆盖当前配置与镜像", () => {
+  const directory = tmp()
+  const text = `#${"中".repeat(Math.floor(maxSettingsBytes / 3) + 1)}\n`
+  assert.ok(text.length < maxSettingsBytes)
+  assert.ok(Buffer.byteLength(text) > maxSettingsBytes)
+  assert.throws(() => writeSettingsText(directory, text), /settings\.yaml 须为不超过 1 MiB/)
+  assert.equal(fs.existsSync(path.join(directory, "settings.yaml")), false)
+  assert.equal(fs.existsSync(path.join(directory, "settings.json")), false)
+
+  const previous = "startupTimeout: 70000\n"
+  writeSettingsText(directory, previous)
+  const mirror = read(directory, "settings.json")
+  assert.throws(() => writeSettingsText(directory, text), /settings\.yaml 须为不超过 1 MiB/)
+  assert.equal(read(directory, "settings.yaml"), previous)
+  assert.equal(read(directory, "settings.json"), mirror)
+  assert.equal(loadSettings(directory).startupTimeout, 70000)
 })
 
 test("修改时保留用户的注释、顺序与格式，只改变化的值", () => {

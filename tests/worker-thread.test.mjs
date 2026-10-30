@@ -31,7 +31,29 @@ for (const variant of [
       `
 import assert from "node:assert/strict"
 import { Worker, getEnvironmentData, setEnvironmentData } from "node:worker_threads"
-const mainManaged = Boolean(globalThis[Symbol.for("yunzai.guard.context.v1")])
+import { execFileSync } from "node:child_process"
+const context = globalThis[Symbol.for("yunzai.guard.context.v1")]
+const mainManaged = Boolean(context)
+assert.deepEqual(Object.keys(context).sort(), ["generation", "send", "settings"])
+assert.equal(context.run, undefined)
+assert.equal(Object.isFrozen(context), true)
+// 接入真实运行时的私有插件监控，验证异步插件归因仍生效，公开接口不能再切换身份。
+const loader = globalThis[Symbol.for("yunzai.guard.loader.bridge.v1")].loader({
+  importPlugin() {},
+  loadPlugin(_file, Constructor) { return new Constructor() },
+  registerHandlers() {},
+  collectTask() {},
+})
+class BlockedPlugin {
+  async execute() {
+    await Promise.resolve()
+    const command = () => execFileSync(process.execPath, ["--version"], { encoding: "utf8", windowsHide: true })
+    return context.run ? context.run("allowed-plugin", command) : command()
+  }
+}
+const blocked = loader.loadPlugin({ name: "blocked-plugin" }, BlockedPlugin)
+await assert.rejects(blocked.execute(), { code: "GUARD_DENIED" })
+assert.equal(execFileSync(process.execPath, ["--version"], { encoding: "utf8", windowsHide: true }).trim(), process.version)
 assert.equal(Worker.prototype.constructor, Worker)
 const metadataKey="yunzai.guard.runtime.bootstrap.v1"
 assert.equal(getEnvironmentData(metadataKey),undefined)
@@ -90,7 +112,16 @@ worker.on("message", result => {
           nonce: message.nonce,
           projectId: message.projectId,
           generation: 1,
-          settings: {},
+          settings: {
+            rules: [
+              {
+                id: "deny-blocked-plugin",
+                plugin: "blocked-plugin",
+                kind: "process",
+                action: "deny",
+              },
+            ],
+          },
           auditChannelNonce: "c".repeat(48),
           controlKey: "a".repeat(64),
         })
