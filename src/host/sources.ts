@@ -187,7 +187,7 @@ function statusFiles(value: string): string[] {
     const item = items[index]
     if (item.length < 4) continue
     files.push(item.slice(3))
-    if (item[0] === "R" || item[0] === "C") index++
+    if (item.startsWith("R") || item.startsWith("C")) index++
   }
   return files
 }
