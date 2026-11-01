@@ -10,6 +10,7 @@ import { savePanelSettings } from "../dist/web/panel-settings.js"
 import { parseSettings } from "../dist/config/index.js"
 import { SettingsController } from "../dist/host/settings.js"
 import { AlertService } from "../dist/host/alerts.js"
+import { sha256 } from "../dist/shared/hash.js"
 
 async function fixture(t, configure, panelSettings = {}, controllers) {
   const temporaryRoot = fs.realpathSync(os.tmpdir())
@@ -308,6 +309,7 @@ test("HTTP 结构化审计和插件汇总可读，配置保存拒绝旧版本覆
   const update = { ...session, method: "PUT", body: { document, revision: current.body.revision } }
   const saved = await app.request("/api/settings", update)
   assert.equal(saved.status, 200)
+  assert.equal(saved.body.revision, (await app.request("/api/settings", session)).body.revision)
   assert.equal(saved.body.pendingRestart, true)
   assert.equal((await app.request("/api/settings", update)).status, 409)
   // 保存写入 settings.yaml（带注释），并同步旧版本回退用的 settings.json 镜像。
@@ -355,6 +357,75 @@ test("HTTP 结构化审计和插件汇总可读，配置保存拒绝旧版本覆
   })
   assert.equal(exported.status, 200)
   assert.ok((await exported.text()).includes("'  =1+1"))
+})
+
+test("保存预览只读并返回实际应用范围，撤销复用版本检查且保留 YAML 注释", async t => {
+  const app = await fixture(t)
+  const session = await app.login()
+  const original = (await app.request("/api/settings", session)).body
+  const document = structuredClone(original.normalized)
+  document.rules.unshift({ id: "quick", kind: "network", plugin: "demo-plugin", action: "deny" })
+  document.controlPort = document.controlPort === 21732 ? 21734 : 21732
+  document.alerts.enabled = !document.alerts.enabled
+  const preview = await app.request("/api/settings/validate", {
+    ...session,
+    method: "POST",
+    body: { document },
+  })
+  assert.equal(preview.body.ok, true)
+  assert.deepEqual(preview.body.plan.reloadFields, ["rules"])
+  assert.deepEqual(preview.body.plan.restartFields, ["controlPort"])
+  assert.deepEqual(preview.body.plan.liveFields, ["alerts"])
+  assert.equal((await app.request("/api/settings", session)).body.revision, original.revision)
+  const save = async body => app.request("/api/settings", { ...session, method: "PUT", body })
+  const saved = await save({ document, revision: original.revision })
+  assert.equal(saved.status, 200)
+  const restored = await save({ raw: original.text, revision: saved.body.revision })
+  assert.equal(restored.status, 200)
+  assert.equal((await app.request("/api/settings", session)).body.text, original.text)
+  const next = await save({ document, revision: restored.body.revision })
+  assert.equal(next.status, 200)
+  assert.equal((await save({ raw: original.text, revision: restored.body.revision })).status, 409)
+  assert.equal((await app.request("/api/settings", session)).body.revision, next.body.revision)
+})
+
+test("保存结果只确认本次写入的版本，随后发生的外部改动不能被撤销覆盖", async t => {
+  let app, ownText
+  app = await fixture(t, settings => {
+    const controller = new SettingsController(settings, {
+      prepare: async () => {},
+      applyLive() {},
+      reload: async () => {},
+    })
+    const request = controller.request.bind(controller)
+    controller.request = next => {
+      const file = path.join(app.stateDir, "settings.yaml")
+      ownText = fs.readFileSync(file, "utf8")
+      fs.appendFileSync(file, "\n# concurrent external edit\n")
+      return request(next)
+    }
+    return controller
+  })
+  const session = await app.login()
+  const current = (await app.request("/api/settings", session)).body
+  const saved = await app.request("/api/settings", {
+    ...session,
+    method: "PUT",
+    body: {
+      document: { ...current.normalized, startupTimeout: 61000 },
+      revision: current.revision,
+    },
+  })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.body.revision, sha256(ownText))
+  assert.notEqual((await app.request("/api/settings", session)).body.revision, saved.body.revision)
+  const undo = await app.request("/api/settings", {
+    ...session,
+    method: "PUT",
+    body: { raw: current.text, revision: saved.body.revision },
+  })
+  assert.equal(undo.status, 409)
+  assert.match((await app.request("/api/settings", session)).body.text, /concurrent external edit/)
 })
 
 test("可信设备跨面板重启续用，撤销同时终止 API 与日志会话", { timeout: 15000 }, async t => {

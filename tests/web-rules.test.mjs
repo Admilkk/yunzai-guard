@@ -8,11 +8,15 @@ const compiled = ts
   .transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   })
-  .outputText.replace(
+  .outputText.replaceAll(
     "../../../src/config/policy.js",
     new URL("../dist/config/policy.js", import.meta.url).href,
   )
-const { canCreateRule, eventRule, matchingRules, needsTarget } = await import(
+  .replaceAll(
+    "../../../src/config/sample-policy.js",
+    new URL("../dist/config/sample-policy.js", import.meta.url).href,
+  )
+const { canCreateRule, eventRule, matchingRules, needsTarget, sampleDecision } = await import(
   "data:text/javascript;base64," + Buffer.from(compiled).toString("base64")
 )
 const entry = {
@@ -77,6 +81,12 @@ test("脱敏 URL 生成站点规则，精确路径和隐藏命令参数不会被
   const site = { id: "site", action: "audit", kind: "network", target: "https://example.test/*" }
   assert.equal(matchingRules(site, [site], [redacted])[0].uncertain, false)
   const path = { ...site, id: "path", target: "https://example.test/private" }
+  assert.equal(sampleDecision(redacted, [path, site]).uncertain, true)
+  assert.deepEqual(sampleDecision(redacted, [site, path]), {
+    action: "audit",
+    ruleId: "site",
+    uncertain: false,
+  })
   assert.equal(matchingRules(path, [path], [redacted])[0].uncertain, true)
   assert.equal(matchingRules(site, [path, site], [redacted])[0].uncertain, true)
   assert.deepEqual(

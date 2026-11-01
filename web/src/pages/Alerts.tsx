@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { App, Button, Dropdown, Empty, Segmented, Space, Tag } from "antd"
+import { App, Button, Dropdown, Empty, Segmented, Space, Tag, Tooltip } from "antd"
 import { BellOutlined, CheckOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons"
 import { api } from "../api"
 import { goTo } from "../navigation"
@@ -56,6 +56,7 @@ export default function Alerts() {
   const [history, setHistory] = useState<AlertRecord[]>([])
   const [filter, setFilter] = useState("all")
   const [testing, setTesting] = useState(false)
+  const [mutating, setMutating] = useState(false)
   const [state, setState] = useState<AlertState>({ readBefore: 0, read: [], mutes: [] })
 
   const load = useCallback(async () => {
@@ -79,14 +80,19 @@ export default function Alerts() {
 
   /** 提交已读或静默操作，成功后用返回的状态刷新。 */
   async function mutate(path: string, body: Record<string, unknown>) {
+    if (mutating) return
+    setMutating(true)
     try {
       const result = await api<{ state: AlertState }>(path, {
         method: "POST",
         body: JSON.stringify(body),
       })
       setState(result.state)
+      if (path === "/api/alerts/mute") message.success("已静默")
     } catch (reason) {
       message.error(reason instanceof Error ? reason.message : "操作失败")
+    } finally {
+      setMutating(false)
     }
   }
 
@@ -98,8 +104,8 @@ export default function Alerts() {
     setTesting(true)
     try {
       const result = await api("/api/alerts/test", { method: "POST", body: "{}" })
-      if (result.ok) message.success(`已发送，对方返回 ${result.status}`)
-      else message.warning(result.error ?? `对方返回 ${result.status}`)
+      if (result.ok) message.success(`已发送（${result.status}）`)
+      else message.warning(result.error ?? `HTTP ${result.status}`)
     } catch (reason) {
       message.error(reason instanceof Error ? reason.message : "发送失败")
     } finally {
@@ -204,6 +210,23 @@ export default function Alerts() {
                         <p>{item.text.replace(/^【Yunzai Guard】/, "")}</p>
                       </div>
                       <Space size={4} className="alert-actions">
+                        <Tooltip
+                          title={`所有插件 · ${categoryTags[item.category]?.label ?? item.category} · 1 小时；仅静默通知`}
+                        >
+                          <Button
+                            size="small"
+                            type="text"
+                            disabled={mutating}
+                            onClick={() =>
+                              void mutate("/api/alerts/mute", {
+                                category: item.category,
+                                minutes: 60,
+                              })
+                            }
+                          >
+                            此类静默 1 小时
+                          </Button>
+                        </Tooltip>
                         {unread(item) && (
                           <Button
                             size="small"

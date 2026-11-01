@@ -56,7 +56,7 @@ export function ChangeBar() {
                 loading={ctx.saving}
                 onClick={() => void ctx.save()}
               >
-                保存全部更改
+                保存并应用全部更改
               </Button>
             </Space>
           </motion.div>

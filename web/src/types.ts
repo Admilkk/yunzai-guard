@@ -19,6 +19,62 @@ export interface SettingsApplyState {
   restartFields: string[]
   error?: string
 }
+export type SettingsPlan = Pick<SettingsApplyState, "liveFields" | "reloadFields" | "restartFields">
+export interface SavedOperation {
+  id: string
+  title: string
+  time: number
+  revision: string
+  beforeRevision: string
+  status: SettingsApplyState["status"] | "unknown"
+  canUndo: boolean
+  canRestoreBefore?: boolean
+  canRestore: boolean
+  changes: ConfigChange[]
+}
+export interface TaskCase {
+  id: string
+  plugin: string
+  kind: string
+  operation: string
+  target: string
+  ruleId?: string
+  currentRuleId?: string
+  action: "deny" | "restart"
+  currentAction?: RuleAction
+  count: number
+  lastAt: number
+  entry: AuditEntry
+  uncertain: boolean
+  acknowledged: boolean
+}
+export interface TaskCases {
+  revision: string
+  cases: TaskCase[]
+  coverage: {
+    complete: boolean
+    truncated: boolean
+    sampled: number
+    errors: string[]
+    lossReported: boolean
+  }
+}
+export interface PluginDiagnosis {
+  plugin: string
+  revision: string
+  findings: Array<{
+    kind: "blocked" | "configuration" | "startup" | "unknown"
+    title: string
+    detail: string
+    scope: "plugin" | "global"
+    action:
+      "review-cases" | "retry-apply" | "wait" | "restart-host" | "inspect-startup" | "view-logs"
+    caseIds?: string[]
+    evidence?: AuditEntry[]
+  }>
+  cases: TaskCase[]
+  coverage: TaskCases["coverage"]
+}
 export interface PluginPermission {
   id: string
   label: string
@@ -71,6 +127,18 @@ export interface ConsoleValue {
   saving: boolean
   pendingRestart: boolean
   apply?: SettingsApplyState
+  lastOperation?: SavedOperation
+  operations: SavedOperation[]
+  historyError: string
+  canUndo: boolean
+  quickChange: (
+    title: string,
+    summary: string,
+    change: (document: Draft) => void,
+    mode?: "apply" | "draft",
+  ) => Promise<false | { staged: boolean; revision?: string }>
+  undoLast: () => Promise<void>
+  restoreOperation: (id: string, target?: "before" | "after") => Promise<boolean>
   rawText: string | null
   update: (change: (document: Draft) => void) => boolean
   setRawText: (value: string | null) => void

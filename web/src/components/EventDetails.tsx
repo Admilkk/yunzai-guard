@@ -5,6 +5,8 @@ import type { AuditEntry } from "../types"
 import { functionName, kindName, operationName } from "../lib/labels"
 import { canCreateRule, eventRule } from "../lib/rules"
 import { RuleEditor } from "./RuleEditor"
+import { EventActions } from "./EventActions"
+import { UndoOperation } from "./Status"
 
 /** 返回事件来源（插件或运行时）的显示名称。 */
 export function eventSource(entry: AuditEntry): string {
@@ -40,6 +42,7 @@ export function EventDetails({
         size={620}
         styles={{ wrapper: { width: "min(620px, 100vw)", maxWidth: "100vw" } }}
         className="details-drawer"
+        footer={<UndoOperation />}
         extra={
           entry && canCreateRule(entry) ? (
             <Button onClick={() => setComposing(true)}>创建规则</Button>
@@ -48,6 +51,11 @@ export function EventDetails({
       >
         {entry && (
           <>
+            {canCreateRule(entry) && (
+              <div className="event-quick-actions">
+                <EventActions entry={entry} />
+              </div>
+            )}
             <Descriptions
               column={1}
               size="small"

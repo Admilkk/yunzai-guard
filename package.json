@@ -36,6 +36,7 @@
     "build:runtime": "node scripts/build-process-identity.mjs && node scripts/build-windows-broker.mjs && node scripts/build-bubblewrap.mjs && tsc -p tsconfig.json && node scripts/build-vendor.mjs && node scripts/build-entrypoints.mjs && node scripts/build-protection.mjs && node scripts/build-sandbox.mjs",
     "build:web": "vite build --config web/vite.config.ts",
     "dev:web": "vite --config web/vite.config.ts",
+    "dev:demo": "npm run build && node scripts/demo-panel.mjs",
     "prepare": "npm run build",
     "package": "node scripts/package.mjs"
   },

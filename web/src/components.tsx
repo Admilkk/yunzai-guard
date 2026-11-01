@@ -45,15 +45,17 @@ export function StatTile({
   note,
   tone,
   icon,
+  className = "",
 }: {
   label: string
   value: ReactNode
   note?: ReactNode
   tone?: "danger" | "warning" | "muted"
   icon?: ReactNode
+  className?: string
 }) {
   return (
-    <div className={`stat-tile ${tone ? `stat-${tone}` : ""}`}>
+    <div className={`stat-tile ${tone ? `stat-${tone}` : ""} ${className}`}>
       <span className="stat-label">
         {icon && <span className="stat-icon">{icon}</span>}
         {label}

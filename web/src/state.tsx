@@ -12,7 +12,16 @@ import { App as AntApp } from "antd"
 import { api, ApiError, setCsrf } from "./api"
 import { mergedDocument } from "./lib/config"
 import { documentChanges, parseRaw } from "./lib/diff"
-import type { ConsoleValue, Draft, PluginRecord, SettingsApplyState } from "./types"
+import { SaveReview } from "./components/SaveReview"
+import { draftConflicts, mergeRawRules, resetConflictingRules } from "./lib/draft-actions"
+import type {
+  ConsoleValue,
+  Draft,
+  PluginRecord,
+  SavedOperation,
+  SettingsApplyState,
+  SettingsPlan,
+} from "./types"
 
 /**
  * 聊天登录链接的令牌放在地址片段 `#login=` 里：模块加载时取出并立即从地址栏抹掉，
@@ -59,7 +68,13 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [serverDoc, setServerDoc] = useState<Draft>({})
   const [rawText, setRawText] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [operations, setOperations] = useState<SavedOperation[]>([])
+  const [historyError, setHistoryError] = useState("")
+  const lastOperation = operations[0]
+  const notifySave = (type: "info" | "warning" | "error" | "success", content: string) =>
+    message.open({ key: "guard-settings-result", type, content })
   const savingRef = useRef(false)
+  const saveNoticeRevision = useRef<string | undefined>(undefined)
   const loadSequence = useRef(0)
   const changes = useMemo(
     () => (settings ? documentChanges(serverDoc, draft, rawText) : []),
@@ -75,14 +90,17 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       const sequence = ++loadSequence.current
       setLoading(true)
       try {
-        const [nextOverview, nextSettings, nextPlugins] = await Promise.all([
+        const [nextOverview, nextSettings, nextPlugins, history] = await Promise.all([
           api("/api/overview"),
           api("/api/settings"),
           api("/api/plugins"),
+          api("/api/settings/operations").catch(error => ({ error: error.message })),
         ])
         if (sequence !== loadSequence.current) return
         setOverview(nextOverview)
         setPlugins(nextPlugins.plugins ?? [])
+        setHistoryError(history.error ?? "")
+        if (!history.error) setOperations(history.operations ?? [])
         setApply(nextOverview.apply ?? nextSettings.apply)
         setConfigurationLoaded(true)
         setConfigurationError(
@@ -125,11 +143,40 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     setConnected(false)
     setConfigurationLoaded(false)
     setApply(undefined)
+    setOperations([])
+    setHistoryError("")
+    saveNoticeRevision.current = undefined
     setCsrf("")
   }, [])
 
   useEffect(() => {
-    if (!session || apply?.status !== "applying") return
+    if (
+      saving ||
+      !connected ||
+      !apply ||
+      apply.status === "applying" ||
+      !saveNoticeRevision.current ||
+      saveNoticeRevision.current !== settings?.revision
+    )
+      return
+    saveNoticeRevision.current = undefined
+    const type =
+      apply.status === "failed"
+        ? "error"
+        : apply.status === "pending-restart"
+          ? "warning"
+          : "success"
+    const content =
+      apply.status === "failed"
+        ? "已保存，应用失败"
+        : apply.status === "pending-restart"
+          ? "已保存，待宿主重启"
+          : "已生效"
+    message.open({ key: "guard-settings-result", type, content })
+  }, [saving, connected, apply, settings?.revision, message])
+
+  useEffect(() => {
+    if (!session || saving || apply?.status !== "applying") return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
@@ -143,7 +190,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [session, apply?.status, reload])
+  }, [session, saving, apply?.status, reload])
   /** 建立登录会话，重新认证时保留尚未保存的配置草稿。 */
   const enter = useCallback(async () => {
     const value = await api("/api/session")
@@ -228,43 +275,289 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       setRawText(null)
       return true
     }
-    message.warning("原始配置有未保存的修改，请先保存或撤销")
+    message.warning("原始配置未保存，请先保存或撤销")
     return false
   }
 
-  const save = async () => {
-    if (savingRef.current) return
+  /** 同一条保存链路负责预览、版本校验、应用状态与单次撤销。快捷操作不读取草稿。 */
+  const submit = async (
+    title: string,
+    summary: string,
+    value: Draft,
+    raw: string | null,
+    confirm: boolean,
+  ): Promise<false | { revision: string }> => {
+    if (savingRef.current) return false
+    const previous = current.current
     savingRef.current = true
     setSaving(true)
+    // 丢弃提交前已经发出的后台读取，避免旧响应覆盖新配置。
+    ++loadSequence.current
+    setLoading(false)
     try {
-      const value = candidate()
       assertIntegers(value)
-      const raw = current.current.rawText
+      const changes = documentChanges(previous.serverDoc, value, null)
+      if (
+        apply?.status !== "failed" &&
+        !changes.length &&
+        (raw === null || raw === previous.settings?.text)
+      ) {
+        message.info("无更改")
+        return false
+      }
+      const body = raw === null ? { document: value } : { raw }
+      const preview = await api<{
+        ok: boolean
+        error?: string
+        plan: SettingsPlan
+        planRevision: string
+      }>("/api/settings/validate", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
+      if (!preview.ok) throw new Error(preview.error ?? "配置校验失败")
+      if (confirm || preview.plan.reloadFields.length || preview.plan.restartFields.length) {
+        const accepted = await new Promise<boolean>(resolve => {
+          modal.confirm({
+            title,
+            width: 580,
+            content: <SaveReview summary={summary} plan={preview.plan} changes={changes} />,
+            okText: preview.plan.reloadFields.length ? "保存并重启业务" : "保存",
+            cancelText: "取消",
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false),
+          })
+        })
+        if (!accepted) return false
+      }
       const result = await api("/api/settings", {
         method: "PUT",
         body: JSON.stringify({
-          ...(raw === null ? { document: value } : { raw }),
-          revision: current.current.settings?.revision,
+          ...body,
+          revision: previous.settings?.revision,
+          planRevision: preview.planRevision,
+          title,
         }),
       })
       setApply(result.apply)
-      await reload(false)
-      if (result.apply?.status === "failed") message.error("应用失败")
-      else message.success("已保存")
+      saveNoticeRevision.current = result.revision
+      try {
+        await reload(false)
+      } catch {
+        notifySave("warning", "已保存，状态读取失败")
+        return { revision: result.revision }
+      }
+      if (result.apply?.status === "failed") notifySave("error", "已保存，应用失败")
+      else if (result.apply?.status === "applying") notifySave("info", "正在应用")
+      else if (result.apply?.status === "pending-restart")
+        notifySave("warning", "已保存，待宿主重启")
+      else notifySave("success", result.apply ? "已生效" : "已保存，生效未确认")
+      if (result.historyError) {
+        setHistoryError(result.historyError)
+        notifySave("warning", result.historyError)
+      }
+      return { revision: result.revision }
     } catch (failure) {
-      if (failure instanceof ApiError && failure.status === 409)
+      if (
+        failure instanceof ApiError &&
+        failure.status === 409 &&
+        failure.message === "生效方式已变更，请重新确认"
+      ) {
+        message.warning(failure.message)
+        await reload(true).catch(() => {})
+      } else if (failure instanceof ApiError && failure.status === 409)
         modal.confirm({
-          title: "配置已在其他页面更新",
-          content: "载入最新配置会替换当前草稿。",
+          title: "配置已变更",
+          content: "载入最新配置会丢弃当前草稿。",
           okText: "载入最新",
           cancelText: "保留草稿",
           onOk: () => reload(false),
         })
       else message.error((failure as Error).message)
+      return false
     } finally {
       savingRef.current = false
       setSaving(false)
     }
+  }
+
+  const save = async () => {
+    try {
+      await submit(
+        "保存配置",
+        "保存全部更改，自动备份。",
+        candidate(),
+        current.current.rawText,
+        false,
+      )
+    } catch (failure) {
+      message.error((failure as Error).message)
+    }
+  }
+
+  const quickChange: ConsoleValue["quickChange"] = async (
+    title,
+    summary,
+    change,
+    mode = "apply",
+  ) => {
+    if (savingRef.current) return false
+    if (!connected || !configurationLoaded || configurationError) {
+      message.warning("连接或配置未就绪")
+      return false
+    }
+    try {
+      const staging = mode === "draft" || current.current.dirty
+      const before = staging
+        ? structuredClone(candidate())
+        : structuredClone(current.current.serverDoc)
+      const captured = JSON.stringify(before)
+      const baseRevision = current.current.settings?.revision
+      const raw = current.current.rawText
+      let next = structuredClone(before)
+      change(next)
+      if (staging) {
+        const conflicts = draftConflicts(current.current.serverDoc, before, next)
+        if (conflicts.length) {
+          const accepted = await new Promise<boolean>(resolve =>
+            modal.confirm({
+              title: "草稿规则冲突",
+              content: (
+                <>
+                  <p>以下草稿规则将被替换：</p>
+                  <ul>
+                    {conflicts.map(rule => (
+                      <li key={rule.id}>{rule.id}</li>
+                    ))}
+                  </ul>
+                </>
+              ),
+              okText: "使用本次操作",
+              cancelText: "保留草稿",
+              onOk: () => resolve(true),
+              onCancel: () => resolve(false),
+            }),
+          )
+          if (!accepted) return false
+          if (
+            savingRef.current ||
+            baseRevision !== current.current.settings?.revision ||
+            raw !== current.current.rawText ||
+            captured !== JSON.stringify(candidate())
+          )
+            throw new Error("草稿已变更，请重试")
+          next = resetConflictingRules(current.current.serverDoc, before, conflicts)
+          change(next)
+        }
+        const nextRaw = raw === null ? null : mergeRawRules(raw, next.rules ?? [])
+        const dirty =
+          documentChanges(current.current.serverDoc, next, nextRaw).length > 0 ||
+          (nextRaw !== null && nextRaw !== current.current.settings?.text)
+        current.current = { ...current.current, draft: next, rawText: nextRaw, dirty }
+        setDraft(next)
+        setRawText(nextRaw)
+        message.success("已加入草稿")
+        return { staged: true }
+      }
+      const result = await submit(
+        title,
+        `${summary}\n仅调整监控规则，沙箱限制仍生效。`,
+        next,
+        null,
+        true,
+      )
+      return result ? { staged: false, revision: result.revision } : false
+    } catch (failure) {
+      message.error((failure as Error).message)
+      return false
+    }
+  }
+
+  const canUndo = Boolean(
+    lastOperation && lastOperation.canUndo && !dirty && !saving && connected && !configurationError,
+  )
+  const restoreOperation: ConsoleValue["restoreOperation"] = async (id, target = "before") => {
+    if (savingRef.current) return false
+    if (current.current.dirty) {
+      message.warning("先保存或放弃草稿")
+      return false
+    }
+    if (!connected) {
+      message.warning("宿主未连接")
+      return false
+    }
+    savingRef.current = true
+    setSaving(true)
+    ++loadSequence.current
+    setLoading(false)
+    try {
+      const preview = await api<{
+        operation: SavedOperation
+        revision: string
+        previewToken: string
+        changes: SavedOperation["changes"]
+        plan: SettingsPlan
+        hasLaterChanges: boolean
+      }>("/api/settings/operations/preview", {
+        method: "POST",
+        body: JSON.stringify({ id, target, revision: current.current.settings?.revision }),
+      })
+      const accepted = await new Promise<boolean>(resolve =>
+        modal.confirm({
+          title: target === "before" ? "撤销修改" : "恢复配置",
+          width: 620,
+          content: (
+            <SaveReview
+              summary={`${preview.operation.title}\n${target === "before" ? "恢复修改前的配置及注释" : "恢复该次应用成功的配置"}${preview.hasLaterChanges ? "\n包含后续修改，请核对差异" : ""}`}
+              plan={preview.plan}
+              changes={preview.changes}
+              expanded={preview.hasLaterChanges}
+            />
+          ),
+          okText: preview.plan.reloadFields.length ? "恢复并重启业务" : "恢复",
+          cancelText: "取消",
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        }),
+      )
+      if (!accepted) return false
+      const result = await api("/api/settings/operations/restore", {
+        method: "POST",
+        body: JSON.stringify({
+          id,
+          target,
+          revision: preview.revision,
+          previewToken: preview.previewToken,
+        }),
+      })
+      setApply(result.apply)
+      saveNoticeRevision.current = result.revision
+      try {
+        await reload(false)
+      } catch {
+        notifySave("warning", "已恢复，状态读取失败")
+        return true
+      }
+      notifySave("info", "已恢复，正在应用")
+      if (result.historyError) {
+        setHistoryError(result.historyError)
+        notifySave("warning", result.historyError)
+      }
+      return true
+    } catch (error) {
+      message.error((error as Error).message)
+      return false
+    } finally {
+      savingRef.current = false
+      setSaving(false)
+    }
+  }
+  const undoLast = async () => {
+    if (!lastOperation || !canUndo) {
+      message.warning("无法撤销，请检查草稿和配置版本")
+      return
+    }
+    await restoreOperation(lastOperation.id)
   }
 
   const validate = async () => {
@@ -303,6 +596,13 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     saving,
     pendingRestart: Boolean(overview?.pendingRestart ?? settings?.pendingRestart),
     apply,
+    lastOperation,
+    operations,
+    historyError,
+    canUndo,
+    quickChange,
+    undoLast,
+    restoreOperation,
     rawText,
     setRawText: text => {
       if (savingRef.current) return

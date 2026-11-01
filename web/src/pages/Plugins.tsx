@@ -32,6 +32,10 @@ import { categories, nativeEntry, ownRule, setPermission } from "../lib/policy.j
 import { useMediaQuery } from "../lib/use-media-query"
 import { ActionTag, formatTime, PanelCard, relativeTime } from "../components"
 import { EventDetails } from "../components/EventDetails"
+import { EventActions } from "../components/EventActions"
+import { PermissionPresets } from "../components/PermissionPresets"
+import { UndoOperation } from "../components/Status"
+import { PluginDiagnosis } from "../components/PluginDiagnosis"
 import { NativeFields } from "./Advanced"
 import { FieldLabel } from "../components/FieldHelp"
 import { functionName, operationName } from "../lib/labels"
@@ -217,6 +221,7 @@ export default function Plugins() {
   const [auditPage, setAuditPage] = useState(1)
   const [auditLoading, setAuditLoading] = useState(false)
   const [event, setEvent] = useState<AuditEntry | null>(null)
+  const [diagnosing, setDiagnosing] = useState(false)
   const current = ctx.plugins.find(plugin => plugin.id === currentId) ?? null
   const ids = selected.filter(id =>
     ctx.plugins.some(plugin => plugin.id === id && configurable(plugin)),
@@ -448,6 +453,7 @@ export default function Plugins() {
             />
           </Space>
           <Space size={8}>
+            <Button onClick={() => setDiagnosing(true)}>插件没反应</Button>
             <span className="result-count">{visible.length} 个插件</span>
             <Button
               aria-label="刷新插件"
@@ -471,6 +477,7 @@ export default function Plugins() {
               <div className="selection-toolbar">
                 <Typography.Text strong>已选 {ids.length} 项</Typography.Text>
                 <Space size={8}>
+                  <PermissionPresets ids={ids} />
                   <Button
                     type="primary"
                     disabled={ctx.saving}
@@ -605,7 +612,8 @@ export default function Plugins() {
           )
         }
         footer={
-          <Flex justify="end">
+          <Flex justify="end" gap={8}>
+            <UndoOperation />
             <Button onClick={close}>返回</Button>
           </Flex>
         }
@@ -646,6 +654,11 @@ export default function Plugins() {
                 </div>
               )}
             </div>
+            {configurable(current) && (
+              <div className="event-quick-actions">
+                <PermissionPresets ids={[current.id]} />
+              </div>
+            )}
             <Tabs
               activeKey={tab}
               onChange={setTab}
@@ -789,6 +802,12 @@ export default function Plugins() {
                           width: 80,
                           render: value => <ActionTag action={value} />,
                         },
+                        {
+                          title: "快捷处理",
+                          key: "quick",
+                          width: 200,
+                          render: (_, entry) => <EventActions entry={entry} compact />,
+                        },
                       ]}
                     />
                   ),
@@ -823,6 +842,9 @@ export default function Plugins() {
           </Flex>
         }
       >
+        <div className="event-quick-actions">
+          <PermissionPresets ids={ids} />
+        </div>
         <Form layout="vertical" disabled={ctx.saving} className="batch-form">
           {categories.map(category => (
             <Form.Item
@@ -844,6 +866,11 @@ export default function Plugins() {
         </Form>
       </Drawer>
       <EventDetails entry={event} onClose={() => setEvent(null)} />
+      <PluginDiagnosis
+        open={diagnosing}
+        plugin={current?.id}
+        onClose={() => setDiagnosing(false)}
+      />
     </div>
   )
 }

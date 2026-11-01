@@ -34,6 +34,7 @@ import type { AuditEntry } from "../types"
 import { ActionTag, formatTime, PanelCard } from "../components"
 import { AuditCompare } from "../components/AuditCompare"
 import { EventDetails, eventSource } from "../components/EventDetails"
+import { EventActions } from "../components/EventActions"
 import { functionName, kindName, operationName } from "../lib/labels"
 
 type Filters = {
@@ -385,6 +386,12 @@ export default function Audit() {
       dataIndex: "action",
       width: 76,
       render: (value, item) => <ActionTag action={value} blocked={item.blocked} />,
+    },
+    {
+      title: "快捷处理",
+      key: "quick",
+      width: 200,
+      render: (_, entry) => <EventActions entry={entry} compact />,
     },
   ]
   const filterFields = (

@@ -1,5 +1,6 @@
 import fs from "node:fs"
 import path from "node:path"
+import { randomBytes } from "node:crypto"
 import { parseSettings, settingsDefaults } from "../config/index.js"
 import {
   parseSettingsSource,
@@ -13,6 +14,12 @@ import {
 } from "../config/settings-file.js"
 import type { GuardSettings } from "../shared/types.js"
 import { M } from "../shared/messages.js"
+import { sha256 } from "../shared/hash.js"
+import {
+  recordSettingsOperation,
+  reusableSettingsOperation,
+  type SettingsOperation,
+} from "./settings-history.js"
 
 export interface SettingsDocument {
   path: string
@@ -30,6 +37,10 @@ export interface SettingsDocument {
 export interface SettingsSaveResult {
   pendingRestart: boolean
   backup: string | null
+  /** 确认本次实际写入的原文，不把随后的外部修改纳入撤销范围。 */
+  revision: string
+  operation?: SettingsOperation
+  historyError?: string
 }
 
 /** 返回 Guard 配置文件路径。 */
@@ -125,7 +136,7 @@ function historyDirectory(stateDir: string): string {
 }
 
 /** 备份当前配置文件：覆盖最近一份 .bak，并在历史目录保留最近 30 份，返回备份路径。 */
-function backupFile(stateDir: string): string | null {
+function backupFile(stateDir: string): { path: string; id: string } | null {
   try {
     const source = readSettingsSource(stateDir)
     if (!source) return null
@@ -133,15 +144,16 @@ function backupFile(stateDir: string): string | null {
     fs.copyFileSync(source.file, target)
     const directory = historyDirectory(stateDir)
     fs.mkdirSync(directory, { recursive: true })
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-")
-    fs.copyFileSync(source.file, path.join(directory, `settings-${stamp}.${source.format}`))
+    const stamp = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(6).toString("hex")}`
+    const id = `settings-${stamp}.${source.format}`
+    fs.copyFileSync(source.file, path.join(directory, id))
     const names = fs
       .readdirSync(directory)
       .filter(name => backupName.test(name))
       .sort()
     for (const name of names.slice(0, Math.max(0, names.length - historyKeep)))
       fs.rmSync(path.join(directory, name), { force: true })
-    return target
+    return { path: target, id }
   } catch {
     return null
   }
@@ -196,6 +208,7 @@ export function writeSettingsDocument(
   active: GuardSettings,
   value: unknown,
   raw?: string,
+  title?: string,
 ): SettingsSaveResult {
   if (!isPlainObject(value)) throw new TypeError(M.web.settingsObject)
   const normalized = validateSettingsDocument(stateDir, value)
@@ -205,9 +218,45 @@ export function writeSettingsDocument(
     source?.format === "json" ? renderSettings(parseSettingsSource(source)) : source?.text
   const text =
     raw ?? renderSettings(value, { previous, defaults: settingsDefaults(), omitDefaults: true })
+  if (source?.format === "yaml" && source.text === text) {
+    let operation: SettingsOperation | undefined
+    let historyError: string | undefined
+    const revision = sha256(text)
+    try {
+      operation = reusableSettingsOperation(stateDir, revision)
+    } catch {
+      historyError = "操作记录读取失败"
+    }
+    return {
+      pendingRestart: canonical(normalized) !== canonical(active),
+      backup: null,
+      revision,
+      ...(operation ? { operation } : {}),
+      ...(historyError ? { historyError } : {}),
+    }
+  }
   const backup = backupFile(stateDir)
   writeSettingsText(stateDir, text)
-  return { pendingRestart: canonical(normalized) !== canonical(active), backup }
+  let operation: SettingsOperation | undefined
+  let historyError: string | undefined
+  try {
+    operation = recordSettingsOperation(stateDir, {
+      beforeText: source?.text ?? starterSettingsText(),
+      afterText: text,
+      backupId: backup?.id,
+      title,
+    })
+  } catch {
+    // 配置已经落盘；记录失败不能把保存报告为失败，避免用户重复提交。
+    historyError = "操作记录写入失败"
+  }
+  return {
+    pendingRestart: canonical(normalized) !== canonical(active),
+    backup: backup?.path ?? null,
+    revision: sha256(text),
+    ...(operation ? { operation } : {}),
+    ...(historyError ? { historyError } : {}),
+  }
 }
 
 /** 仅校验不落盘，供页面在保存前提示错误。 */

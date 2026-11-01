@@ -7,6 +7,7 @@ import {
   AuditOutlined,
   GlobalOutlined,
   InboxOutlined,
+  InfoCircleOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
   StopOutlined,
@@ -26,8 +27,11 @@ import {
   StatTile,
 } from "../components"
 import { EventDetails, eventSource } from "../components/EventDetails"
+import { EventActions } from "../components/EventActions"
 import { ResourceCard } from "../components/ResourceCard"
 import { UpdateStrip } from "../components/UpdateStrip"
+import { TasksCard } from "../components/TasksCard"
+import { RecoveryGuide } from "../components/RecoveryGuide"
 import { functionName, kindName, operationName } from "../lib/labels"
 import type { AuditEntry } from "../types"
 
@@ -202,6 +206,7 @@ export default function Overview() {
   const { message, modal } = App.useApp()
   const [recent, setRecent] = useState<AuditEntry[]>([])
   const [selected, setSelected] = useState<AuditEntry | null>(null)
+  const [recoveryOpen, setRecoveryOpen] = useState(false)
   const status = overview?.status ?? {}
   const summary = overview?.audit?.summary ?? {}
   const buffer = status.auditPipeline?.buffer ?? {}
@@ -287,6 +292,12 @@ export default function Overview() {
       width: 70,
       render: (action, entry) => <ActionTag action={action} blocked={entry.blocked} />,
     },
+    {
+      title: "快捷处理",
+      key: "quick",
+      width: 200,
+      render: (_, entry) => <EventActions entry={entry} compact />,
+    },
   ]
 
   return (
@@ -316,15 +327,20 @@ export default function Overview() {
                     ? phaseName(status.phase)
                     : "业务未运行"}
               </strong>
-              <span>
-                第 {status.generation ?? "—"} 代 · {isolated ? "系统隔离" : "兼容托管"} · 宿主 PID{" "}
-                <code>{status.hostPid ?? "—"}</code> · 业务 PID{" "}
-                <code>{status.workerPid ?? "—"}</code>
-              </span>
+              <Tooltip
+                trigger={["hover", "focus", "click"]}
+                title={`宿主 PID ${status.hostPid ?? "—"} · 业务 PID ${status.workerPid ?? "—"}`}
+              >
+                <span className="status-meta" tabIndex={0}>
+                  {isolated ? "系统隔离" : "兼容托管"} · 第 {status.generation ?? "—"} 代{" "}
+                  <InfoCircleOutlined />
+                </span>
+              </Tooltip>
             </div>
           </div>
           <Space size={8} wrap>
             <Button
+              type="text"
               danger
               icon={<ReloadOutlined />}
               disabled={!connected || saving}
@@ -344,9 +360,9 @@ export default function Overview() {
               <Button
                 type="primary"
                 disabled={!connected || saving}
-                onClick={() => command("resume")}
+                onClick={() => setRecoveryOpen(true)}
               >
-                解除熔断
+                检查原因并恢复
               </Button>
             )}
           </Space>
@@ -387,12 +403,15 @@ export default function Overview() {
         />
         <StatTile
           label="审计队列"
+          className="stat-queue"
           value={Number(buffer.pendingRecords ?? 0)}
           icon={<InboxOutlined />}
           note={`丢弃 ${buffer.dropped ?? status.auditDropped ?? 0}`}
           tone={Number(buffer.dropped ?? status.auditDropped ?? 0) ? "warning" : undefined}
         />
       </div>
+
+      <TasksCard onEvent={setSelected} />
 
       <div className="overview-main-grid">
         <PanelCard
@@ -515,6 +534,7 @@ export default function Overview() {
         ]}
       />
       <EventDetails entry={selected} onClose={() => setSelected(null)} />
+      <RecoveryGuide open={recoveryOpen} onClose={() => setRecoveryOpen(false)} />
     </div>
   )
 }

@@ -36,7 +36,7 @@ import { useConsole } from "./state"
 import { useTheme } from "./theme"
 import { ThemeToggle } from "./components/ThemeToggle"
 import { ChangeBar } from "./components/ChangeBar"
-import { ConfigurationState } from "./components/Status"
+import { ConfigurationState, ConfigurationFeedback } from "./components/Status"
 import Overview from "./pages/Overview"
 import Login from "./pages/Login"
 import type { SettingsSection } from "./pages/Settings"
@@ -353,6 +353,7 @@ export default function ConsoleApp() {
             </div>
             <ConfigurationState />
           </div>
+          <ConfigurationFeedback />
           <motion.div
             key={current.id}
             className={ctx.saving ? "page-frame saving" : "page-frame"}

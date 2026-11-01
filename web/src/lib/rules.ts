@@ -1,4 +1,5 @@
 import { decide, matchGlob } from "../../../src/config/policy.js"
+import { samplePolicyDecision } from "../../../src/config/sample-policy.js"
 import type { AuditEntry, Rule } from "../types"
 
 export const ruleScenes = [
@@ -68,6 +69,14 @@ function relation(rule: Rule, entry: AuditEntry): boolean | "unknown" {
   }
   if (needsTarget(entry)) return "unknown"
   return decide(event, [rule]).ruleId === rule.id
+}
+
+/** 按首条匹配规则解释样本，脱敏导致无法判定时保留不确定状态。 */
+export function sampleDecision(entry: AuditEntry, rules: Rule[]) {
+  return samplePolicyDecision(
+    { plugin: entry.plugin, kind: entry.kind, operation: entry.operation, target: entry.target },
+    rules,
+  )
 }
 
 /** 统计规则在近期事件中的命中与生效数量。 */
