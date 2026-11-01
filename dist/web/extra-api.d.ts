@@ -7,6 +7,8 @@ export interface ExtraContext {
     settings: GuardSettings;
     getSettings?: () => GuardSettings;
     applySettings?: (settings: GuardSettings) => SettingsApplyState;
+    configuration?: () => SettingsApplyState;
+    status?: () => Record<string, unknown>;
     controllers?: PanelControllers;
     audit?: (type: string, details?: Record<string, unknown>) => void;
     readBody: (request: http.IncomingMessage) => Promise<unknown>;

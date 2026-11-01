@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { planSettingsUpdate } from "../config/update.js";
 import { defaultTargets } from "../config/targets.js";
 import { PanelAuth, PanelError } from "./auth.js";
 import { guardSettingsPath, isPlainObject, listSandboxScripts, readSettingsDocument, serializeSettings, validateSettingsDocument, writeSettingsDocument, } from "./guard-settings.js";
@@ -17,6 +18,7 @@ import { M } from "../shared/messages.js";
 import { field, notice } from "../shared/notice.js";
 import { sha256 } from "../shared/hash.js";
 import { parseSettingsText } from "../config/settings-file.js";
+import { applySettingsOperation, listSettingsOperations, previewSettingsOperation, settingsPreviewMatches, } from "./settings-history.js";
 const maxBodyBytes = 1024 * 1024;
 const staticDir = fileURLToPath(new URL("../panel/", import.meta.url));
 const staticFiles = new Map([
@@ -622,9 +624,59 @@ export class GuardPanel {
                 },
             });
         }
+        if (route === "GET /api/settings/operations") {
+            const active = this.#options.getSettings?.() ?? this.#options.settings;
+            const current = readSettingsDocument(this.#options.stateDir, active);
+            return sendJson(response, 200, listSettingsOperations(this.#options.stateDir, current.text, active, this.#options.configuration?.()));
+        }
+        if (route === "POST /api/settings/operations/preview" ||
+            route === "POST /api/settings/operations/restore") {
+            const body = await readBody(request);
+            if (!isPlainObject(body) ||
+                typeof body.id !== "string" ||
+                body.id.length > 64 ||
+                typeof body.revision !== "string" ||
+                (body.target !== undefined && body.target !== "before" && body.target !== "after"))
+                throw new PanelError(400, "操作参数无效");
+            this.#checkSettingsRevision(body);
+            const active = this.#options.getSettings?.() ?? this.#options.settings;
+            const current = readSettingsDocument(this.#options.stateDir, active);
+            listSettingsOperations(this.#options.stateDir, current.text, active, this.#options.configuration?.());
+            const target = body.target === "after" ? "after" : "before";
+            const preview = previewSettingsOperation(this.#options.stateDir, body.id, target, current.text, current.normalized ?? current.document, active);
+            if (!preview)
+                throw new PanelError(404, "操作记录或备份已过期");
+            if (target === "after" && !preview.operation.canRestore)
+                throw new PanelError(400, "该配置未确认应用成功");
+            const normalized = validateSettingsDocument(this.#options.stateDir, preview.document);
+            if (route === "POST /api/settings/operations/preview")
+                return sendJson(response, 200, preview);
+            if (!settingsPreviewMatches(preview, body.previewToken))
+                throw new PanelError(409, "请重新预览恢复范围");
+            const title = `${target === "after" ? "恢复" : "撤销"}：${preview.operation.title}`.slice(0, 120);
+            const result = writeSettingsDocument(this.#options.stateDir, active, preview.document, preview.raw, title);
+            const apply = this.#options.applySettings?.(normalized);
+            let operation = result.operation;
+            if (operation) {
+                try {
+                    operation = applySettingsOperation(this.#options.stateDir, operation.id, apply);
+                }
+                catch {
+                    result.historyError = "操作状态写入失败";
+                }
+            }
+            this.#options.audit?.("panel-settings-restored", { operation: preview.operation.id, target });
+            return sendJson(response, 200, { ok: true, ...result, apply, operation });
+        }
         if (route === "GET /api/settings") {
             const active = this.#options.getSettings?.() ?? this.#options.settings;
             const document = readSettingsDocument(this.#options.stateDir, active);
+            try {
+                listSettingsOperations(this.#options.stateDir, document.text, active, this.#options.configuration?.());
+            }
+            catch {
+                /* 配置仍可读取，操作记录接口单独报告损坏。 */
+            }
             return sendJson(response, 200, {
                 ...document,
                 revision: revision(document.text),
@@ -640,24 +692,45 @@ export class GuardPanel {
                     : isPlainObject(body)
                         ? body.document
                         : undefined;
-                validateSettingsDocument(this.#options.stateDir, value);
+                const normalized = validateSettingsDocument(this.#options.stateDir, value);
+                const active = this.#options.getSettings?.() ?? this.#options.settings;
+                const { liveFields, reloadFields, restartFields } = planSettingsUpdate(active, normalized);
+                return sendJson(response, 200, {
+                    ok: true,
+                    plan: { liveFields, reloadFields, restartFields },
+                    planRevision: revision(JSON.stringify([active, normalized])),
+                });
             }
             catch (error) {
                 return sendJson(response, 200, { ok: false, error: error.message });
             }
-            return sendJson(response, 200, { ok: true });
         }
         if (route === "PUT /api/settings" || route === "POST /api/settings") {
             const body = await readBody(request);
             const active = this.#options.getSettings?.() ?? this.#options.settings;
             this.#checkSettingsRevision(body);
+            if (isPlainObject(body) &&
+                body.title !== undefined &&
+                (typeof body.title !== "string" || body.title.length > 120))
+                throw new PanelError(400, "操作名称过长或无效");
             // 原始配置页提交 YAML 原文，按原文写入以保留注释；表单提交配置对象。
             const raw = isPlainObject(body) && typeof body.raw === "string" ? body.raw : undefined;
             const value = raw !== undefined ? parseSettingsText(raw) : isPlainObject(body) ? body.document : undefined;
             let result;
             const normalized = validateSettingsDocument(this.#options.stateDir, value);
+            if (isPlainObject(body) &&
+                body.planRevision !== undefined &&
+                body.planRevision !== revision(JSON.stringify([active, normalized])))
+                throw new PanelError(409, "生效方式已变更，请重新确认");
             try {
-                result = writeSettingsDocument(this.#options.stateDir, active, value, raw);
+                const current = readSettingsDocument(this.#options.stateDir, active);
+                listSettingsOperations(this.#options.stateDir, current.text, active, this.#options.configuration?.());
+            }
+            catch {
+                /* 历史记录失败由保存结果单独报告，不影响配置写入。 */
+            }
+            try {
+                result = writeSettingsDocument(this.#options.stateDir, active, value, raw, isPlainObject(body) && typeof body.title === "string" ? body.title : undefined);
             }
             catch (error) {
                 if (error instanceof TypeError)
@@ -669,7 +742,16 @@ export class GuardPanel {
                 backup: result.backup ? "written" : "unavailable",
             });
             const apply = this.#options.applySettings?.(normalized);
-            return sendJson(response, 200, { ok: true, ...result, apply });
+            let operation = result.operation;
+            if (operation) {
+                try {
+                    operation = applySettingsOperation(this.#options.stateDir, operation.id, apply);
+                }
+                catch {
+                    result.historyError = "操作状态写入失败";
+                }
+            }
+            return sendJson(response, 200, { ok: true, ...result, apply, operation });
         }
         if (route === "GET /api/update")
             return sendJson(response, 200, this.#options.update?.state() ?? null);
@@ -702,6 +784,8 @@ export class GuardPanel {
             settings: this.#options.settings,
             getSettings: this.#options.getSettings,
             applySettings: this.#options.applySettings,
+            status: this.#options.status,
+            configuration: this.#options.configuration,
             controllers: this.#options.controllers,
             audit: this.#options.audit,
             readBody,

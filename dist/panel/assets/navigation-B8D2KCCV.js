@@ -1,0 +1,1 @@
+function e(e,t=``){return`#${e}${t}`}function t(t,n=``){let r=e(t,n);location.hash!==r&&(location.hash=r.slice(1))}function n(t,n=``){history.replaceState(null,``,e(t,n))}export{n,t};

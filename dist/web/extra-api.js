@@ -3,7 +3,20 @@ import { parseSettings } from "../config/index.js";
 import { M } from "../shared/messages.js";
 import { isPlainObject, listSettingsBackups, readSettingsBackup, readSettingsDocument, validateSettingsDocument, writeSettingsDocument, } from "./guard-settings.js";
 import { readAudit } from "./monitor.js";
+import { applySettingsOperation, listSettingsOperations } from "./settings-history.js";
+import { acknowledgeTaskCases, diagnosePlugin, readTaskCases } from "./task-cases.js";
 const maxExportRows = 20000;
+/** 保存下一条记录前结算旧请求，避免把已完成的失败请求误记为被替代。 */
+function refreshOperations(context) {
+    try {
+        const active = context.getSettings?.() ?? context.settings;
+        const current = readSettingsDocument(context.stateDir, active);
+        listSettingsOperations(context.stateDir, current.text, active, context.configuration?.());
+    }
+    catch {
+        // 记录失败不能阻止配置保存；写入结果会单独报告 historyError。
+    }
+}
 /** 转成 CSV 字段，处理引号、换行，并防止被表格软件当作公式。 */
 function csvField(value) {
     let text = value === undefined || value === null ? "" : String(value);
@@ -39,6 +52,36 @@ function exportable(document, secrets) {
 export async function handleExtra(context, route, url, request, response) {
     const { stateDir, controllers, sendJson, fail } = context;
     const active = () => context.getSettings?.() ?? context.settings;
+    if (route === "GET /api/tasks") {
+        sendJson(response, 200, readTaskCases(stateDir, active(), {
+            includeAcknowledged: url.searchParams.get("includeAcknowledged") === "1",
+        }));
+        return true;
+    }
+    if (route === "POST /api/tasks/ack") {
+        const body = await context.readBody(request);
+        if (!isPlainObject(body) ||
+            typeof body.revision !== "string" ||
+            !Array.isArray(body.ids) ||
+            !body.ids.length ||
+            body.ids.length > 1000 ||
+            body.ids.some(id => typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id)))
+            throw fail(400, "无效待办");
+        context.checkSettingsRevision(body);
+        const result = acknowledgeTaskCases(stateDir, active(), [...new Set(body.ids)]);
+        if (!result)
+            throw fail(409, "待办已变更，请刷新");
+        context.audit?.("panel-tasks-acknowledged", { count: body.ids.length });
+        sendJson(response, 200, result);
+        return true;
+    }
+    if (route === "GET /api/plugins/diagnose") {
+        const plugin = url.searchParams.get("plugin") ?? "";
+        if (!plugin || plugin.length > 128 || /[\u0000-\u001f]/.test(plugin))
+            throw fail(400, "请选择插件");
+        sendJson(response, 200, diagnosePlugin(stateDir, active(), plugin, context.configuration?.(), context.status?.()));
+        return true;
+    }
     if (route === "GET /api/alerts") {
         if (!controllers)
             throw fail(404, M.web.notFound);
@@ -192,11 +235,21 @@ export async function handleExtra(context, route, url, request, response) {
         if (backup === undefined)
             throw fail(404, M.web.notFound);
         const normalized = validateSettingsDocument(stateDir, backup.document);
+        refreshOperations(context);
         // YAML 备份按原文恢复，连同注释一起还原。
         const result = writeSettingsDocument(stateDir, active(), backup.document, backup.raw);
         context.audit?.("panel-settings-restored", { pendingRestart: result.pendingRestart });
         const apply = context.applySettings?.(normalized);
-        sendJson(response, 200, { ok: true, ...result, apply });
+        let operation = result.operation;
+        if (operation) {
+            try {
+                operation = applySettingsOperation(stateDir, operation.id, apply);
+            }
+            catch {
+                result.historyError = "操作状态写入失败";
+            }
+        }
+        sendJson(response, 200, { ok: true, ...result, apply, operation });
         return true;
     }
     if (route === "GET /api/settings/export") {
@@ -239,10 +292,20 @@ export async function handleExtra(context, route, url, request, response) {
             rules: body.mode === "replace" ? imported : [...existing, ...imported],
         };
         const normalized = parseSettings(document);
+        refreshOperations(context);
         const result = writeSettingsDocument(stateDir, active(), document);
         context.audit?.("panel-rules-imported", { count: imported.length, mode: body.mode });
         const apply = context.applySettings?.(normalized);
-        sendJson(response, 200, { ok: true, imported: imported.length, ...result, apply });
+        let operation = result.operation;
+        if (operation) {
+            try {
+                operation = applySettingsOperation(stateDir, operation.id, apply);
+            }
+            catch {
+                result.historyError = "操作状态写入失败";
+            }
+        }
+        sendJson(response, 200, { ok: true, imported: imported.length, ...result, apply, operation });
         return true;
     }
     if (route === "GET /api/audit/export") {

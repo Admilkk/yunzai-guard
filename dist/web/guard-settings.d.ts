@@ -1,4 +1,5 @@
 import type { GuardSettings } from "../shared/types.js";
+import { type SettingsOperation } from "./settings-history.js";
 export interface SettingsDocument {
     path: string;
     /** 可直接编辑的配置对象；文件缺失时以当前生效配置作为起点。 */
@@ -14,6 +15,10 @@ export interface SettingsDocument {
 export interface SettingsSaveResult {
     pendingRestart: boolean;
     backup: string | null;
+    /** 确认本次实际写入的原文，不把随后的外部修改纳入撤销范围。 */
+    revision: string;
+    operation?: SettingsOperation;
+    historyError?: string;
 }
 /** 返回 Guard 配置文件路径。 */
 export declare function guardSettingsPath(stateDir: string): string;
@@ -39,7 +44,7 @@ export declare function readSettingsBackup(stateDir: string, id: string): {
  * 校验后原子写入，配置应用由宿主处理。传入 raw 时按原文写入；否则在现有 settings.yaml 上
  * 只改变化的值，保留注释与顺序，并且不新增与默认值相同的项。
  */
-export declare function writeSettingsDocument(stateDir: string, active: GuardSettings, value: unknown, raw?: string): SettingsSaveResult;
+export declare function writeSettingsDocument(stateDir: string, active: GuardSettings, value: unknown, raw?: string, title?: string): SettingsSaveResult;
 /** 仅校验不落盘，供页面在保存前提示错误。 */
 export declare function validateSettings(value: unknown): GuardSettings;
 export interface SandboxScript {

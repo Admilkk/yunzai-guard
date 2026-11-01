@@ -1,5 +1,5 @@
 import type { GuardSettings } from "../shared/types.js";
-import type { SettingsApplyState } from "../config/update.js";
+import { type SettingsApplyState } from "../config/update.js";
 import { type PanelSettings } from "./panel-settings.js";
 import type { PanelControllers, UpdateController } from "./controllers.js";
 export interface PanelOptions {

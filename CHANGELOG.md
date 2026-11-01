@@ -2,6 +2,13 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.5.0](https://github.com/Admilkk/yunzai-guard/compare/v1.4.0...v1.5.0) (2026-11-01)
+
+
+### ✨ 新功能
+
+* **web:** 简化面板操作并统一蓝灰主题 ([c3ac8be](https://github.com/Admilkk/yunzai-guard/commit/c3ac8be1f5a3ecf2ffa175135f65102dcfc82eb1))
+
 ## [1.4.0](https://github.com/Admilkk/yunzai-guard/compare/v1.3.1...v1.4.0) (2026-10-30)
 
 

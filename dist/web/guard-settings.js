@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { parseSettings, settingsDefaults } from "../config/index.js";
 import { parseSettingsSource, parseSettingsText, readSettingsSource, renderSettings, settingsFiles, starterSettingsText, writeSettingsText, } from "../config/settings-file.js";
 import { M } from "../shared/messages.js";
+import { sha256 } from "../shared/hash.js";
+import { recordSettingsOperation, reusableSettingsOperation, } from "./settings-history.js";
 /** 返回 Guard 配置文件路径。 */
 export function guardSettingsPath(stateDir) {
     return path.join(stateDir, settingsFiles.user);
@@ -101,15 +104,16 @@ function backupFile(stateDir) {
         fs.copyFileSync(source.file, target);
         const directory = historyDirectory(stateDir);
         fs.mkdirSync(directory, { recursive: true });
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        fs.copyFileSync(source.file, path.join(directory, `settings-${stamp}.${source.format}`));
+        const stamp = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(6).toString("hex")}`;
+        const id = `settings-${stamp}.${source.format}`;
+        fs.copyFileSync(source.file, path.join(directory, id));
         const names = fs
             .readdirSync(directory)
             .filter(name => backupName.test(name))
             .sort();
         for (const name of names.slice(0, Math.max(0, names.length - historyKeep)))
             fs.rmSync(path.join(directory, name), { force: true });
-        return target;
+        return { path: target, id };
     }
     catch {
         return null;
@@ -152,7 +156,7 @@ export function readSettingsBackup(stateDir, id) {
  * 校验后原子写入，配置应用由宿主处理。传入 raw 时按原文写入；否则在现有 settings.yaml 上
  * 只改变化的值，保留注释与顺序，并且不新增与默认值相同的项。
  */
-export function writeSettingsDocument(stateDir, active, value, raw) {
+export function writeSettingsDocument(stateDir, active, value, raw, title) {
     if (!isPlainObject(value))
         throw new TypeError(M.web.settingsObject);
     const normalized = validateSettingsDocument(stateDir, value);
@@ -160,9 +164,47 @@ export function writeSettingsDocument(stateDir, active, value, raw) {
     // 尚未转换的旧版 settings.json 先完整转换（保留其中所有项），再在其上应用修改。
     const previous = source?.format === "json" ? renderSettings(parseSettingsSource(source)) : source?.text;
     const text = raw ?? renderSettings(value, { previous, defaults: settingsDefaults(), omitDefaults: true });
+    if (source?.format === "yaml" && source.text === text) {
+        let operation;
+        let historyError;
+        const revision = sha256(text);
+        try {
+            operation = reusableSettingsOperation(stateDir, revision);
+        }
+        catch {
+            historyError = "操作记录读取失败";
+        }
+        return {
+            pendingRestart: canonical(normalized) !== canonical(active),
+            backup: null,
+            revision,
+            ...(operation ? { operation } : {}),
+            ...(historyError ? { historyError } : {}),
+        };
+    }
     const backup = backupFile(stateDir);
     writeSettingsText(stateDir, text);
-    return { pendingRestart: canonical(normalized) !== canonical(active), backup };
+    let operation;
+    let historyError;
+    try {
+        operation = recordSettingsOperation(stateDir, {
+            beforeText: source?.text ?? starterSettingsText(),
+            afterText: text,
+            backupId: backup?.id,
+            title,
+        });
+    }
+    catch {
+        // 配置已经落盘；记录失败不能把保存报告为失败，避免用户重复提交。
+        historyError = "操作记录写入失败";
+    }
+    return {
+        pendingRestart: canonical(normalized) !== canonical(active),
+        backup: backup?.path ?? null,
+        revision: sha256(text),
+        ...(operation ? { operation } : {}),
+        ...(historyError ? { historyError } : {}),
+    };
 }
 /** 仅校验不落盘，供页面在保存前提示错误。 */
 export function validateSettings(value) {
