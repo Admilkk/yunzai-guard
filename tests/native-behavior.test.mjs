@@ -183,7 +183,18 @@ process.send({type:"result",result},()=>process.disconnect())
 })
 
 test("native ordinary fork IPC contains business messages only, including a fork from a Worker", async t => {
-  const probe = await fixture(t)
+  const probe = await fixture(t, {
+    rules: [
+      { id: "trusted-fork-fixture", kind: "process", operation: "fork", action: "audit" },
+      {
+        id: "trusted-node-fixture",
+        kind: "process",
+        operation: "execFile",
+        target: process.execPath,
+        action: "audit",
+      },
+    ],
+  })
   const business = path.join(probe.directory, "business.mjs")
   const userPreload = path.join(probe.directory, "user.mjs")
   fs.writeFileSync(userPreload, "globalThis.businessPreload=true\n")
@@ -222,7 +233,9 @@ process.send({type:"result",result:{messages,nested,direct}},()=>process.disconn
 })
 
 test("alias-only module resolution reaches nested Workers and ordinary forks before application preloads", async t => {
-  const probe = await fixture(t)
+  const probe = await fixture(t, {
+    rules: [{ id: "trusted-fork-fixture", kind: "process", operation: "fork", action: "audit" }],
+  })
   for (const folder of ["node_modules", "lib/wrapper-esm", "lib/wrapper-cjs"])
     fs.mkdirSync(path.join(probe.directory, folder), { recursive: true })
   fs.writeFileSync(path.join(probe.directory, "lib/sibling.mjs"), 'export default "esm-original"')

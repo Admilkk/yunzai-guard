@@ -150,6 +150,7 @@ export class RuntimeBroker {
         settings,
         generation,
         projectId,
+        stateDir: path.resolve("data/yunzai-guard"),
         endpoint:
           process.platform === "win32"
             ? `\\\\.\\pipe\\yunzai-guard-runtime-${randomBytes(16).toString("hex")}`

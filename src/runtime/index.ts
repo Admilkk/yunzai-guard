@@ -35,6 +35,7 @@ import { installDebugGuard } from "../protect/debug.js"
 import { installBindingGuard } from "../protect/bindings.js"
 import { installReportGuard } from "../protect/reports.js"
 import { installSqliteGuard } from "../protect/sqlite.js"
+import { createCommandGuard } from "../protect/commands.js"
 import { M } from "../shared/messages.js"
 
 export interface RuntimeHandle {
@@ -51,6 +52,8 @@ interface RuntimeOptions {
   manifestPath?: string
   /** 仅用于模块解析；此文件不授权连接运行时代理。 */
   resolutionManifestPath?: string
+  /** 从可信宿主清单或父 Worker 继承的控制目录。 */
+  stateDir?: string
   emit: EmitEvent
   ready?: Promise<void>
   contextProvider?: () => string | undefined
@@ -79,7 +82,9 @@ function readManifest(filename: string): RuntimeManifest {
     typeof input.endpoint !== "string" ||
     !input.endpoint.length ||
     typeof input.token !== "string" ||
-    input.token.length < 16
+    input.token.length < 16 ||
+    (input.stateDir !== undefined &&
+      (typeof input.stateDir !== "string" || !path.isAbsolute(input.stateDir)))
   )
     throw new Error(M.runtime.manifest)
   return { ...input, settings: parseSettings(input.settings) }
@@ -102,16 +107,17 @@ export function installRuntime(options: RuntimeOptions): RuntimeHandle {
     sealApi(item.object, item.key, item.value, `hook-watch.${item.key}`)
   installDebugGuard(sealApi, refuse)
   installBindingGuard(sealApi, refuse)
+  const controlDirectory = path.resolve(options.stateDir ?? "data/yunzai-guard")
   const roots = [
     fileURLToPath(new URL("../../", import.meta.url)),
-    path.join(process.cwd(), "data/yunzai-guard"),
+    controlDirectory,
     ...[options.manifestPath, options.resolutionManifestPath].filter((file): file is string =>
       Boolean(file),
     ),
   ]
   installReportGuard({ roots, deny: refuse, seal: sealApi })
   const readRoots = [
-    path.join(process.cwd(), "data/yunzai-guard"),
+    controlDirectory,
     ...[options.manifestPath, options.resolutionManifestPath].filter((file): file is string =>
       Boolean(file),
     ),
@@ -127,15 +133,34 @@ export function installRuntime(options: RuntimeOptions): RuntimeHandle {
     observe: (operation, target, write, source) => observeFile?.(operation, target, write, source),
   })
   installSqliteGuard({ roots, readRoots, deny: refuse, seal: sealApi, emit })
-  const instrumentation = installInstrumentation(options.settings, emit, originPlugin, {
-    manifestPath: options.manifestPath,
-    resolutionManifestPath: options.resolutionManifestPath,
-    runtimeId: identity.id,
+  const instrumentation = installInstrumentation(
+    options.settings,
+    emit,
     originPlugin,
-  })
+    {
+      manifestPath: options.manifestPath,
+      resolutionManifestPath: options.resolutionManifestPath,
+      runtimeId: identity.id,
+      originPlugin,
+    },
+    createCommandGuard({
+      roots,
+      readRoots,
+      settings: options.settings,
+      deny: refuse,
+      emit,
+      originPlugin,
+    }),
+  )
   instrumentation.protect(sealApi)
   observeFile = instrumentation.observeFile
-  const stopWorkers = installWorkerMonitor({ ...options, identity, emit, originPlugin })
+  const stopWorkers = installWorkerMonitor({
+    ...options,
+    stateDir: controlDirectory,
+    identity,
+    emit,
+    originPlugin,
+  })
   sealApi(workerThreads, "Worker", workerThreads.Worker, "worker_threads.Worker")
   sealApi(workerThreads.Worker.prototype, "constructor", workerThreads.Worker, "Worker.constructor")
   const getData = workerThreads.getEnvironmentData
@@ -208,6 +233,7 @@ export function installInheritedRuntime(): Pick<RuntimeHandle, "identity" | "rea
           settings: unknown
           manifestPath?: string
           resolutionManifestPath?: string
+          stateDir?: string
           port?: MessagePort
           auditChannelNonce?: string
         }
@@ -216,6 +242,8 @@ export function installInheritedRuntime(): Pick<RuntimeHandle, "identity" | "rea
     setEnvironmentData(workerMetadataKey, undefined)
     if (
       metadata.version !== 1 ||
+      (metadata.stateDir !== undefined &&
+        (typeof metadata.stateDir !== "string" || !path.isAbsolute(metadata.stateDir))) ||
       !(metadata.port instanceof MessagePort) ||
       !metadata.identity?.id ||
       typeof metadata.auditChannelNonce !== "string" ||
@@ -242,6 +270,7 @@ export function installInheritedRuntime(): Pick<RuntimeHandle, "identity" | "rea
       identity,
       manifestPath: metadata.manifestPath,
       resolutionManifestPath: metadata.resolutionManifestPath,
+      stateDir: metadata.stateDir,
       emit: transport,
     })
     try {
@@ -277,6 +306,7 @@ export function installInheritedRuntime(): Pick<RuntimeHandle, "identity" | "rea
       settings: manifest.settings,
       identity,
       manifestPath: filename,
+      stateDir: manifest.stateDir,
       emit: transport.emit,
       ready: transport.ready,
     }),

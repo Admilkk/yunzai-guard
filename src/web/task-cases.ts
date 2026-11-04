@@ -1,5 +1,5 @@
 import path from "node:path"
-import { samplePolicyDecision } from "../config/sample-policy.js"
+import { samplePolicyDecision, scriptExecutionDetails } from "../config/sample-policy.js"
 import type { SettingsApplyState } from "../config/update.js"
 import type { GuardSettings } from "../shared/types.js"
 import { readJsonFile, writeJsonFile } from "../shared/files.js"
@@ -137,6 +137,7 @@ export function readTaskCases(
         kind: entry.kind,
         operation: entry.operation,
         target: entry.target,
+        details: scriptExecutionDetails(entry.details),
       })
       if (current)
         decision = { action: current.action ?? "audit", ruleId: current.ruleId, uncertain: false }

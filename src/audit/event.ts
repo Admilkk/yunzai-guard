@@ -121,6 +121,8 @@ export function sanitizeAuditEvent(
     result.runtime = known
   }
   const facts: Row = {}
+  // 仅保留能收紧默认策略的布尔证据，脚本参数与正文仍不落盘。
+  if (source.kind === "process" && details?.scriptExecution === true) facts.scriptExecution = true
   if (source.operation === "module-function-change" && details?.detection === "after-change") {
     facts.detection = "after-change"
     if (

@@ -11,6 +11,7 @@ import { installRuntime } from "./index.js"
 import { ensureWorkerTransport } from "./worker-transport.js"
 import { trackCoverage } from "./reporter.js"
 import { installSandboxResolution } from "../sandbox/resolution.js"
+import { compileWindowsSandbox } from "../sandbox/windows.js"
 import { IntegrityMonitor } from "../monitor/integrity.js"
 import { PluginMonitor } from "../monitor/plugin.js"
 import { installModuleAudit, type ModuleAudit } from "../monitor/modules.js"
@@ -200,6 +201,12 @@ if (isMainThread) {
     (id, text) => console.info(M.runtime.sandboxTag(id), text),
   )
   await sandboxDispatcher.ready()
+  // Windows broker 的 PowerShell 缓存准备须早于脚本默认拒绝，后续启动复用本进程的校验缓存。
+  if (
+    process.platform === "win32" &&
+    settings.pluginSandbox.native.plugins.some(item => item.enabled)
+  )
+    compileWindowsSandbox()
   const runtime = installRuntime({
     settings,
     emit,

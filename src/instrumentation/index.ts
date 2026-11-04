@@ -22,6 +22,11 @@ import {
 import {
   arrayIsArray,
   arraySlice,
+  objectCreate,
+  objectHasOwn,
+  stringIndexOf,
+  stringLower,
+  stringSlice,
   newWeakMap,
   weakMapSet,
   weakMapGet,
@@ -53,6 +58,7 @@ import {
   type Description,
 } from "./descriptions.js"
 import { M } from "../shared/messages.js"
+import { refuse } from "../protect/objects.js"
 
 type Callable = (...args: any[]) => any
 type ContextProvider = () => string | undefined
@@ -74,6 +80,8 @@ interface WrapOptions {
   prepare?: (args: unknown[]) => unknown[]
   /** 检查前固定参数，避免检查与调用之间被改写。 */
   snapshot?: (args: unknown[]) => unknown[]
+  /** 永久自保护先于审计短路和卸载状态执行。 */
+  check?: (args: unknown[]) => void
 }
 export interface InstrumentationDisposer {
   (): void
@@ -90,6 +98,7 @@ const apply = Reflect.apply
 const construct = Reflect.construct
 const getPrototype = Object.getPrototypeOf
 const clock = performance.now.bind(performance)
+const windows = process.platform === "win32"
 /** 同一插件对同一文件的同类审计记录的最短间隔。 */
 const fileRepeatMs = 60000
 const spawnChannel = diagnostics.channel("tracing:child_process.spawn:start")
@@ -118,6 +127,7 @@ export function installInstrumentation(
   emit: EmitEvent,
   contextProvider?: ContextProvider,
   launchContext?: NodeLaunchContext,
+  checkCommand?: (operation: string, args: readonly unknown[]) => void,
 ): InstrumentationDisposer {
   const installed: Installed[] = []
   let inside = 0
@@ -126,6 +136,8 @@ export function installInstrumentation(
   const launches = newWeakMap<object, boolean>()
   const recentFiles = newMap<string, number>()
   const spawnOptions = newWeakMap<object, boolean>()
+  const nativeLaunches = newWeakMap<object, { options: Container; publishingDepth: number }>()
+  let publishingSpawn = 0
 
   /** 上报事件，传输异常不影响业务调用。 */
   function report(event: GuardEvent): void {
@@ -216,10 +228,12 @@ export function installInstrumentation(
   ): void {
     const original = container?.[key] as Callable | undefined
     if (typeof original !== "function") return
-    const { rejects = false, prepare: prepareArgs, snapshot: snapshotArgs } = options
+    const { rejects = false, prepare: prepareArgs, snapshot: snapshotArgs, check } = options
     const invoke = (thisArg: unknown, args: unknown[], callable = original): unknown => {
-      if (inside || disposed) return apply(callable, thisArg, args)
       if (snapshotArgs) args = snapshotArgs(args)
+      check?.(args)
+      if (inside || disposed)
+        return apply(callable, thisArg, prepareArgs ? prepareArgs(args) : args)
       inside++
       try {
         try {
@@ -502,7 +516,12 @@ export function installInstrumentation(
         objectFreeze(options.envPairs)
         objectFreeze(options)
       }
-      apply(publishSpawn, this, [data])
+      publishingSpawn++
+      try {
+        apply(publishSpawn, this, [data])
+      } finally {
+        publishingSpawn--
+      }
     }
     define(spawnChannel, "publish", { value: guardedPublish, writable: true, configurable: true })
     installed.push({
@@ -521,32 +540,85 @@ export function installInstrumentation(
       "spawn",
       "ChildProcess.prototype.spawn",
       function (this: unknown, input: unknown) {
-        if (!input || typeof input !== "object" || arrayIsArray(input) || disposed)
+        if (!input || typeof input !== "object" || arrayIsArray(input))
           return apply(rawSpawn, this, [input])
         const options = prepareSpawnOptions(input, launchContext)
         const token = options.env
         const known = token && typeof token === "object" && weakMapGet(launches, token)
         if (known) weakMapDelete(launches, token)
         if (!known) {
+          // 底层入口没有公开 env；使用实际传给系统的 envPairs 检查 PATH 中的脚本。
+          const environment = arrayIsArray(options.envPairs)
+            ? (objectCreate(null) as Record<string, string>)
+            : undefined
+          if (environment)
+            for (let index = 0; index < options.envPairs.length; index++) {
+              const pair = options.envPairs[index]
+              if (typeof pair !== "string") continue
+              const at = stringIndexOf(pair, "=")
+              if (at <= 0) continue
+              const name = stringSlice(pair, 0, at)
+              const key = windows && stringLower(name) === "path" ? "PATH" : name
+              if (!objectHasOwn(environment, key)) environment[key] = stringSlice(pair, at + 1)
+            }
           const args = [
             options.file,
             arrayIsArray(options.args) ? arraySlice(options.args, 1) : [],
-            { cwd: options.cwd },
+            { cwd: options.cwd, env: environment },
           ]
-          const description = describeCommand("spawn", args)
-          description.details = {
-            ...description.details,
-            childMonitoring:
-              launchContext?.manifestPath && isDirectNodeLaunch("spawn", args)
-                ? "runtime-requested"
-                : "creation-only",
+          checkCommand?.("spawn", args)
+          if (!disposed) {
+            const description = describeCommand("spawn", args)
+            description.details = {
+              ...description.details,
+              childMonitoring:
+                launchContext?.manifestPath && isDirectNodeLaunch("spawn", args)
+                  ? "runtime-requested"
+                  : "creation-only",
+            }
+            inspect(description)
           }
-          inspect(description)
         }
         weakMapSet(spawnOptions, options, true)
-        return apply(rawSpawn, this, [options])
+        const handle = this && typeof this === "object" ? (this as Container)._handle : undefined
+        if (handle && typeof handle === "object")
+          weakMapSet(nativeLaunches, handle, { options, publishingDepth: publishingSpawn })
+        try {
+          return apply(rawSpawn, this, [options])
+        } finally {
+          if (handle && typeof handle === "object") weakMapDelete(nativeLaunches, handle)
+        }
       },
     )
+    if (checkCommand) {
+      // 句柄从 ChildProcess 公开对象可达，不能只封住 process.binding 的获取入口。
+      const probe = new childProcess.ChildProcess() as childProcess.ChildProcess & {
+        _handle: Container
+      }
+      const nativePrototype = getPrototype(probe._handle) as Container
+      probe._handle.close()
+      const nativeSpawn = nativePrototype.spawn as Callable
+      replace(
+        nativePrototype,
+        "spawn",
+        "ChildProcess.native.spawn",
+        function (this: object, ...args: unknown[]) {
+          const launch = weakMapGet(nativeLaunches, this)
+          const checked = launch?.options
+          const sameLaunch =
+            checked &&
+            (args[0] === checked ||
+              (args[0] === checked.file &&
+                args[1] === checked.args &&
+                args[2] === checked.cwd &&
+                args[3] === checked.envPairs &&
+                args[4] === checked.stdio))
+          if (!sameLaunch || publishingSpawn !== launch?.publishingDepth)
+            refuse("native-process.spawn", "unguarded-process-handle")
+          return apply(nativeSpawn, this, args)
+        },
+      )
+    }
     for (const operation of [
       "exec",
       "execFile",
@@ -587,6 +659,7 @@ export function installInstrumentation(
             return prepared
           },
           snapshot: args => snapshotLaunch(operation, args),
+          check: args => checkCommand?.(operation, args),
         },
       )
     syncBuiltinESMExports()

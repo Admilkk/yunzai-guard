@@ -1,12 +1,16 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import path from "node:path"
+import fs from "node:fs"
+import os from "node:os"
 import { fileURLToPath } from "node:url"
 import {
   monitoredExecArgv,
   prepareNodeLaunch,
   stripGuardExecArgv,
   stripGuardNodeOptions,
+  snapshotLaunch,
+  prepareSpawnOptions,
 } from "../dist/runtime/launch.js"
 
 const bootstrap = fileURLToPath(new URL("../dist/runtime-bootstrap.cjs", import.meta.url))
@@ -15,6 +19,49 @@ const runtime = new URL("../dist/child-preload.js", import.meta.url).href
 const worker = new URL("../dist/worker-preload.js", import.meta.url).href
 const user = path.join(path.dirname(bootstrap), "user file.cjs")
 const context = { runtimeId: "native-fixture", originPlugin: () => "fixture-plugin" }
+
+test("cwd 快照保留链接与 .. 的顺序，低层 falsey 目录继承而非法高层类型拒绝", () => {
+  const relative = `link${path.sep}..${path.sep}work`
+  const expected = process.cwd() + path.sep + relative
+  assert.equal(snapshotLaunch("spawn", ["tool", [], { cwd: relative }])[2].cwd, expected)
+  for (const cwd of [undefined, null, "", false, 0, NaN])
+    assert.equal(prepareSpawnOptions({ file: "tool", args: ["tool"], cwd }).cwd, process.cwd())
+  for (const cwd of [false, true, 0, 123, Symbol("cwd")])
+    assert.throws(() => snapshotLaunch("spawn", ["tool", [], { cwd }]), {
+      code: "ERR_INVALID_ARG_TYPE",
+    })
+})
+
+test("当前 Node 的硬链接别名继承必需的预加载", t => {
+  const temporaryRoot = fs.realpathSync(os.tmpdir())
+  const directory = fs.mkdtempSync(path.join(temporaryRoot, "guard-node-alias-"))
+  t.after(() => {
+    const absolute = fs.realpathSync(directory)
+    assert.equal(path.dirname(absolute), temporaryRoot)
+    assert.ok(path.basename(absolute).startsWith("guard-node-alias-"))
+    fs.rmSync(absolute, { recursive: true, force: true })
+  })
+  const alias = path.join(directory, process.platform === "win32" ? "ordinary.exe" : "ordinary")
+  try {
+    fs.linkSync(process.execPath, alias)
+  } catch (error) {
+    if (["EPERM", "EACCES", "EXDEV", "ENOTSUP"].includes(error.code)) {
+      t.skip(`hard link unsupported: ${error.code}`)
+      return
+    }
+    throw error
+  }
+  const result = prepareNodeLaunch(
+    "spawn",
+    [alias, ["-e", "process.exit(0)"], { cwd: directory }],
+    {
+      ...context,
+      manifestPath: path.join(directory, "managed.json"),
+    },
+  )
+  assert.ok(result[1].includes(bootstrap))
+  assert.ok(result[1].includes(runtime))
+})
 
 test("known Guard preloads strip precisely and managed runtime injection remains mandatory", () => {
   const flags = [
@@ -182,10 +229,16 @@ test(
       ]) {
         const result = prepareNodeLaunch(operation, args, nativeContext)
         assert.equal(result[0], args[0])
-        assert.equal(
-          result[optionsAt].env.nOdE_oPtIoNs,
-          "--preserve-symlinks --preserve-symlinks-main --trace-warnings",
-        )
+        if (operation === "spawn")
+          assert.match(
+            result[optionsAt].env.nOdE_oPtIoNs,
+            /--require .* --preserve-symlinks --preserve-symlinks-main --trace-warnings$/,
+          )
+        else
+          assert.equal(
+            result[optionsAt].env.nOdE_oPtIoNs,
+            "--preserve-symlinks --preserve-symlinks-main --trace-warnings",
+          )
         assert.equal(result[optionsAt].env.APPLICATION, "kept")
         assert.equal(result[optionsAt].env.YUNZAI_GUARD_RUNTIME_MANIFEST, undefined)
         assert.equal(result[optionsAt].env.YUNZAI_GUARD_PARENT_RUNTIME, undefined)
@@ -211,6 +264,26 @@ test(
     }
   },
 )
+
+test("managed PATH Node aliases inherit monitoring while ordinary programs keep their argv", () => {
+  const env = { PATH: path.dirname(process.execPath), BUSINESS: "kept" }
+  const argv = ["-e", "process.exit(0)"]
+  const managed = { ...context, manifestPath: "managed.json" }
+  const prepared = prepareNodeLaunch(
+    "spawn",
+    [path.basename(process.execPath), argv, { env }],
+    managed,
+  )
+  assert.ok(prepared[1].includes(bootstrap))
+  assert.ok(prepared[1].includes(runtime))
+  assert.equal(prepared[2].env.YUNZAI_GUARD_RUNTIME_MANIFEST, path.resolve("managed.json"))
+  assert.equal(prepared[2].env.BUSINESS, "kept")
+  assert.deepEqual(argv, ["-e", "process.exit(0)"])
+  assert.deepEqual(env, { PATH: path.dirname(process.execPath), BUSINESS: "kept" })
+  const ordinary = prepareNodeLaunch("spawn", ["ordinary-program", argv, { env }], managed)
+  assert.deepEqual(ordinary[1], argv)
+  assert.equal(ordinary[2].env.YUNZAI_GUARD_RUNTIME_MANIFEST, undefined)
+})
 
 test(
   "Windows managed propagation preserves the effective mixed-case user NODE_OPTIONS",

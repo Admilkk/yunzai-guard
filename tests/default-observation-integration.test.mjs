@@ -62,7 +62,7 @@ function businessSource(id, { ordinary = false, restart = false } = {}) {
   return `import fs from "node:fs"
 import path from "node:path"
 import {fileURLToPath} from "node:url"
-import {execFileSync,spawnSync,fork} from "node:child_process"
+import {execSync,execFileSync,spawnSync,fork} from "node:child_process"
 import {Worker} from "node:worker_threads"
 const own=path.dirname(fileURLToPath(import.meta.url))
 const put=(name,value)=>fs.writeFileSync(path.join(own,name),JSON.stringify(value))
@@ -114,20 +114,28 @@ export class OriginalApiBusiness extends plugin {
           : ordinary
             ? `
       const owner=Bot.bot??Bot
-      const original=Bot.em
+      const original=owner.fileToUrl
       let calls=0
       const wrapped=function(...args){calls++;return Reflect.apply(original,this,args)}
-      owner.em=wrapped
-      const restore=()=>{if(owner.em===wrapped)owner.em=original;put("cleanup.json",{restored:Bot.em===original,calls,pid:process.pid})}
+      owner.fileToUrl=wrapped
+      const restore=()=>{if(owner.fileToUrl===wrapped)owner.fileToUrl=original;put("cleanup.json",{restored:owner.fileToUrl===original,calls,pid:process.pid})}
       this.addCleanup(restore)
       Bot.once("exit",restore)
-      result.hookInstalled=Bot.em===wrapped
-      Bot.em("guard-default-observation.fixture",{source:identity})
+      result.hookInstalled=owner.fileToUrl===wrapped
+      if(await owner.fileToUrl({buffer:"guard-default-observation.fixture"})!=="guard-default-observation.fixture")throw Error("hook return changed")
       result.hookCalls=calls
+      const queryOptions={encoding:"utf8",windowsHide:true,timeout:10000}
+      const queried=spawnSync(process.execPath,["--version"],queryOptions)
+      result.ordinaryCommands={execSync:execSync("echo ordinary-command",queryOptions).trim(),
+        execFileSync:execFileSync(process.execPath,["--version"],queryOptions).trim(),
+        spawnSync:{status:queried.status,stdout:queried.stdout?.trim()},version:process.version}
+      result.spawnSync=run("spawnSync")
       const worker=new Worker(new URL("./worker.mjs",import.meta.url),{workerData:{original:"worker-data"}})
       result.worker=await exchange(worker,{original:"worker-request"})
-      const child=fork(new URL("./fork.cjs",import.meta.url),[],{windowsHide:true,stdio:["ignore","ignore","ignore","ipc"]})
-      result.fork=await exchange(child,{original:"fork-request"})
+      try{
+        const child=fork(new URL("./fork.cjs",import.meta.url),[],{windowsHide:true,stdio:["ignore","ignore","ignore","ipc"]})
+        result.fork={allowed:true,...await exchange(child,{original:"fork-request"})}
+      }catch(error){result.fork={allowed:false,code:error.code,ruleId:error.ruleId}}
       `
             : `result.spawnSync=run("spawnSync")`
       }
@@ -285,8 +293,20 @@ async function runCase(t, { label, ids, rules, ordinary, restart = false }) {
         )
       } else if (ordinary) {
         assert.deepEqual(result.effectiveDefaults.rules, [])
-        assert.equal(result.execFileSync.allowed, true)
-        assert.equal(result.execFileSync.value, "execFileSync")
+        for (const operation of ["execFileSync", "spawnSync", "fork"]) {
+          assert.equal(result[operation].allowed, false)
+          assert.equal(result[operation].code, "GUARD_DENIED")
+          assert.equal(result[operation].ruleId, undefined)
+        }
+        for (const operation of ["execFileSync", "spawnSync"])
+          assert.equal(
+            fs.existsSync(path.join(fixture.root, "plugins", id, `${operation}-side-effect.txt`)),
+            false,
+          )
+        assert.equal(result.ordinaryCommands.execSync, "ordinary-command")
+        assert.equal(result.ordinaryCommands.execFileSync, result.ordinaryCommands.version)
+        assert.equal(result.ordinaryCommands.spawnSync.status, 0)
+        assert.equal(result.ordinaryCommands.spawnSync.stdout, result.ordinaryCommands.version)
         assert.equal(result.hookInstalled, true)
         assert.ok(result.hookCalls >= 1)
         assert.equal(result.worker.code, 0)
@@ -294,10 +314,6 @@ async function runCase(t, { label, ids, rules, ordinary, restart = false }) {
         assert.equal(result.worker.messages[0].kind, "application-worker-reply")
         assert.deepEqual(result.worker.messages[0].message, { original: "worker-request" })
         assert.deepEqual(result.worker.messages[0].workerData, { original: "worker-data" })
-        assert.equal(result.fork.code, 0)
-        assert.equal(result.fork.messages.length, 1)
-        assert.equal(result.fork.messages[0].kind, "application-fork-reply")
-        assert.deepEqual(result.fork.messages[0].message, { original: "fork-request" })
       } else {
         assert.equal(result.execFileSync.allowed, id === "observe-peer")
         if (id === "observe-peer") assert.equal(result.execFileSync.value, "execFileSync")
@@ -351,7 +367,7 @@ async function runCase(t, { label, ids, rules, ordinary, restart = false }) {
       assert.equal(failureEvents.length, 1)
       assert.equal(failureEvents[0].reason, "policy-violation:audit-channel-restart")
     } else if (ordinary) {
-      for (const operation of ["execFileSync", "worker", "fork"])
+      for (const operation of ["execSync", "execFileSync", "spawnSync", "worker"])
         assert.ok(
           audits.some(
             event =>
@@ -362,16 +378,36 @@ async function runCase(t, { label, ids, rules, ordinary, restart = false }) {
           ),
           `Missing default audit for ${operation}`,
         )
+      for (const operation of ["execFileSync", "spawnSync", "fork"])
+        assert.ok(
+          audits.some(
+            event =>
+              event.kind === "process" &&
+              event.operation === operation &&
+              event.plugin === ids[0] &&
+              event.action === "deny" &&
+              event.details?.scriptExecution === true,
+          ),
+          `Missing default script denial for ${operation}`,
+        )
       assert.ok(
         audits.some(
           event =>
-            event.kind === "integrity" && event.target === "Bot.em" && event.action === "audit",
+            event.kind === "integrity" &&
+            event.target === "Bot.fileToUrl" &&
+            event.action === "audit",
         ),
-        "The harmless original Bot.em wrapper was not recorded",
+        "The harmless original Bot.fileToUrl wrapper was not recorded",
       )
       assert.equal(
-        audits.some(event => event.action === "deny" || event.action === "restart"),
+        audits.some(event => event.action === "restart"),
         false,
+      )
+      assert.ok(
+        audits
+          .filter(event => event.action === "deny")
+          .every(event => event.kind === "process" && event.details?.scriptExecution === true),
+        "Only script execution should receive the default deny action",
       )
     } else {
       assert.ok(
@@ -459,7 +495,7 @@ async function runCase(t, { label, ids, rules, ordinary, restart = false }) {
 }
 
 test(
-  "default managed observation preserves original exec, Worker, fork IPC and a harmless Bot.em wrapper",
+  "default managed observation audits ordinary commands and preserves Worker/Hook while denying scripts",
   {
     skip: enabled
       ? false
@@ -515,6 +551,14 @@ test(
           plugin: "observe-one",
           operation: "execFileSync",
           action: "deny",
+        },
+        {
+          id: "observe-peer-reviewed-script",
+          kind: "process",
+          plugin: "observe-peer",
+          operation: "execFileSync",
+          target: process.execPath,
+          action: "audit",
         },
         { id: "global-spawn", kind: "process", operation: "spawnSync", action: "deny" },
       ],

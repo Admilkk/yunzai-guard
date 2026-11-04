@@ -1,6 +1,7 @@
 import path from "node:path"
-import fs from "node:fs"
 import { fileURLToPath } from "node:url"
+import { resolveCommandExecutable } from "../protect/command-resolution.js"
+import { snapshotCommandShell } from "../protect/command-shell.js"
 import {
   arrayEach,
   arrayEvery,
@@ -50,7 +51,33 @@ const ownImports = new Set(
 const ownExecutable = process.execPath
 const windows = process.platform === "win32"
 const resolvePath = path.resolve
-const realpath = fs.realpathSync.native
+const isAbsolutePath = path.isAbsolute
+const pathSeparator = path.sep
+const currentDirectory = process.cwd.bind(process)
+const NativeTypeError = TypeError
+
+function invalidCwd(): never {
+  const error = new NativeTypeError('The "options.cwd" argument must be a file path')
+  objectDefine(error, "code", { value: "ERR_INVALID_ARG_TYPE" })
+  throw error
+}
+
+/** 固定工作目录，后续 getter、归因或事件回调改变 cwd 时不改变已检查的目标。 */
+function snapshotCwd(options: Record<PropertyKey, any>, lowLevel = false): void {
+  let value = options.cwd
+  if (value === undefined || value === null || (lowLevel && !value)) {
+    options.cwd = currentDirectory()
+    return
+  }
+  if (typeof value === "object") value = fileURLToPath(value)
+  if (typeof value !== "string") invalidCwd()
+  const directory = currentDirectory()
+  if (windows && regexpTest(/^[a-z]:(?:$|[^\\/])/i, value)) invalidCwd()
+  if (windows && regexpTest(/^[\\/](?![\\/])/, value)) {
+    if (!regexpTest(/^[a-z]:[\\/]/i, directory)) invalidCwd()
+    options.cwd = stringSlice(directory, 0, 2) + value
+  } else options.cwd = isAbsolutePath(value) ? value : `${directory}${pathSeparator}${value}`
+}
 
 /** 仅移除当前 Guard 安装的预加载器，保留应用自身预加载器和参数。 */
 export function stripGuardExecArgv(input: readonly string[]): string[] {
@@ -215,18 +242,18 @@ function prependNodeOptions(env: NodeJS.ProcessEnv, prefix: string): void {
 }
 
 /** 判断可执行文件是否为当前 Node。 */
-function executable(value: unknown, cwd?: unknown): boolean {
+function executable(value: unknown, cwd?: unknown, env?: NodeJS.ProcessEnv): boolean {
   if (typeof value !== "string") return false
-  const candidate = typeof cwd === "string" ? resolvePath(cwd, value) : resolvePath(value)
-  const own = resolvePath(ownExecutable)
-  if (windows ? stringLower(candidate) === stringLower(own) : candidate === own) return true
-  try {
-    const actual = realpath(candidate)
-    const canonicalOwn = realpath(ownExecutable)
-    return windows ? stringLower(actual) === stringLower(canonicalOwn) : actual === canonicalOwn
-  } catch {
-    return false
+  const directory = typeof cwd === "string" ? cwd : currentDirectory()
+  const direct = stringIndexOf(value, "/") >= 0 || (windows && stringIndexOf(value, "\\") >= 0)
+  if (direct) {
+    const candidate = isAbsolutePath(value) ? value : `${directory}${pathSeparator}${value}`
+    if (
+      windows ? stringLower(candidate) === stringLower(ownExecutable) : candidate === ownExecutable
+    )
+      return true
   }
+  return resolveCommandExecutable(value, directory, env).node
 }
 
 /** 返回参数列表中 options 的位置。 */
@@ -237,6 +264,8 @@ function optionsIndex(args: unknown[]): number {
 /** 在检查前固定启动参数的快照。 */
 export function snapshotLaunch(operation: string, input: unknown[]): unknown[] {
   const args = arraySlice(input)
+  if (operation === "fork" && args[0] && typeof args[0] === "object")
+    args[0] = fileURLToPath(args[0] as URL)
   const at = optionsIndex(args)
   const current = args[at]
   const callbackOnly =
@@ -244,11 +273,18 @@ export function snapshotLaunch(operation: string, input: unknown[]): unknown[] {
   if (!callbackOnly && current != null && (typeof current !== "object" || arrayIsArray(current)))
     return input
   const options = copyOptions(callbackOnly ? undefined : current)
-  if (arrayIsArray(args[1])) args[1] = arraySlice(args[1])
+  if (arrayIsArray(args[1])) {
+    const argv: string[] = []
+    arrayEach(args[1], value => arrayPush(argv, string(value)))
+    args[1] = argv
+  }
   if (arrayIsArray(options.execArgv)) options.execArgv = arraySlice(options.execArgv)
+  const previousEnvironment = options.env
   options.env = copyEnvironment(
     options.env && typeof options.env === "object" ? options.env : process.env,
   )
+  snapshotCwd(options)
+  snapshotCommandShell(operation, options, current, previousEnvironment)
   args[at] = options
   if (callbackOnly) arrayPush(args, current)
   return args
@@ -261,8 +297,12 @@ export function isDirectNodeLaunch(operation: string, args: unknown[]): boolean 
   const options = args[optionsIndex(args)] as Record<string, unknown> | undefined
   if (options?.shell) return false
   if (operation === "fork")
-    return options?.execPath === undefined || executable(options.execPath, options.cwd)
-  if (!executable(args[0], options?.cwd)) return false
+    return (
+      options?.execPath === undefined ||
+      executable(options.execPath, options.cwd, options.env as NodeJS.ProcessEnv | undefined)
+    )
+  if (!executable(args[0], options?.cwd, options?.env as NodeJS.ProcessEnv | undefined))
+    return false
   const argv = arrayIsArray(args[1]) ? args[1] : []
   return !arrayIncludes(["--version", "-v", "--help", "-h", "--v8-options"], argv[0])
 }
@@ -303,6 +343,7 @@ export function prepareNodeLaunch(
   const env = options.env as NodeJS.ProcessEnv
   if (!context.manifestPath) {
     options.env = ordinaryEnvironment(env)
+    snapshotCommandShell(operation, options, options)
     const nativeEnv = options.env as NodeJS.ProcessEnv
     if (
       context.resolutionManifestPath &&
@@ -352,22 +393,20 @@ export function prepareSpawnOptions(
   context?: NodeLaunchContext,
 ): Record<PropertyKey, any> {
   const options = copyOptions(input)
-  const args =
-    options.args === undefined
-      ? []
-      : arrayIsArray(options.args)
-        ? arraySlice(options.args)
-        : options.args
-  const pairs = arrayIsArray(options.envPairs) ? arraySlice(options.envPairs) : options.envPairs
-  if (
-    !arrayIsArray(args) ||
-    !arrayEvery(args, value => typeof value === "string") ||
-    (pairs !== undefined &&
-      (!arrayIsArray(pairs) || !arrayEvery(pairs, value => typeof value === "string")))
-  )
+  const inputArgs = options.args === undefined ? [] : options.args
+  const inputPairs = options.envPairs
+  if (!arrayIsArray(inputArgs) || (inputPairs !== undefined && !arrayIsArray(inputPairs)))
     return options
+  const args: string[] = []
+  arrayEach(inputArgs, value => arrayPush(args, string(value)))
+  let pairs: string[] | undefined
+  if (arrayIsArray(inputPairs)) {
+    pairs = []
+    arrayEach(inputPairs, value => arrayPush(pairs!, string(value)))
+  }
   options.args = args
   if (pairs !== undefined) options.envPairs = pairs
+  snapshotCwd(options, true)
   if (!context) return options
   const env = objectCreate(null) as NodeJS.ProcessEnv
   if (pairs === undefined) {

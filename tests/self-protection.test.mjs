@@ -85,10 +85,10 @@ test("自保护启用后 promisify 保留子进程结果、重复转换及拒绝
         const run=promisify(childProcess[name]);
         assert.equal(promisify(run),run);
         assert.throws(()=>Object.defineProperty(childProcess[name],promisify.custom,{value(){}}),{code:"ERR_GUARD_SELF_PROTECTION"});
+        const args=name==="exec"?['"'+process.execPath+'" --version']:[process.execPath,["--version"]];
         if (${JSON.stringify(action)} === "deny") {
-          await assert.rejects(run("unused-command"),{code:"GUARD_DENIED"});
+          await assert.rejects(run(...args),{code:"GUARD_DENIED"});
         } else {
-          const args=name==="exec"?['"'+process.execPath+'" --version']:[process.execPath,["--version"]];
           const pending=run(...args);
           assert.ok(pending.child?.pid);
           assert.equal((await pending).stdout.trim(),process.version);

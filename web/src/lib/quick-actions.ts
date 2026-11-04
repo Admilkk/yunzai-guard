@@ -1,14 +1,10 @@
-import { decide } from "../../../src/config/policy.js"
-import { canCreateRule, needsTarget } from "./rules"
+import { canCreateRule, needsTarget, sampleDecision } from "./rules"
 import { categories, setPermission } from "./policy.js"
 import type { AuditEntry, Draft, Rule, RuleAction } from "../types"
 
 /** 只把策略匹配字段交给判定器，不把审计结果当作输入动作。 */
 export function eventDecision(entry: AuditEntry, rules: Rule[]) {
-  return decide(
-    { plugin: entry.plugin, kind: entry.kind, operation: entry.operation, target: entry.target },
-    rules,
-  )
+  return sampleDecision(entry, rules)
 }
 
 /** 路径脱敏时只提出明确标注的站点范围，保留协议与端口。 */

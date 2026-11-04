@@ -58,6 +58,27 @@ test("事件快捷放行精确覆盖首条规则，保留其他插件、目标�
   assert.equal(document.rules.length, 2)
 })
 
+test("默认拒绝脚本可生成明确放行规则，不会被误判为当前已审计", () => {
+  for (const details of [
+    { scriptExecution: true },
+    { event: { details: { scriptExecution: true } } },
+  ]) {
+    const document = { rules: [] }
+    const script = { ...entry, kind: "process", operation: "spawn", target: "node", details }
+    addEventShortcut(document, script, "audit", "panel.script")
+    assert.equal(document.rules.length, 1)
+    assert.deepEqual(document.rules[0], {
+      id: "panel.script",
+      plugin: "alpha",
+      kind: "process",
+      operation: "spawn",
+      target: "node",
+      action: "audit",
+    })
+    assert.throws(() => addEventShortcut(document, script, "audit", "another"), /当前配置已/)
+  }
+})
+
 test("快捷操作拒绝未知来源、脱敏目标、字面通配符、系统观察与自保护，不扩大授权", () => {
   const changes = [
     { plugin: "unknown" },

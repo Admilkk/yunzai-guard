@@ -87,6 +87,7 @@ async function fixture(settings = {}) {
       version: 1,
       generation: 1,
       projectId: "test",
+      stateDir: path.join(directory, "data", "yunzai-guard"),
       token: "test-token-at-least-16-characters",
       endpoint,
       settings: parseSettings(settings),
@@ -152,7 +153,32 @@ async function fixture(settings = {}) {
 }
 
 test("fork and synchronous direct Node descendants propagate monitoring without polluting application IPC", async () => {
-  const probe = await fixture()
+  // 此夹具有意执行受信脚本来验证继承，授权仅覆盖对应 API 与测试程序。
+  const probe = await fixture({
+    rules: [
+      {
+        id: "fixture-node-callback",
+        kind: "process",
+        operation: "execFile",
+        target: process.execPath,
+        action: "audit",
+      },
+      {
+        id: "fixture-node-descendant",
+        kind: "process",
+        operation: "execFileSync",
+        target: process.execPath,
+        action: "audit",
+      },
+      {
+        id: "fixture-business-fork",
+        kind: "process",
+        operation: "fork",
+        target: path.join(os.tmpdir(), "guard runtime *", "business-child.mjs"),
+        action: "audit",
+      },
+    ],
+  })
   try {
     const marker = path.join(probe.directory, "fork-marker.json")
     const childModule = path.join(probe.directory, "business-child.mjs")
@@ -251,7 +277,16 @@ test("nested Workers preserve application transfers and report a blocked interna
 
 test("fork runtime blocks network requests before the external receiver sees a connection", async () => {
   const probe = await fixture({
-    rules: [{ id: "no-child-network", kind: "network", action: "restart" }],
+    rules: [
+      { id: "no-child-network", kind: "network", action: "restart" },
+      {
+        id: "fixture-network-fork",
+        kind: "process",
+        operation: "fork",
+        target: path.join(os.tmpdir(), "guard runtime *", "network-child.mjs"),
+        action: "audit",
+      },
+    ],
   })
   const receiver = net.createServer(socket => socket.destroy())
   let connections = 0
@@ -283,7 +318,17 @@ test("fork runtime blocks network requests before the external receiver sees a c
 })
 
 test("direct Node propagation works with an empty caller environment and required Windows resolution flags", async () => {
-  const probe = await fixture()
+  const probe = await fixture({
+    rules: [
+      {
+        id: "fixture-empty-env-node",
+        kind: "process",
+        operation: "execFileSync",
+        target: process.execPath,
+        action: "audit",
+      },
+    ],
+  })
   try {
     const expression =
       'JSON.stringify({guard:Boolean(globalThis[Symbol.for("yunzai.guard.runtime.v1")]),flags:process.execArgv.filter(value=>value.startsWith("--preserve-symlinks"))})'
@@ -297,6 +342,41 @@ test("direct Node propagation works with an empty caller environment and require
         new Set(result.flags),
         new Set(["--preserve-symlinks", "--preserve-symlinks-main"]),
       )
+  } finally {
+    await probe.close()
+  }
+})
+
+test("changed child cwd and nested Workers keep the host control directory protected", async () => {
+  const probe = await fixture({
+    rules: [
+      {
+        id: "trusted-cwd-probe",
+        kind: "process",
+        operation: "execFileSync",
+        target: process.execPath,
+        action: "audit",
+      },
+    ],
+  })
+  try {
+    const state = path.join(probe.directory, "data", "yunzai-guard")
+    const elsewhere = path.join(probe.directory, "elsewhere")
+    fs.mkdirSync(state, { recursive: true })
+    fs.mkdirSync(elsewhere)
+    const sentinel = path.join(state, "unchanged.txt")
+    fs.writeFileSync(sentinel, "original")
+    const attempt = `let code;try{require('node:fs').writeFileSync(${JSON.stringify(sentinel)},'changed')}catch(error){code=error.code}`
+    const worker = `const {parentPort}=require('node:worker_threads');${attempt};parentPort.postMessage(code)`
+    const child = `${attempt};const own=code;const {Worker}=require('node:worker_threads');const worker=new Worker(${JSON.stringify(worker)},{eval:true});worker.once('message',nested=>console.log(JSON.stringify({own,nested})));worker.on('error',error=>{throw error});`
+    const result = await probe.launch(
+      `import {execFileSync} from 'node:child_process';process.stdout.write(execFileSync(process.execPath,['-e',${JSON.stringify(child)}],{cwd:${JSON.stringify(elsewhere)},env:{},encoding:'utf8'}));`,
+    )
+    assert.deepEqual(JSON.parse(result.stdout.trim()), {
+      own: "ERR_GUARD_SELF_PROTECTION",
+      nested: "ERR_GUARD_SELF_PROTECTION",
+    })
+    assert.equal(fs.readFileSync(sentinel, "utf8"), "original")
   } finally {
     await probe.close()
   }

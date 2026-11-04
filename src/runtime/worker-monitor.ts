@@ -80,6 +80,7 @@ export interface WorkerMonitorOptions {
   identity: RuntimeIdentity
   manifestPath?: string
   resolutionManifestPath?: string
+  stateDir?: string
   emit: EmitEvent
   originPlugin: () => string | undefined
 }
@@ -193,6 +194,7 @@ export function installWorkerMonitor(options: WorkerMonitorOptions): WorkerMonit
           settings: options.settings,
           manifestPath: options.manifestPath,
           resolutionManifestPath: options.resolutionManifestPath,
+          stateDir: options.stateDir,
           port: channel.port2,
           auditChannelNonce: channelNonce,
         })

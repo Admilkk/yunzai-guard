@@ -15,16 +15,18 @@ import {
   stringEndsWith,
   stringSlice,
   stringLower,
+  stringIndexOf,
   objectDescriptor,
   objectPrototype,
   objectDefine,
+  regexpTest,
 } from "./intrinsics.js"
 import { M } from "../shared/messages.js"
 
 const realpath = fs.realpathSync.native
 const readlink = fs.readlinkSync
 const fstat = fs.fstatSync
-const { resolve, relative, isAbsolute, join, dirname, basename } = path
+const { resolve, relative, isAbsolute, join, dirname, basename, parse } = path
 const separator = path.sep
 const platform = process.platform
 const urlPath = fileURLToPath
@@ -40,6 +42,50 @@ const looseDecoder = new TextDecoder("utf-8", { ignoreBOM: true })
 const decodeLoose = looseDecoder.decode.bind(looseDecoder)
 const encoder = new TextEncoder()
 const encode = encoder.encode.bind(encoder)
+function windowsSeparators(value: string): string {
+  let output = ""
+  for (let index = 0; index < value.length; index++)
+    output += value[index] === "/" ? "\\" : value[index]
+  return output
+}
+
+/** 固定绝对前缀，但保留交给文件系统处理的链接与 .. 顺序。 */
+function absoluteName(value: string): string {
+  if (isAbsolute(value)) return value
+  const directory = cwd()
+  if (platform === "win32" && regexpTest(/^[a-z]:/i, value)) {
+    const drive = stringSlice(value, 0, 2)
+    const base =
+      stringLower(stringSlice(directory, 0, 2)) === stringLower(drive)
+        ? directory
+        : resolve(`${drive}.`)
+    return `${base}${separator}${stringSlice(value, 2)}`
+  }
+  return `${directory}${separator}${value}`
+}
+
+/** Win32 普通路径会折叠尾点/空格；ADS 也属于同一个受保护文件。 */
+function windowsAlias(value: string): string {
+  const text = windowsSeparators(value)
+  const literal = stringStartsWith(text, "\\\\?\\") || stringStartsWith(text, "\\\\.\\")
+  const root = parse(text).root
+  let output = root
+  let start = root.length
+  for (let index = start; index <= text.length; index++) {
+    if (index !== text.length && text[index] !== "\\") continue
+    let part = stringSlice(text, start, index)
+    const stream = stringIndexOf(part, ":")
+    if (stream >= 0) part = stringSlice(part, 0, stream)
+    if (!literal && part !== "." && part !== "..") {
+      let end = part.length
+      while (end > 0 && (part[end - 1] === "." || part[end - 1] === " ")) end--
+      part = stringSlice(part, 0, end)
+    }
+    if (part) output += `${output && !stringEndsWith(output, "\\") ? "\\" : ""}${part}`
+    start = index + 1
+  }
+  return output
+}
 /** Windows 下去掉设备前缀并转为小写，便于比较。 */
 const normalize = (value: string): string => {
   if (platform !== "win32") return value
@@ -76,7 +122,7 @@ export class Paths {
   /** Node 也接受 Uint8Array 和 URL-like，检查与调用必须使用同一份路径。 */
   snapshot(value: unknown, operation: string, readOnly = false, absolute = true): unknown {
     if (typeof value === "string")
-      return absolute && value && !isAbsolute(value) ? `${cwd()}${separator}${value}` : value
+      return absolute && value && !isAbsolute(value) ? absoluteName(value) : value
     if (isBytes(value)) {
       const copy = new Bytes(value)
       try {
@@ -129,6 +175,35 @@ export class Paths {
     }
   }
 
+  /** 先解析每个已存在组件的链接，再处理 ..，不预先折叠物理路径。 */
+  #physical(value: string): string {
+    const text = platform === "win32" ? windowsSeparators(value) : value
+    const root = parse(text).root
+    let cursor = root
+    try {
+      cursor = realpath(root)
+    } catch {
+      // 无权读取祖先时保留词法前缀，已知根仍由其他候选比较。
+    }
+    let start = root.length
+    for (let index = start; index <= text.length; index++) {
+      if (index !== text.length && text[index] !== separator) continue
+      const part = stringSlice(text, start, index)
+      start = index + 1
+      if (!part || part === ".") continue
+      if (part === "..") cursor = dirname(cursor)
+      else {
+        cursor = join(cursor, part)
+        try {
+          cursor = realpath(cursor)
+        } catch {
+          // 目标尚不存在时沿用已解析的真实父目录。
+        }
+      }
+    }
+    return cursor
+  }
+
   /** 检查路径或 fd 是否落在受保护目录，必要时同时检查祖先目录。 */
   check(value: unknown, operation: string, ancestors = false): void {
     if (typeof value === "number") {
@@ -137,12 +212,30 @@ export class Paths {
     }
     if (typeof value !== "string" && !isBytes(value)) return
     const text = typeof value === "string" ? value : decodeLoose(value)
-    const absolute = isAbsolute(text) ? text : `${cwd()}${separator}${text}`
+    const absolute = absoluteName(text)
     const lexical = resolve(absolute)
     const candidates = [
       normalize(lexical),
       normalize(this.#canonical(typeof value === "string" ? absolute : value)),
     ]
+    const physical = (value: string) => {
+      if (
+        regexpTest(
+          platform === "win32" ? /(?:^|[\\/])\.\.(?:[\\/]|$)/ : /(?:^|\/)\.\.(?:\/|$)/,
+          value,
+        )
+      )
+        arrayPush(candidates, normalize(this.#physical(value)))
+    }
+    physical(absolute)
+    if (platform === "win32") {
+      const alias = windowsAlias(absolute)
+      if (alias !== absolute) {
+        arrayPush(candidates, normalize(resolve(alias)))
+        arrayPush(candidates, normalize(this.#canonical(alias)))
+        physical(alias)
+      }
+    }
     arrayEach(this.#roots, root => {
       arrayEach(candidates, candidate => {
         if (within(root, candidate) || (ancestors && within(candidate, root)))
@@ -155,7 +248,7 @@ export class Paths {
   track(fd: number, value: unknown): void {
     if (!numberIsInteger(fd) || (typeof value !== "string" && !isBytes(value))) return
     const text = typeof value === "string" ? value : decodeLoose(value)
-    const name = isAbsolute(text) ? text : `${cwd()}${separator}${text}`
+    const name = absoluteName(text)
     try {
       const { dev, ino } = fstat(fd)
       mapSet(this.#fds, fd, {

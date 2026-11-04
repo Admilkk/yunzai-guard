@@ -5,6 +5,24 @@ const { sanitizeAuditEvent } = await auditModule("audit/event")
 const { createAuditSourceCounters } = await auditModule("audit/protocol")
 const redact = value => value.replaceAll("secret", "[redacted]")
 
+test("脚本默认拒绝证据持久化，参数和正文仍被移除", () => {
+  const source = {
+    kind: "process",
+    operation: "spawn",
+    target: "node",
+    action: "deny",
+    details: { scriptExecution: true, args: ["secret"], code: "secret" },
+  }
+  const event = sanitizeAuditEvent(source, redact)
+  assert.deepEqual(event.details, { scriptExecution: true })
+  assert.equal(JSON.stringify(event).includes("secret"), false)
+  assert.equal(
+    sanitizeAuditEvent({ ...source, details: { scriptExecution: "true" } }, redact).details,
+    undefined,
+  )
+  assert.equal(sanitizeAuditEvent({ ...source, kind: "network" }, redact).details, undefined)
+})
+
 test("persistent native evidence keeps observability and reported blocking separate from trusted runtime identity", () => {
   const source = {
     kind: "process",
