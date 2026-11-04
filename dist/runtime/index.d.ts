@@ -17,6 +17,8 @@ interface RuntimeOptions {
     manifestPath?: string;
     /** 仅用于模块解析；此文件不授权连接运行时代理。 */
     resolutionManifestPath?: string;
+    /** 从可信宿主清单或父 Worker 继承的控制目录。 */
+    stateDir?: string;
     emit: EmitEvent;
     ready?: Promise<void>;
     contextProvider?: () => string | undefined;

@@ -17,6 +17,7 @@ export interface WorkerMonitorOptions {
     identity: RuntimeIdentity;
     manifestPath?: string;
     resolutionManifestPath?: string;
+    stateDir?: string;
     emit: EmitEvent;
     originPlugin: () => string | undefined;
 }

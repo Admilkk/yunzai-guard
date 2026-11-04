@@ -43,7 +43,7 @@ function currentDecision(settings, event) {
                 arrayIncludes(settings.protect.targets, event.target)))
             return { action: settings.protect.action };
     }
-    return { action: "audit" };
+    return decision;
 }
 /** 传输标签不构成授权；动作仅由当前策略决定。 */
 export function runtimeEventDecision(settings, event) {

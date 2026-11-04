@@ -1,5 +1,5 @@
 import path from "node:path";
-import { samplePolicyDecision } from "../config/sample-policy.js";
+import { samplePolicyDecision, scriptExecutionDetails } from "../config/sample-policy.js";
 import { readJsonFile, writeJsonFile } from "../shared/files.js";
 import { sha256 } from "../shared/hash.js";
 import { redactAuditText } from "../audit/redaction.js";
@@ -88,6 +88,7 @@ export function readTaskCases(stateDir, settings, options = {}) {
                 kind: entry.kind,
                 operation: entry.operation,
                 target: entry.target,
+                details: scriptExecutionDetails(entry.details),
             });
             if (current)
                 decision = { action: current.action ?? "audit", ruleId: current.ruleId, uncertain: false };

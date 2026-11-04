@@ -2,6 +2,13 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.6.0](https://github.com/Admilkk/yunzai-guard/compare/v1.5.0...v1.6.0) (2026-11-04)
+
+
+### ✨ 新功能
+
+* **protect:** 扩展命令文件自保护并默认拒绝脚本执行 ([268b975](https://github.com/Admilkk/yunzai-guard/commit/268b9752f97f8135cb554e9f8360be4e7df4ec99))
+
 ## [1.5.0](https://github.com/Admilkk/yunzai-guard/compare/v1.4.0...v1.5.0) (2026-11-01)
 
 

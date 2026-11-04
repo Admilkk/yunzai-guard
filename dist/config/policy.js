@@ -44,7 +44,22 @@ export function kindMatches(kind, eventKind) {
     }
     return false;
 }
-/** 规则按顺序覆盖默认行为，首个匹配生效；未匹配行为仅审计。 */
+/** 只允许明确的脚本执行证据收紧命令默认值，其他行为保持审计。 */
+export function defaultPolicyDecision(event) {
+    if (event.kind === "process" && event.details?.scriptExecution === true)
+        switch (event.operation) {
+            case "exec":
+            case "execSync":
+            case "execFile":
+            case "execFileSync":
+            case "spawn":
+            case "spawnSync":
+            case "fork":
+                return { action: "deny" };
+        }
+    return { action: "audit" };
+}
+/** 规则按顺序覆盖默认行为，首个匹配生效。 */
 export function decide(event, rules) {
     for (let index = 0; index < rules.length; index++) {
         const rule = rules[index];
@@ -58,7 +73,7 @@ export function decide(event, rules) {
             continue;
         return { action: rule.action, ruleId: rule.id };
     }
-    return { action: "audit" };
+    return defaultPolicyDecision(event);
 }
 /** 按配置规则评估事件，返回首条匹配规则的动作。 */
 export function evaluatePolicy(settings, event) {
@@ -79,4 +94,4 @@ export class GuardDeniedError extends Error {
 //# sourceMappingURL=policy.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "../protect/objects.js"
-__guardRegisterExports("config/policy.ts", { matchGlob, isExplicitKind, kindMatches, decide, evaluatePolicy, GuardDeniedError })
+__guardRegisterExports("config/policy.ts", { matchGlob, isExplicitKind, kindMatches, defaultPolicyDecision, decide, evaluatePolicy, GuardDeniedError })

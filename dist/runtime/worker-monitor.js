@@ -129,6 +129,7 @@ export function installWorkerMonitor(options) {
                     settings: options.settings,
                     manifestPath: options.manifestPath,
                     resolutionManifestPath: options.resolutionManifestPath,
+                    stateDir: options.stateDir,
                     port: channel.port2,
                     auditChannelNonce: channelNonce,
                 });

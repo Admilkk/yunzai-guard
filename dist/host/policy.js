@@ -6,6 +6,8 @@ export function hostDecision(settings, event) {
         operation: event.operation,
         target: event.target,
         plugin: event.plugin,
+        // 脚本标记只能收紧默认动作；不传递客体的动作、规则或脱敏匹配声明。
+        details: event.details?.scriptExecution === true ? { scriptExecution: true } : undefined,
     });
 }
 //# sourceMappingURL=policy.js.map

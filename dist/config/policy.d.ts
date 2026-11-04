@@ -12,7 +12,9 @@ export declare function matchGlob(pattern: string, value: string): boolean;
 export declare function isExplicitKind(kind: string): boolean;
 /** 判断规则的 kind 是否覆盖事件类型；显式类型不接受省略或通配。 */
 export declare function kindMatches(kind: GuardRule["kind"], eventKind: string): boolean;
-/** 规则按顺序覆盖默认行为，首个匹配生效；未匹配行为仅审计。 */
+/** 只允许明确的脚本执行证据收紧命令默认值，其他行为保持审计。 */
+export declare function defaultPolicyDecision(event: GuardEvent): PolicyDecision;
+/** 规则按顺序覆盖默认行为，首个匹配生效。 */
 export declare function decide(event: GuardEvent, rules: readonly GuardRule[]): PolicyDecision;
 /** 按配置规则评估事件，返回首条匹配规则的动作。 */
 export declare function evaluatePolicy(settings: GuardSettings, event: GuardEvent): PolicyDecision;

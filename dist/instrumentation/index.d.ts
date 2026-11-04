@@ -13,5 +13,5 @@ export interface InstrumentationDisposer {
  * 在 app.js 前安装，覆盖 JS 内置调用点及同步后的 ESM 绑定。
  * 原生代码、此前捕获的引用和外部程序不在此钩子的保护范围内。
  */
-export declare function installInstrumentation(settings: GuardSettings, emit: EmitEvent, contextProvider?: ContextProvider, launchContext?: NodeLaunchContext): InstrumentationDisposer;
+export declare function installInstrumentation(settings: GuardSettings, emit: EmitEvent, contextProvider?: ContextProvider, launchContext?: NodeLaunchContext, checkCommand?: (operation: string, args: readonly unknown[]) => void): InstrumentationDisposer;
 export {};

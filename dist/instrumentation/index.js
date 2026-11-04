@@ -12,15 +12,17 @@ import { promisify } from "node:util";
 import { setInterval, clearInterval } from "node:timers";
 import { evaluatePolicy, GuardDeniedError } from "../config/policy.js";
 import { prepareNodeLaunch, prepareSpawnOptions, snapshotLaunch, isDirectNodeLaunch, } from "../runtime/launch.js";
-import { arrayIsArray, arraySlice, newWeakMap, weakMapSet, weakMapGet, weakMapDelete, objectFreeze, promiseReject, sameDescriptor, timestamp, newMap, mapGet, mapSet, mapSize, mapClear, } from "../protect/intrinsics.js";
+import { arrayIsArray, arraySlice, objectCreate, objectHasOwn, stringIndexOf, stringLower, stringSlice, newWeakMap, weakMapSet, weakMapGet, weakMapDelete, objectFreeze, promiseReject, sameDescriptor, timestamp, newMap, mapGet, mapSet, mapSize, mapClear, } from "../protect/intrinsics.js";
 import { cleanTarget, prepareFork, describeRequest, describeSocket, describeDatagram, describeCommand, describeFetch, describeListen, describeDns, describeUrl, describeFile, describeNative, filePath, } from "./descriptions.js";
 import { M } from "../shared/messages.js";
+import { refuse } from "../protect/objects.js";
 const descriptor = Object.getOwnPropertyDescriptor;
 const define = Object.defineProperty;
 const apply = Reflect.apply;
 const construct = Reflect.construct;
 const getPrototype = Object.getPrototypeOf;
 const clock = performance.now.bind(performance);
+const windows = process.platform === "win32";
 /** 同一插件对同一文件的同类审计记录的最短间隔。 */
 const fileRepeatMs = 60000;
 const spawnChannel = diagnostics.channel("tracing:child_process.spawn:start");
@@ -44,7 +46,7 @@ function stackPlugin() {
  * 在 app.js 前安装，覆盖 JS 内置调用点及同步后的 ESM 绑定。
  * 原生代码、此前捕获的引用和外部程序不在此钩子的保护范围内。
  */
-export function installInstrumentation(settings, emit, contextProvider, launchContext) {
+export function installInstrumentation(settings, emit, contextProvider, launchContext, checkCommand) {
     const installed = [];
     let inside = 0;
     let disposed = false;
@@ -52,6 +54,8 @@ export function installInstrumentation(settings, emit, contextProvider, launchCo
     const launches = newWeakMap();
     const recentFiles = newMap();
     const spawnOptions = newWeakMap();
+    const nativeLaunches = newWeakMap();
+    let publishingSpawn = 0;
     /** 上报事件，传输异常不影响业务调用。 */
     function report(event) {
         try {
@@ -129,12 +133,13 @@ export function installInstrumentation(settings, emit, contextProvider, launchCo
         const original = container?.[key];
         if (typeof original !== "function")
             return;
-        const { rejects = false, prepare: prepareArgs, snapshot: snapshotArgs } = options;
+        const { rejects = false, prepare: prepareArgs, snapshot: snapshotArgs, check } = options;
         const invoke = (thisArg, args, callable = original) => {
-            if (inside || disposed)
-                return apply(callable, thisArg, args);
             if (snapshotArgs)
                 args = snapshotArgs(args);
+            check?.(args);
+            if (inside || disposed)
+                return apply(callable, thisArg, prepareArgs ? prepareArgs(args) : args);
             inside++;
             try {
                 try {
@@ -396,7 +401,13 @@ export function installInstrumentation(settings, emit, contextProvider, launchCo
                 objectFreeze(options.envPairs);
                 objectFreeze(options);
             }
-            apply(publishSpawn, this, [data]);
+            publishingSpawn++;
+            try {
+                apply(publishSpawn, this, [data]);
+            }
+            finally {
+                publishingSpawn--;
+            }
         };
         define(spawnChannel, "publish", { value: guardedPublish, writable: true, configurable: true });
         installed.push({
@@ -411,7 +422,7 @@ export function installInstrumentation(settings, emit, contextProvider, launchCo
         });
         const rawSpawn = childProcess.ChildProcess.prototype.spawn;
         replace(childProcess.ChildProcess.prototype, "spawn", "ChildProcess.prototype.spawn", function (input) {
-            if (!input || typeof input !== "object" || arrayIsArray(input) || disposed)
+            if (!input || typeof input !== "object" || arrayIsArray(input))
                 return apply(rawSpawn, this, [input]);
             const options = prepareSpawnOptions(input, launchContext);
             const token = options.env;
@@ -419,23 +430,73 @@ export function installInstrumentation(settings, emit, contextProvider, launchCo
             if (known)
                 weakMapDelete(launches, token);
             if (!known) {
+                // 底层入口没有公开 env；使用实际传给系统的 envPairs 检查 PATH 中的脚本。
+                const environment = arrayIsArray(options.envPairs)
+                    ? objectCreate(null)
+                    : undefined;
+                if (environment)
+                    for (let index = 0; index < options.envPairs.length; index++) {
+                        const pair = options.envPairs[index];
+                        if (typeof pair !== "string")
+                            continue;
+                        const at = stringIndexOf(pair, "=");
+                        if (at <= 0)
+                            continue;
+                        const name = stringSlice(pair, 0, at);
+                        const key = windows && stringLower(name) === "path" ? "PATH" : name;
+                        if (!objectHasOwn(environment, key))
+                            environment[key] = stringSlice(pair, at + 1);
+                    }
                 const args = [
                     options.file,
                     arrayIsArray(options.args) ? arraySlice(options.args, 1) : [],
-                    { cwd: options.cwd },
+                    { cwd: options.cwd, env: environment },
                 ];
-                const description = describeCommand("spawn", args);
-                description.details = {
-                    ...description.details,
-                    childMonitoring: launchContext?.manifestPath && isDirectNodeLaunch("spawn", args)
-                        ? "runtime-requested"
-                        : "creation-only",
-                };
-                inspect(description);
+                checkCommand?.("spawn", args);
+                if (!disposed) {
+                    const description = describeCommand("spawn", args);
+                    description.details = {
+                        ...description.details,
+                        childMonitoring: launchContext?.manifestPath && isDirectNodeLaunch("spawn", args)
+                            ? "runtime-requested"
+                            : "creation-only",
+                    };
+                    inspect(description);
+                }
             }
             weakMapSet(spawnOptions, options, true);
-            return apply(rawSpawn, this, [options]);
+            const handle = this && typeof this === "object" ? this._handle : undefined;
+            if (handle && typeof handle === "object")
+                weakMapSet(nativeLaunches, handle, { options, publishingDepth: publishingSpawn });
+            try {
+                return apply(rawSpawn, this, [options]);
+            }
+            finally {
+                if (handle && typeof handle === "object")
+                    weakMapDelete(nativeLaunches, handle);
+            }
         });
+        if (checkCommand) {
+            // 句柄从 ChildProcess 公开对象可达，不能只封住 process.binding 的获取入口。
+            const probe = new childProcess.ChildProcess();
+            const nativePrototype = getPrototype(probe._handle);
+            probe._handle.close();
+            const nativeSpawn = nativePrototype.spawn;
+            replace(nativePrototype, "spawn", "ChildProcess.native.spawn", function (...args) {
+                const launch = weakMapGet(nativeLaunches, this);
+                const checked = launch?.options;
+                const sameLaunch = checked &&
+                    (args[0] === checked ||
+                        (args[0] === checked.file &&
+                            args[1] === checked.args &&
+                            args[2] === checked.cwd &&
+                            args[3] === checked.envPairs &&
+                            args[4] === checked.stdio));
+                if (!sameLaunch || publishingSpawn !== launch?.publishingDepth)
+                    refuse("native-process.spawn", "unguarded-process-handle");
+                return apply(nativeSpawn, this, args);
+            });
+        }
         for (const operation of [
             "exec",
             "execFile",
@@ -471,6 +532,7 @@ export function installInstrumentation(settings, emit, contextProvider, launchCo
                     return prepared;
                 },
                 snapshot: args => snapshotLaunch(operation, args),
+                check: args => checkCommand?.(operation, args),
             });
         syncBuiltinESMExports();
         if (settings.protect.enabled && settings.protect.monitorInstrumentation) {
