@@ -171,9 +171,10 @@ test("installed runtime keeps business hooks while sealing Guard files, methods 
     const worker=new Worker(
       'const fs=require("node:fs");const {parentPort}=require("node:worker_threads");let code;try{fs.writeFileSync('+${JSON.stringify(JSON.stringify(sentinel))}+',"bad")}catch(e){code=e.code}parentPort.postMessage(code)',
       {eval:true,execArgv:[]});
+    const workerExited=new Promise(resolve=>worker.once("exit",resolve));
     const workerResult=await new Promise((resolve,reject)=>{worker.once("message",resolve);worker.once("error",reject)});
     assert.equal(workerResult,"ERR_GUARD_SELF_PROTECTION");
-    await new Promise(resolve=>worker.exitCode!==undefined?resolve():worker.once("exit",resolve));
+    await workerExited;
     runtime.instrumentation();
     denied(()=>fs.writeFileSync(${JSON.stringify(sentinel)},"still denied"));
     console.log(JSON.stringify({blocked:events.filter(e=>e.kind==="self-protection").length}));
