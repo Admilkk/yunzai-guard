@@ -2,6 +2,13 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.6.2](https://github.com/Admilkk/yunzai-guard/compare/v1.6.1...v1.6.2) (2026-11-05)
+
+
+### 🐛 问题修复
+
+* **protect:** 仅拦截明确的 Guard 文件修改 ([50bee2f](https://github.com/Admilkk/yunzai-guard/commit/50bee2f13df2ddd9e63cb62d379accabaf74de0d))
+
 ## [1.6.1](https://github.com/Admilkk/yunzai-guard/compare/v1.6.0...v1.6.1) (2026-11-05)
 
 

@@ -729,17 +729,7 @@ export function analyzeCommand(operation, input) {
             return;
         }
         if (name === "find") {
-            const changes = arraySome(argv, value => arrayIncludes([
-                "-delete",
-                "-exec",
-                "-execdir",
-                "-ok",
-                "-okdir",
-                "-fprint",
-                "-fprint0",
-                "-fprintf",
-                "-fls",
-            ], value));
+            const changes = arraySome(argv, value => arrayIncludes(["-delete"], value));
             let paths = 0;
             for (let index = 0; index < argv.length; index++) {
                 const value = argv[index];
@@ -845,23 +835,6 @@ export function analyzeCommand(operation, input) {
                 }
                 if (body === undefined) {
                     analysis.script = true;
-                    return;
-                }
-                if (syntax === "powershell" &&
-                    !arraySome(argv, value => arrayIncludes(["-noprofile", "-nop"], stringLower(value)))) {
-                    analysis.limited = true;
-                    return;
-                }
-                if (syntax === "cmd" && !arraySome(argv, value => stringLower(value) === "/d")) {
-                    analysis.limited = true;
-                    return;
-                }
-                if (name === "zsh" && !arrayIncludes(argv, "-f")) {
-                    analysis.limited = true;
-                    return;
-                }
-                if (name === "fish") {
-                    analysis.limited = true;
                     return;
                 }
                 inspectShell(body, depth + 1, syntax, launchEnvironment);
@@ -1176,7 +1149,7 @@ export function analyzeCommand(operation, input) {
         }
         if (name === "git") {
             const working = arraySlice(directories);
-            const repositories = [], outputs = [], worktrees = [], configuredWorktrees = [];
+            const repositories = [], outputs = [], configurationFiles = [], commandArgs = [], worktrees = [], configuredWorktrees = [];
             let command = "";
             const configuration = (value) => {
                 const equals = stringIndexOf(value, "=");
@@ -1192,12 +1165,12 @@ export function analyzeCommand(operation, input) {
             };
             for (let index = 0; index < argv.length; index++) {
                 const value = argv[index];
-                if (value === "-C" && argv[index + 1]) {
+                if (!command && value === "-C" && argv[index + 1]) {
                     const next = argv[++index];
                     for (let at = 0; at < working.length; at++)
                         working[at] = targetPath(next, working[at]) ?? working[at];
                 }
-                else if (value === "--git-dir" || stringStartsWith(value, "--git-dir=")) {
+                else if (!command && (value === "--git-dir" || stringStartsWith(value, "--git-dir="))) {
                     const target = value === "--git-dir" ? argv[++index] : stringSlice(value, 10);
                     if (typeof target === "string")
                         for (let at = 0; at < working.length; at++) {
@@ -1206,7 +1179,8 @@ export function analyzeCommand(operation, input) {
                                 arrayPush(repositories, resolved);
                         }
                 }
-                else if (value === "--work-tree" || stringStartsWith(value, "--work-tree=")) {
+                else if (!command &&
+                    (value === "--work-tree" || stringStartsWith(value, "--work-tree="))) {
                     const target = value === "--work-tree" ? argv[++index] : stringSlice(value, 12);
                     if (typeof target === "string")
                         arrayPush(worktrees, target);
@@ -1215,7 +1189,7 @@ export function analyzeCommand(operation, input) {
                     (value === "--file" || value === "-f" || stringStartsWith(value, "--file="))) {
                     const target = value === "--file" || value === "-f" ? argv[++index] : stringSlice(value, 7);
                     if (typeof target === "string")
-                        arrayPush(outputs, target);
+                        arrayPush(configurationFiles, target);
                 }
                 else if ((value === "--output" || value === "-o") && argv[index + 1])
                     arrayPush(outputs, argv[++index]);
@@ -1223,25 +1197,138 @@ export function analyzeCommand(operation, input) {
                     arrayPush(outputs, stringSlice(value, 9));
                 else if (stringStartsWith(value, "-o") && value.length > 2)
                     arrayPush(outputs, stringSlice(value, 2));
-                else if (value === "-c" && argv[index + 1])
+                else if (!command && value === "-c" && argv[index + 1])
                     configuration(argv[++index]);
-                else if (stringStartsWith(value, "-c") && value.length > 2)
+                else if (!command && stringStartsWith(value, "-c") && value.length > 2)
                     configuration(stringSlice(value, 2));
                 else if (!command && !stringStartsWith(value, "-"))
                     command = value;
+                else if (command)
+                    arrayPush(commandArgs, value);
             }
-            const readOnly = arrayIncludes([
-                "log",
-                "show",
-                "diff",
-                "rev-parse",
-                "ls-files",
-                "ls-tree",
-                "cat-file",
-                "describe",
-                "version",
-                "help",
-            ], command) || informational(argv);
+            const configWords = [];
+            if (command === "config")
+                for (let index = 0; index < commandArgs.length; index++) {
+                    const value = commandArgs[index];
+                    if (arrayIncludes(["--type", "--default"], value)) {
+                        index++;
+                        continue;
+                    }
+                    if (!stringStartsWith(value, "-"))
+                        arrayPush(configWords, value);
+                }
+            const configMutation = arrayIncludes(["set", "unset", "rename-section", "remove-section", "edit"], configWords[0]) ||
+                arraySome(commandArgs, value => arrayIncludes([
+                    "--add",
+                    "--replace-all",
+                    "--unset",
+                    "--unset-all",
+                    "--rename-section",
+                    "--remove-section",
+                    "--edit",
+                    "-e",
+                ], value));
+            const configRead = command === "config" &&
+                !configMutation &&
+                (arrayIncludes(["get", "list"], configWords[0]) ||
+                    configWords.length === 1 ||
+                    arraySome(commandArgs, value => arrayIncludes(["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l"], value)));
+            const commandWords = [];
+            for (const value of commandArgs)
+                if (!stringStartsWith(value, "-"))
+                    arrayPush(commandWords, value);
+            const remoteRead = command === "remote" &&
+                (commandWords.length === 0 || arrayIncludes(["get-url", "show"], commandWords[0]));
+            const branchRead = command === "branch" &&
+                (commandWords.length === 0 ||
+                    arraySome(commandArgs, value => arrayIncludes(["--show-current", "--list"], value))) &&
+                !arraySome(commandArgs, value => arrayIncludes([
+                    "-d",
+                    "-D",
+                    "-m",
+                    "-M",
+                    "-c",
+                    "-C",
+                    "--delete",
+                    "--move",
+                    "--copy",
+                    "--set-upstream-to",
+                    "--unset-upstream",
+                ], value));
+            const tagRead = command === "tag" &&
+                (commandWords.length === 0 ||
+                    arraySome(commandArgs, value => arrayIncludes(["--list", "-l"], value))) &&
+                !arraySome(commandArgs, value => arrayIncludes([
+                    "-d",
+                    "--delete",
+                    "-a",
+                    "--annotate",
+                    "-s",
+                    "--sign",
+                    "-f",
+                    "--force",
+                    "-m",
+                    "--message",
+                    "-F",
+                    "--file",
+                ], value));
+            const readOnly = configRead ||
+                remoteRead ||
+                branchRead ||
+                tagRead ||
+                arrayIncludes([
+                    "log",
+                    "show",
+                    "diff",
+                    "rev-parse",
+                    "ls-files",
+                    "ls-tree",
+                    "cat-file",
+                    "describe",
+                    "version",
+                    "help",
+                    "status",
+                ], command) ||
+                informational(argv) ||
+                arraySome(commandArgs, value => arrayIncludes(["--help", "-h"], value)) ||
+                !arrayIncludes([
+                    "add",
+                    "am",
+                    "apply",
+                    "bisect",
+                    "branch",
+                    "checkout",
+                    "cherry-pick",
+                    "clean",
+                    "clone",
+                    "commit",
+                    "config",
+                    "fetch",
+                    "gc",
+                    "init",
+                    "maintenance",
+                    "merge",
+                    "mv",
+                    "notes",
+                    "pull",
+                    "push",
+                    "rebase",
+                    "reflog",
+                    "remote",
+                    "repack",
+                    "reset",
+                    "restore",
+                    "revert",
+                    "rm",
+                    "stash",
+                    "submodule",
+                    "switch",
+                    "symbolic-ref",
+                    "tag",
+                    "update-index",
+                    "update-ref",
+                    "worktree",
+                ], command);
             const env = snapshotEnvironment(launchEnvironment);
             const environmentValue = (name) => {
                 const keys = objectKeys(env);
@@ -1265,7 +1352,7 @@ export function analyzeCommand(operation, input) {
                 for (let at = 0; at < working.length; at++) {
                     const target = targetPath(worktrees[index], working[at]);
                     if (target)
-                        add(target, readOnly ? "read" : "write", !readOnly);
+                        add(target, readOnly ? "read" : "write");
                 }
             for (let index = 0; index < configuredWorktrees.length; index++) {
                 const value = configuredWorktrees[index];
@@ -1277,7 +1364,7 @@ export function analyzeCommand(operation, input) {
                 for (let at = 0; at < bases.length; at++) {
                     const target = targetPath(value, bases[at]);
                     if (target)
-                        add(target, readOnly ? "read" : "write", !readOnly);
+                        add(target, readOnly ? "read" : "write");
                 }
             }
             const environmentPaths = [
@@ -1297,7 +1384,22 @@ export function analyzeCommand(operation, input) {
             }
             const targets = repositories.length ? repositories : working;
             for (let index = 0; index < targets.length; index++)
-                add(targets[index], readOnly ? "read" : "write", !readOnly);
+                add(targets[index], readOnly ? "read" : "write");
+            for (const target of configurationFiles)
+                for (const base of working) {
+                    const file = targetPath(target, base);
+                    if (file)
+                        add(file, readOnly ? "read" : "write");
+                }
+            if (!readOnly &&
+                arrayIncludes(["add", "rm", "mv", "restore", "checkout", "reset", "clean"], command))
+                for (const value of commandArgs)
+                    if (value && !stringStartsWith(value, "-"))
+                        for (const base of working) {
+                            const file = targetPath(value, base);
+                            if (file)
+                                add(file, "write", true);
+                        }
             for (let index = 0; index < outputs.length; index++)
                 for (let at = 0; at < working.length; at++) {
                     const output = targetPath(outputs[index], working[at]);
@@ -1356,18 +1458,8 @@ export function analyzeCommand(operation, input) {
                     (looksLikePath(value) || name === "ffmpeg" || name === "ffprobe"))
                     add(value, name === "ffprobe" ? "read" : "write");
             }
-            return;
         }
-        // 未知原生工具只对明确出现的路径保守检查，不把消息或普通文本当作写目标。
-        add(".", "write");
-        for (let index = 0; index < argv.length; index++) {
-            const value = argv[index];
-            if (looksLikePath(value))
-                add(value, "write");
-            const equals = stringIndexOf(value, "=");
-            if (equals > 0 && looksLikePath(stringSlice(value, equals + 1)))
-                add(stringSlice(value, equals + 1), "write");
-        }
+        // 未知程序及参数不推测为写入，交给普通行为审计。
     };
     const inspectSed = (expression) => {
         const commands = /(?:^|[;\n{])\s*(?:(?:\d+|\$|\/(?:\\.|[^/\\])*\/)(?:\s*,\s*(?:\d+|\$|\/(?:\\.|[^/\\])*\/))?\s*!?\s*)?([rRwWe])(?:\s*([^;\n}]+)|$)/g;

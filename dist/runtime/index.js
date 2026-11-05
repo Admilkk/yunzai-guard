@@ -94,11 +94,7 @@ export function installRuntime(options) {
         originPlugin,
     }, createCommandGuard({
         roots,
-        readRoots,
-        settings: options.settings,
         deny: refuse,
-        emit,
-        originPlugin,
     }));
     instrumentation.protect(sealApi);
     observeFile = instrumentation.observeFile;

@@ -12,10 +12,9 @@ import { promisify } from "node:util";
 import { setInterval, clearInterval } from "node:timers";
 import { evaluatePolicy, GuardDeniedError } from "../config/policy.js";
 import { prepareNodeLaunch, prepareSpawnOptions, snapshotLaunch, isDirectNodeLaunch, } from "../runtime/launch.js";
-import { arrayIsArray, arraySlice, objectCreate, objectHasOwn, stringIndexOf, stringLower, stringSlice, newWeakMap, weakMapSet, weakMapGet, weakMapDelete, objectFreeze, promiseReject, sameDescriptor, timestamp, newMap, mapGet, mapSet, mapSize, mapClear, } from "../protect/intrinsics.js";
+import { arrayIsArray, arraySlice, arrayEach, arrayPush, objectCreate, objectHasOwn, stringIndexOf, stringLower, stringSlice, newWeakMap, weakMapSet, weakMapGet, weakMapDelete, objectFreeze, promiseReject, sameDescriptor, timestamp, newMap, mapGet, mapSet, mapSize, mapClear, } from "../protect/intrinsics.js";
 import { cleanTarget, prepareFork, describeRequest, describeSocket, describeDatagram, describeCommand, describeFetch, describeListen, describeDns, describeUrl, describeFile, describeNative, filePath, } from "./descriptions.js";
 import { M } from "../shared/messages.js";
-import { refuse } from "../protect/objects.js";
 const descriptor = Object.getOwnPropertyDescriptor;
 const define = Object.defineProperty;
 const apply = Reflect.apply;
@@ -23,6 +22,7 @@ const construct = Reflect.construct;
 const getPrototype = Object.getPrototypeOf;
 const clock = performance.now.bind(performance);
 const windows = process.platform === "win32";
+const LaunchTypeError = TypeError;
 /** 同一插件对同一文件的同类审计记录的最短间隔。 */
 const fileRepeatMs = 60000;
 const spawnChannel = diagnostics.channel("tracing:child_process.spawn:start");
@@ -492,8 +492,41 @@ export function installInstrumentation(settings, emit, contextProvider, launchCo
                             args[2] === checked.cwd &&
                             args[3] === checked.envPairs &&
                             args[4] === checked.stdio));
-                if (!sameLaunch || publishingSpawn !== launch?.publishingDepth)
-                    refuse("native-process.spawn", "unguarded-process-handle");
+                if (launch && publishingSpawn !== launch.publishingDepth)
+                    throw new LaunchTypeError("Process handle is already starting");
+                if (!sameLaunch) {
+                    if (typeof args[0] !== "string" || !arrayIsArray(args[1]))
+                        throw new LaunchTypeError("Invalid native process arguments");
+                    const options = prepareSpawnOptions({
+                        file: args[0],
+                        args: args[1],
+                        cwd: args[2],
+                        envPairs: args[3],
+                    });
+                    const env = arrayIsArray(options.envPairs)
+                        ? objectCreate(null)
+                        : undefined;
+                    if (env)
+                        for (let index = 0; index < options.envPairs.length; index++) {
+                            const pair = options.envPairs[index];
+                            if (typeof pair !== "string")
+                                continue;
+                            const at = stringIndexOf(pair, "=");
+                            if (at > 0) {
+                                const key = stringSlice(pair, 0, at);
+                                if (!objectHasOwn(env, key))
+                                    env[key] = stringSlice(pair, at + 1);
+                            }
+                        }
+                    checkCommand("spawn", [
+                        options.file,
+                        arraySlice(options.args, 1),
+                        { cwd: options.cwd, env },
+                    ]);
+                    const next = [options.file, options.args, options.cwd, options.envPairs];
+                    arrayEach(arraySlice(args, 4), value => arrayPush(next, value));
+                    args = next;
+                }
                 return apply(nativeSpawn, this, args);
             });
         }

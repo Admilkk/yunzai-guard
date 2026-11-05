@@ -33,22 +33,6 @@ export function shellEscape(text, at, powershell) {
     }
     return { value: next, end: at + 1 };
 }
-/** Remove the display-only interactive Bash prompt, which otherwise loads rc files.
- * The checked text and the text actually executed must use this same normalization. */
-export function normalizeShellText(text) {
-    const banner = apply(exec, /^\s*"\$0" -ic 'echo "\$\{PS1@P\}"';/, [
-        text,
-    ]);
-    if (banner)
-        text = stringSlice(text, banner[0].length);
-    // A top-level inline PowerShell must not run a profile before its checked body.
-    const powershell = apply(exec, /^(\s*(?:powershell|pwsh)(?:\.exe)?\s+)(-[a-z]+)\s+/i, [
-        text,
-    ]);
-    if (powershell && powershellInlineOption(powershell[2]))
-        text = `${powershell[1]}-NoProfile ${stringSlice(text, powershell[1].length)}`;
-    return text;
-}
 export function isShellProgram(file) {
     const lower = stringLower(file);
     return regexpTest(/(?:^|[\\/])(?:sh|bash|dash|ash|zsh|ksh|fish|cmd|powershell|pwsh)(?:\.exe)?$/, lower);
@@ -125,4 +109,4 @@ export function shellSubstitution(text, start) {
 //# sourceMappingURL=shell-text.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "./objects.js"
-__guardRegisterExports("protect/shell-text.ts", { shellEscape, normalizeShellText, isShellProgram, powershellInlineOption, decodeShellCommand, shellSubstitution })
+__guardRegisterExports("protect/shell-text.ts", { shellEscape, isShellProgram, powershellInlineOption, decodeShellCommand, shellSubstitution })
