@@ -2,7 +2,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCommandExecutable } from "../protect/command-resolution.js";
 import { snapshotCommandShell } from "../protect/command-shell.js";
-import { arrayEach, arrayEvery, arrayIsArray, arrayIncludes, arrayPush, arraySlice, jsonStringify, objectCreate, objectDefine, objectDescriptor, objectHasOwn, objectKeys, ownKeys, reflectGet, regexpTest, setHas, string, stringIndexOf, stringLower, stringStartsWith, stringSlice, } from "../protect/intrinsics.js";
+import { normalizeShellText, isShellProgram, powershellInlineOption, } from "../protect/shell-text.js";
+import { arraySome, arrayEach, arrayEvery, arrayIsArray, arrayIncludes, arrayPush, arraySlice, jsonStringify, objectCreate, objectDefine, objectDescriptor, objectHasOwn, objectKeys, ownKeys, reflectGet, regexpTest, setHas, string, stringIndexOf, stringLower, stringStartsWith, stringSlice, } from "../protect/intrinsics.js";
 const bootstrap = fileURLToPath(new URL("../runtime-bootstrap.cjs", import.meta.url));
 const childPreload = new URL("../child-preload.js", import.meta.url).href;
 const resolutionPreload = new URL("../native-sandbox/resolution-preload.js", import.meta.url).href;
@@ -240,6 +241,35 @@ export function snapshotLaunch(operation, input) {
     options.env = copyEnvironment(options.env && typeof options.env === "object" ? options.env : process.env);
     snapshotCwd(options);
     snapshotCommandShell(operation, options, current, previousEnvironment);
+    if (operation === "exec" ||
+        operation === "execSync" ||
+        options.shell ||
+        (typeof args[0] === "string" && isShellProgram(args[0])))
+        arrayEach(objectKeys(options.env), key => {
+            if (regexpTest(/^(?:BASH_ENV|ENV|BASH_FUNC_.*)$/i, key))
+                delete options.env[key];
+        });
+    if ((operation === "exec" || operation === "execSync") && typeof args[0] === "string")
+        args[0] = normalizeShellText(args[0]);
+    else if (typeof args[0] === "string" && isShellProgram(args[0]) && arrayIsArray(args[1])) {
+        const argv = args[1];
+        if (regexpTest(/(?:^|[\\/])cmd(?:\.exe)?$/i, args[0]) &&
+            arraySome(argv, value => stringLower(value) === "/c")) {
+            const next = ["/d"];
+            arrayEach(argv, value => arrayPush(next, value));
+            args[1] = next;
+        }
+        for (let index = 0; index < argv.length; index++)
+            if (arrayIncludes(["-c", "-Command", "-command"], argv[index]) &&
+                typeof argv[index + 1] === "string")
+                argv[index + 1] = normalizeShellText(argv[index + 1]);
+        if (regexpTest(/(?:^|[\\/])(?:powershell|pwsh)(?:\.exe)?$/i, args[0]) &&
+            arraySome(argv, value => powershellInlineOption(value) !== undefined)) {
+            const next = ["-NoProfile"];
+            arrayEach(argv, value => arrayPush(next, value));
+            args[1] = next;
+        }
+    }
     args[at] = options;
     if (callbackOnly)
         arrayPush(args, current);

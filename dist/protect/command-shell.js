@@ -4,6 +4,7 @@ const capturedProcess = process;
 const windows = process.platform === "win32";
 const systemCmd = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe");
 const implicitShells = newWeakMap();
+const customImplicitShells = newWeakMap();
 // Node 的 exec 会克隆 options，但保留 env；只传递同一个系统 cmd 的私有来源记录。
 const implicitEnvironments = newWeakMap();
 const NativeTypeError = TypeError;
@@ -38,6 +39,8 @@ export function snapshotCommandShell(operation, options, previous, previousEnvir
         const shell = requested || "cmd.exe";
         implicit = comparable(shell) === "cmd.exe" || comparable(shell) === comparableSystemCmd;
         options.shell = implicit ? systemCmd : shell;
+        if (!implicit)
+            weakMapSet(customImplicitShells, options, true);
     }
     if (!implicit)
         return;
@@ -50,7 +53,12 @@ export function snapshotCommandShell(operation, options, previous, previousEnvir
 export function isImplicitSystemShell(options, shell) {
     return windows && typeof shell === "string" && recorded(implicitShells, options, shell);
 }
+export function isCustomImplicitShell(options) {
+    return (options !== null &&
+        typeof options === "object" &&
+        weakMapGet(customImplicitShells, options) === true);
+}
 //# sourceMappingURL=command-shell.js.map
 // Guard 自有导出登记。
 import { registerModule as __guardRegisterExports } from "./objects.js"
-__guardRegisterExports("protect/command-shell.ts", { snapshotCommandShell, isImplicitSystemShell })
+__guardRegisterExports("protect/command-shell.ts", { snapshotCommandShell, isImplicitSystemShell, isCustomImplicitShell })
