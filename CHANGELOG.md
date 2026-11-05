@@ -2,6 +2,13 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.6.1](https://github.com/Admilkk/yunzai-guard/compare/v1.6.0...v1.6.1) (2026-11-05)
+
+
+### 🐛 问题修复
+
+* **protect:** 解析 rc 内联与编码命令并保留 Guard 文件保护 ([e138413](https://github.com/Admilkk/yunzai-guard/commit/e13841349dd24fa1b1237a41d1e4ccb870ce9a80))
+
 ## [1.6.0](https://github.com/Admilkk/yunzai-guard/compare/v1.5.0...v1.6.0) (2026-11-04)
 
 
