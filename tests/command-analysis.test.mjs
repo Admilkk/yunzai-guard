@@ -26,9 +26,6 @@ test("普通 exec 与 native 命令保留审计分类，参数不会出现在可
 test("显式解释器、脚本扩展、fork 及内联代码属于脚本，帮助与版本查询不误拦", () => {
   for (const [program, argv] of [
     ["sh", ["run"]],
-    ["bash", ["-c", "echo hello"]],
-    ["cmd.exe", ["/c", "echo hi"]],
-    ["powershell.exe", ["-Command", "Write-Host hi"]],
     ["pwsh", ["-File", "run.ps1"]],
     ["node", ["run.js"]],
     [process.execPath, ["-e", "console.log(1)"]],
@@ -41,6 +38,12 @@ test("显式解释器、脚本扩展、fork 及内联代码属于脚本，帮助
     assert.equal(analyze(program, argv).script, true, program)
   for (const program of ["node", "python", "bash", "pwsh"])
     assert.equal(analyze(program, ["--version"]).script, false, program)
+  for (const [program, argv] of [
+    ["bash", ["-c", "echo hello"]],
+    ["cmd.exe", ["/d", "/c", "echo hi"]],
+    ["powershell.exe", ["-NoProfile", "-Command", "Write-Host hi"]],
+  ])
+    assert.equal(analyze(program, argv).script, false, program)
   assert.equal(analyzeCommand("fork", ["module", [], { cwd: base }]).script, true)
   assert.equal(
     analyzeCommand("spawn", ["echo", ["hello"], { cwd: base, shell: true }]).script,
@@ -109,13 +112,13 @@ test("shell cd 先于后续重定向检查，保留条件失败分支；fd 重�
 test("显式 shell 和 PowerShell 内联文件操作仍给出固定自保护目标", () => {
   for (const [program, argv] of [
     ["sh", ["-c", "echo changed > guard/settings.yaml"]],
-    ["cmd.exe", ["/c", "copy", "source", "guard/settings.yaml"]],
-    ["pwsh", ["-Command", "Set-Content -Path guard/settings.yaml -Value changed"]],
-    ["powershell", ["-Command", "Add-Content guard/settings.yaml changed"]],
-    ["pwsh", ["-Command", "Out-File -FilePath guard/settings.yaml"]],
-    ["pwsh", ["-Command", "Remove-Item guard/settings.yaml"]],
-    ["pwsh", ["-Command", "Copy-Item source guard/settings.yaml"]],
-    ["pwsh", ["-Command", "Move-Item source guard/settings.yaml"]],
+    ["cmd.exe", ["/d", "/c", "copy", "source", "guard/settings.yaml"]],
+    ["pwsh", ["-NoProfile", "-Command", "Set-Content -Path guard/settings.yaml -Value changed"]],
+    ["powershell", ["-NoProfile", "-Command", "Add-Content guard/settings.yaml changed"]],
+    ["pwsh", ["-NoProfile", "-Command", "Out-File -FilePath guard/settings.yaml"]],
+    ["pwsh", ["-NoProfile", "-Command", "Remove-Item guard/settings.yaml"]],
+    ["pwsh", ["-NoProfile", "-Command", "Copy-Item source guard/settings.yaml"]],
+    ["pwsh", ["-NoProfile", "-Command", "Move-Item source guard/settings.yaml"]],
   ])
     assert.equal(write(analyze(program, argv)), true, program)
 })
@@ -221,7 +224,7 @@ test("PowerShell Copy/Move-Item 命名源目标不依赖参数顺序", () => {
       `${command} -Path source -Destination guard/settings.yaml`,
       `${command} -DESTINATION:guard/settings.yaml -LiteralPath source`,
     ]) {
-      const result = analyze("pwsh", ["-Command", content])
+      const result = analyze("pwsh", ["-NoProfile", "-Command", content])
       assert.equal(write(result), true, content)
       if (command === "Copy-Item")
         assert.equal(
@@ -234,11 +237,13 @@ test("PowerShell Copy/Move-Item 命名源目标不依赖参数顺序", () => {
 test("PowerShell 常见字面路径使用独立单引号和反引号词法", () => {
   const expected = path.join(base, "guard space", "settings.yaml")
   const quoted = analyze("pwsh", [
+    "-NoProfile",
     "-Command",
     "Set-Content -LiteralPath 'guard space/settings.yaml' -Value changed",
   ])
   assert.equal(write(quoted, expected), true)
   const escaped = analyze("pwsh", [
+    "-NoProfile",
     "-Command",
     "Set-Content -LiteralPath guard` space/settings.yaml -Value changed",
   ])
@@ -247,7 +252,11 @@ test("PowerShell 常见字面路径使用独立单引号和反引号词法", () 
     const absolute = path.join(base, "Guard Space", "settings.yaml")
     assert.equal(
       write(
-        analyze("pwsh", ["-Command", `Set-Content -LiteralPath '${absolute}' -Value changed`]),
+        analyze("pwsh", [
+          "-NoProfile",
+          "-Command",
+          `Set-Content -LiteralPath '${absolute}' -Value changed`,
+        ]),
         absolute,
       ),
       true,
@@ -328,13 +337,13 @@ test("扫描预算和动态 shell 文件目标不会被静默截断，通配变�
 test("显式嵌套 shell 的动态目标与程序名也触发有界拒绝，source 和 eval 属于脚本", () => {
   assert.equal(analyze("sh", ["-c", "touch $TARGET"]).limited, true)
   assert.equal(analyze("sh", ["-c", "$PROGRAM ordinary"]).limited, true)
-  assert.equal(analyze("cmd", ["/c", "touch $TARGET"]).limited, true)
+  assert.equal(analyze("cmd", ["/d", "/c", "touch $TARGET"]).limited, true)
   assert.equal(shell("source run.sh").script, true)
   assert.equal(shell(". run.sh").script, true)
   assert.equal(write(shell('eval "touch guard/settings.yaml"')), true)
   if (process.platform !== "win32") {
-    assert.equal(shell('echo "$(touch guard/settings.yaml)"').limited, true)
-    assert.equal(shell('echo "`touch guard/settings.yaml`"').limited, true)
+    assert.equal(write(shell('echo "$(touch guard/settings.yaml)"')), true)
+    assert.equal(write(shell('echo "`touch guard/settings.yaml`"')), true)
   }
 })
 

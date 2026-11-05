@@ -100,7 +100,7 @@ test("Windows 默认 cmd 快照不受归因回调、审计回调或 cwd 同名�
   )
 })
 
-test("默认 cmd 来源只随私有快照传播，修改 shell 或伪造属性不能豁免", { skip: !windows }, t => {
+test("内联 cmd 仍检查内容，修改 shell 或伪造属性不能授权其他解释器", { skip: !windows }, t => {
   probe(
     t,
     `
@@ -110,13 +110,13 @@ test("默认 cmd 来源只随私有快照传播，修改 shell 或伪造属性�
       const prepared=prepareNodeLaunch("execSync",first,{runtimeId:"fixture",originPlugin:()=>"fixture"});
       assert.equal(analyzeCommand("execSync",prepared).script,false);
       const cloned={...prepared[1]};
-      assert.equal(analyzeCommand("execSync",["echo safe",cloned]).script,true);
+      assert.equal(analyzeCommand("execSync",["echo safe",cloned]).script,false);
       assert.equal(analyzeCommand("execSync",snapshotLaunch("execSync",["echo safe",cloned])).script,false);
       const changed={...prepared[1],shell:process.execPath,implicitSystemShell:true};
       assert.equal(analyzeCommand("execSync",snapshotLaunch("execSync",["echo safe",changed])).script,true);
       const forged={...options,shell:systemCmd,implicitSystemShell:true};
-      assert.equal(analyzeCommand("execSync",snapshotLaunch("execSync",["echo safe",forged])).script,true);
-      denied(()=>cp.execSync("echo safe",forged));
+      assert.equal(analyzeCommand("execSync",snapshotLaunch("execSync",["echo safe",forged])).script,false);
+      assert.equal(cp.execSync("echo safe",forged).trim(),"safe");
       let reads=0;
       const hostile={env:options.env,get shell(){return ++reads===1?systemCmd:process.execPath},set shell(_value){}};
       snapshotCommandShell("execSync",hostile,first[1]);

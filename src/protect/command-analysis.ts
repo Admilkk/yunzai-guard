@@ -2,7 +2,14 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { resolveCommandExecutable } from "./command-resolution.js"
-import { isImplicitSystemShell } from "./command-shell.js"
+import { isImplicitSystemShell, isCustomImplicitShell } from "./command-shell.js"
+import {
+  decodeShellCommand,
+  shellSubstitution,
+  isShellProgram,
+  powershellInlineOption,
+  shellEscape,
+} from "./shell-text.js"
 import {
   apply,
   arrayIncludes,
@@ -143,9 +150,13 @@ function informational(argv: string[]): boolean {
 }
 
 /** 有界拆分常见 shell 词法；不执行变量、替换、展开或任何命令。 */
-function tokens(text: string, syntax: ShellSyntax): { values: Token[]; limited: boolean } {
+function tokens(
+  text: string,
+  syntax: ShellSyntax,
+): { values: Token[]; limited: boolean; substitutions: string[] } {
   const values: Token[] = []
-  if (text.length > maxText) return { values, limited: true }
+  const substitutions: string[] = []
+  if (text.length > maxText) return { values, limited: true, substitutions }
   let dynamic = false
   let word = "",
     started = false,
@@ -157,7 +168,46 @@ function tokens(text: string, syntax: ShellSyntax): { values: Token[]; limited: 
   }
   for (let index = 0; index < text.length; index++) {
     const char = text[index]
-    if (values.length >= maxTokens) return { values, limited: true }
+    if (!quote && !started && char === "#" && syntax !== "cmd") {
+      while (index + 1 < text.length && text[index + 1] !== "\n") index++
+      continue
+    }
+    if (values.length >= maxTokens) return { values, limited: true, substitutions }
+    if (quote !== "'" && syntax === "posix" && char === "$" && text[index + 1] === "(") {
+      const nested = shellSubstitution(text, index + 2)
+      if (!nested) return { values, limited: true, substitutions }
+      if (text[index + 2] === "(") {
+        if (!test(/^\([\d\s+*/%<>&|^!~?:-]+\)$/, nested.text)) dynamic = true
+      } else arrayPush(substitutions, nested.text)
+      word += stringSlice(text, index, nested.end + 1)
+      started = true
+      index = nested.end
+      continue
+    }
+    if (quote !== "'" && syntax === "posix" && char === "`") {
+      let end = index + 1
+      for (; end < text.length; end++) {
+        if (text[end] === "\\") {
+          end++
+          continue
+        }
+        if (text[end] === "`") break
+      }
+      if (end >= text.length) return { values, limited: true, substitutions }
+      arrayPush(substitutions, stringSlice(text, index + 1, end))
+      word += stringSlice(text, index, end + 1)
+      started = true
+      index = end
+      continue
+    }
+    if (syntax === "posix" && quote !== "'" && char === "$" && text[index + 1] === "{") {
+      const parameter = match(/^\$\{[a-z_][a-z\d_]*\}/i, stringSlice(text, index))
+      if (!parameter) dynamic = true
+    }
+    if (syntax === "powershell" && char === "," && !quote) {
+      flush()
+      continue
+    }
     if (
       quote !== "'" &&
       ((syntax === "posix" && char === "`") ||
@@ -173,18 +223,23 @@ function tokens(text: string, syntax: ShellSyntax): { values: Token[]; limited: 
         quote === '"' &&
         char === "`" &&
         index + 1 < text.length
-      )
-        word += text[++index]
-      else if (char === quote) quote = ""
+      ) {
+        const escaped = shellEscape(text, index, true)
+        if (!escaped) return { values, limited: true, substitutions }
+        word += escaped.value
+        index = escaped.end
+      } else if (char === quote) quote = ""
       else if (
         char === "\\" &&
         quote === '"' &&
         syntax === "posix" &&
         index + 1 < text.length &&
         test(/["\\$`\n]/, text[index + 1])
-      )
-        word += text[++index]
-      else word += char
+      ) {
+        const escaped = shellEscape(text, index, false)!
+        word += escaped.value
+        index = escaped.end
+      } else word += char
       continue
     }
     if (char === '"' || (syntax !== "cmd" && char === "'")) {
@@ -196,8 +251,10 @@ function tokens(text: string, syntax: ShellSyntax): { values: Token[]; limited: 
       (char === "`" && syntax === "powershell")
     ) {
       started = true
-      if (index + 1 < text.length) word += text[++index]
-      else word += char
+      const escaped = shellEscape(text, index, syntax === "powershell")
+      if (!escaped) return { values, limited: true, substitutions }
+      word += escaped.value
+      index = escaped.end
     } else if (char === " " || char === "\t") flush()
     else if (test(/[;&|<>\r\n()]/, char)) {
       // 2>file 的 2 是描述符；普通数字参数仍原样保留。
@@ -217,7 +274,7 @@ function tokens(text: string, syntax: ShellSyntax): { values: Token[]; limited: 
     }
   }
   flush()
-  return { values, limited: dynamic || truth(quote) || values.length > maxTokens }
+  return { values, limited: dynamic || truth(quote) || values.length > maxTokens, substitutions }
 }
 
 /** 提取可确定的执行与文件目标，不把静态分析当作系统文件权限边界。 */
@@ -259,6 +316,14 @@ export function analyzeCommand(operation: string, input: readonly unknown[]): Co
     commands = 0
   const add = (value: string, access: CommandTarget["access"], ancestors = false) => {
     if (typeof value !== "string") return
+    if (currentSyntax === "powershell") {
+      const provider = match(/^(?:Microsoft\.PowerShell\.Core\\)?FileSystem::/i, value)
+      if (provider) value = stringSlice(value, provider[0].length)
+      else if (test(/::|^(?:env|variable|alias|function):/i, value)) {
+        analysis.limited = true
+        return
+      }
+    }
     if (windows && test(/^[a-z]:(?:$|[^\\/])/i, value)) {
       analysis.limited = true
       return
@@ -354,12 +419,45 @@ export function analyzeCommand(operation: string, input: readonly unknown[]): Co
       return
     }
     const executable = words[first]
+    if (
+      currentSyntax === "powershell" &&
+      first + 1 === words.length &&
+      (test(/^\$progresspreference=(?:silentlycontinue|continue|stop)$/i, executable) ||
+        stringLower(executable) === "[console]::outputencoding=[system.text.encoding]::utf8")
+    )
+      return
     if (activeShell() && (test(/[$`]/, executable) || (windows && test(/%[^%]+%/, executable)))) {
       analysis.limited = true
       return
     }
-    const name = program(executable)
+    let name = program(executable)
+    if (currentSyntax === "powershell") {
+      if (arrayIncludes(["cp", "cpi", "copy"], name)) name = "copy-item"
+      else if (arrayIncludes(["mv", "mi", "move"], name)) name = "move-item"
+      else if (arrayIncludes(["rm", "ri", "del", "erase", "rd", "rmdir"], name))
+        name = "remove-item"
+      else if (name === "gi") name = "get-item"
+      else if (name === "gl") name = "pwd"
+    }
     const argv = arraySlice(words, first + 1)
+    if (currentSyntax === "powershell") {
+      if (
+        test(/[{}()[\]@]/, executable) ||
+        stringStartsWith(executable, "$") ||
+        arrayIncludes(
+          ["invoke-expression", "iex", "invoke-command", "start-job", "start-threadjob"],
+          name,
+        )
+      ) {
+        analysis.limited = true
+        return
+      }
+      if (arrayIncludes(["start-process", "saps", "start", "invoke-item", "ii"], name)) {
+        analysis.script = true
+        analysis.limited = true
+        return
+      }
+    }
     if (shell && analysis.executable === "shell-command") analysis.executable = executable
     if (activeShell() && argv.length && arrayIncludes(["export", "unset", "set", "path"], name)) {
       // 不模拟跨命令环境状态；后续 PATH、PATHEXT 等变化不能沿用旧快照。
@@ -410,11 +508,37 @@ export function analyzeCommand(operation: string, input: readonly unknown[]): Co
                 "set-item",
                 "get-content",
                 "get-item",
+                "get-childitem",
+                "gci",
+                "ls",
+                "pwd",
+                "prompt",
+                "get-date",
+                "rm",
+                "ri",
+                "del",
+                "erase",
+                "rd",
+                "rmdir",
+                "cp",
+                "cpi",
+                "copy",
+                "mv",
+                "mi",
+                "move",
+                "dir",
+                "gi",
+                "gl",
+                "gc",
+                "cat",
+                "type",
+                "pwd",
                 "set-location",
               ]
             : ["echo", "printf", "pwd", "true", "false", "test", "[", "cd", "pushd", "popd"],
         name,
       )
+    let resolvedProgram = false
     if (!builtin)
       for (let index = 0; index < directories.length; index++) {
         const resolved = resolveCommandExecutable(
@@ -426,7 +550,12 @@ export function analyzeCommand(operation: string, input: readonly unknown[]): Co
         if (resolved.limited) analysis.limited = true
         if (resolved.script || (resolved.node && !informational(argv))) analysis.script = true
         if (resolved.path) add(resolved.path, "read")
+        if (resolved.path) resolvedProgram = true
       }
+    if (currentSyntax === "powershell" && !builtin && !resolvedProgram) {
+      analysis.limited = true
+      return
+    }
     if (name === "env") {
       let next = 0
       const env = snapshotEnvironment(launchEnvironment)
@@ -653,14 +782,63 @@ export function analyzeCommand(operation: string, input: readonly unknown[]): Co
       inspect(argv, depth + 1, launchEnvironment)
       return
     }
+    if (name === "find") {
+      const changes = arraySome(argv, value =>
+        arrayIncludes(
+          [
+            "-delete",
+            "-exec",
+            "-execdir",
+            "-ok",
+            "-okdir",
+            "-fprint",
+            "-fprint0",
+            "-fprintf",
+            "-fls",
+          ],
+          value,
+        ),
+      )
+      let paths = 0
+      for (let index = 0; index < argv.length; index++) {
+        const value = argv[index]
+        if (stringStartsWith(value, "-") || value === "!" || value === "(") break
+        add(value, changes ? "write" : "read", changes)
+        paths++
+      }
+      if (!paths) add(".", changes ? "write" : "read", changes)
+      for (let index = 0; index < argv.length; index++) {
+        if (
+          arrayIncludes(["-fprint", "-fprint0", "-fprintf", "-fls"], argv[index]) &&
+          argv[index + 1]
+        )
+          add(argv[++index], "write")
+        else if (arrayIncludes(["-exec", "-execdir", "-ok", "-okdir"], argv[index])) {
+          const child: string[] = []
+          while (++index < argv.length && argv[index] !== ";" && argv[index] !== "+")
+            arrayPush(child, argv[index])
+          if (arraySome(child, value => stringIndexOf(value, "{}") >= 0)) {
+            analysis.limited = true
+            return
+          }
+          inspect(child, depth + 1, launchEnvironment)
+        }
+      }
+      return
+    }
+    if (name === "xargs" && !informational(argv)) {
+      analysis.limited = true
+      return
+    }
     const interpreter =
       (activeShell() && arrayIncludes([".", "source", "eval"], name)) ||
       test(
         /^(?:sh|bash|dash|ash|zsh|ksh|fish|cmd|powershell|pwsh|node|nodejs|deno|bun|npm|npx|pnpm|yarn|corepack|bunx|python(?:\d+(?:\.\d+)*)?|pypy(?:\d+)?|perl|ruby|php|lua(?:\d+(?:\.\d+)*)?|luajit|rscript|tclsh|wish|awk|gawk|mawk|cscript|wscript|mshta|jsc|d8)$/i,
         name,
       )
+    const inlineShell = isShellProgram(executable)
     if (
-      (interpreter && !informational(argv)) ||
+      (interpreter && !inlineShell && !informational(argv)) ||
       test(
         /\.(?:[cm]?js|jsx|ts|tsx|sh|bash|zsh|fish|py|pyw|pl|rb|php|lua|ps1|bat|cmd|vbs|wsf)$/i,
         executable,
@@ -668,6 +846,97 @@ export function analyzeCommand(operation: string, input: readonly unknown[]): Co
     )
       analysis.script = true
     if (interpreter) {
+      if (inlineShell) {
+        if (informational(argv)) return
+        const actualEnv = snapshotEnvironment(launchEnvironment)
+        for (const key of objectKeys(actualEnv))
+          if (test(/^(?:BASH_ENV|ENV|BASH_FUNC_.*)$/i, key) && actualEnv[key]) {
+            analysis.limited = true
+            return
+          }
+        let body: string | undefined
+        const syntax: ShellSyntax =
+          name === "cmd"
+            ? "cmd"
+            : arrayIncludes(["powershell", "pwsh"], name)
+              ? "powershell"
+              : "posix"
+        for (let index = 0; index < argv.length; index++) {
+          const value = argv[index],
+            lower = stringLower(value)
+          const inline =
+            syntax === "posix"
+              ? test(/^-[a-z]*c$/i, value)
+              : syntax === "cmd"
+                ? lower === "/c"
+                : powershellInlineOption(lower) !== undefined
+          if (inline) {
+            if (index + 1 >= argv.length) {
+              analysis.limited = true
+              return
+            }
+            if (syntax === "powershell" && powershellInlineOption(lower) === "encoded") {
+              if (index + 2 !== argv.length) {
+                analysis.limited = true
+                return
+              }
+              body = decodeShellCommand(argv[index + 1])
+              if (body === undefined) {
+                analysis.limited = true
+                return
+              }
+            } else {
+              body = argv[index + 1]
+              if (syntax !== "posix")
+                for (let next = index + 2; next < argv.length; next++) body += ` ${argv[next]}`
+            }
+            if (syntax === "posix" && test(/[il]/, stringSlice(value, 1, -1))) {
+              analysis.script = true
+              analysis.limited = true
+              return
+            }
+            break
+          }
+          const harmless =
+            syntax === "powershell"
+              ? arrayIncludes(["-noprofile", "-nop", "-noninteractive", "-noni", "-nologo"], lower)
+              : syntax === "cmd"
+                ? arrayIncludes(["/d", "/s", "/q"], lower)
+                : arrayIncludes(["--noprofile", "--norc", "-e", "-u", "-f"], value)
+          if (!harmless) {
+            analysis.script = true
+            if (stringStartsWith(value, "-") && !(syntax === "powershell" && lower === "-file"))
+              analysis.limited = true
+            if (!stringStartsWith(value, "-")) add(value, "read")
+            return
+          }
+        }
+        if (body === undefined) {
+          analysis.script = true
+          return
+        }
+        if (
+          syntax === "powershell" &&
+          !arraySome(argv, value => arrayIncludes(["-noprofile", "-nop"], stringLower(value)))
+        ) {
+          analysis.limited = true
+          return
+        }
+        if (syntax === "cmd" && !arraySome(argv, value => stringLower(value) === "/d")) {
+          analysis.limited = true
+          return
+        }
+        if (name === "zsh" && !arrayIncludes(argv, "-f")) {
+          analysis.limited = true
+          return
+        }
+        if (name === "fish") {
+          analysis.limited = true
+          return
+        }
+        inspectShell(body, depth + 1, syntax, launchEnvironment)
+        return
+      }
       if (name === "eval") {
         let command = ""
         for (let index = 0; index < argv.length; index++)
@@ -730,6 +999,15 @@ export function analyzeCommand(operation: string, input: readonly unknown[]): Co
         continue
       }
       if (!literal && stringStartsWith(value, "-")) {
+        if (currentSyntax === "powershell") {
+          if (value === "--%" || value === "--") {
+            analysis.limited = true
+            continue
+          }
+          const named = match(/^-[a-z]+:(.*)$/i, value)
+          if (named && named[1] && !test(/^\$(?:true|false)$/i, named[1]))
+            arrayPush(operands, named[1])
+        }
         if (stringStartsWith(value, "--reference=")) add(stringSlice(value, 12), "read")
         if (optionValue(value) && index + 1 < argv.length) {
           if (value === "--reference" || value === "-r") add(argv[index + 1], "read")
@@ -747,7 +1025,22 @@ export function analyzeCommand(operation: string, input: readonly unknown[]): Co
     }
     if (
       arrayIncludes(
-        ["echo", "echo.", "printf", "pwd", "true", "false", "test", "[", "ver", "rem"],
+        [
+          "echo",
+          "echo.",
+          "printf",
+          "pwd",
+          "true",
+          "false",
+          "test",
+          "[",
+          "ver",
+          "rem",
+          "write-output",
+          "write-host",
+          "prompt",
+          "get-date",
+        ],
         name,
       )
     )
@@ -1110,6 +1403,11 @@ export function analyzeCommand(operation: string, input: readonly unknown[]): Co
       arrayIncludes(
         [
           "cat",
+          "get-content",
+          "gc",
+          "get-childitem",
+          "gci",
+          "get-item",
           "type",
           "head",
           "tail",
@@ -1223,6 +1521,8 @@ export function analyzeCommand(operation: string, input: readonly unknown[]): Co
     const previousSyntax = currentSyntax
     currentSyntax = syntax
     try {
+      for (let index = 0; index < parsed.substitutions.length; index++)
+        inspectShell(parsed.substitutions[index], depth + 1, syntax, env)
       let words: string[] = []
       for (let index = 0; index < parsed.values.length; index++) {
         const token = parsed.values[index]
@@ -1250,12 +1550,19 @@ export function analyzeCommand(operation: string, input: readonly unknown[]): Co
     }
   }
   if (typeof requestedShell === "string") {
-    if (!isImplicitSystemShell(options, requestedShell)) analysis.script = true
+    if (
+      isCustomImplicitShell(options) ||
+      (!isImplicitSystemShell(options, requestedShell) &&
+        (!isShellProgram(requestedShell) || arrayIncludes(["powershell", "pwsh"], shellName)))
+    )
+      analysis.script = true
+    if (arrayIncludes(["zsh", "fish"], shellName)) analysis.limited = true
     if (looksLikePath(requestedShell)) add(requestedShell, "read")
     for (let index = 0; index < directories.length; index++) {
       const resolved = resolveCommandExecutable(requestedShell, directories[index], environment)
       if (resolved.path) add(resolved.path, "read")
       if (resolved.limited) analysis.limited = true
+      if (resolved.node || resolved.script) analysis.script = true
     }
   }
   if (shell && typeof input[0] === "string") {

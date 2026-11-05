@@ -5,6 +5,7 @@ const capturedProcess = process
 const windows = process.platform === "win32"
 const systemCmd = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe")
 const implicitShells = newWeakMap<object, string>()
+const customImplicitShells = newWeakMap<object, boolean>()
 // Node 的 exec 会克隆 options，但保留 env；只传递同一个系统 cmd 的私有来源记录。
 const implicitEnvironments = newWeakMap<object, string>()
 const NativeTypeError = TypeError
@@ -46,6 +47,7 @@ export function snapshotCommandShell(
     const shell = requested || "cmd.exe"
     implicit = comparable(shell) === "cmd.exe" || comparable(shell) === comparableSystemCmd
     options.shell = implicit ? systemCmd : shell
+    if (!implicit) weakMapSet(customImplicitShells, options, true)
   }
   if (!implicit) return
   options.shell = systemCmd
@@ -57,4 +59,12 @@ export function snapshotCommandShell(
 /** 只豁免本次快照记录且 shell 值未变化的系统 cmd，调用者属性不能伪造来源。 */
 export function isImplicitSystemShell(options: unknown, shell: unknown): boolean {
   return windows && typeof shell === "string" && recorded(implicitShells, options, shell)
+}
+
+export function isCustomImplicitShell(options: unknown): boolean {
+  return (
+    options !== null &&
+    typeof options === "object" &&
+    weakMapGet(customImplicitShells, options) === true
+  )
 }
