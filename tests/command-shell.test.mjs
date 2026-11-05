@@ -8,7 +8,7 @@ import test from "node:test"
 const moduleUrl = name => new URL(`../dist/${name}.js`, import.meta.url).href
 const windows = process.platform === "win32"
 
-function probe(t, body) {
+function probe(t, body, rules = []) {
   const temporaryRoot = fs.realpathSync(os.tmpdir())
   const directory = fs.mkdtempSync(path.join(temporaryRoot, "guard-command-shell-"))
   t.after(() => {
@@ -36,7 +36,7 @@ function probe(t, body) {
     process.env.ComSpec=systemCmd;
     const events=[];
     let onContext,onEmit;
-    installRuntime({settings:parseSettings({protect:{enabled:false}}),stateDir:path.join(directory,"state"),identity:{id:"shell-fixture",kind:"yunzai",generation:1,pid:process.pid,originPlugin:"fixture",observability:"js-entrypoints"},contextProvider:()=>{onContext?.();return "fixture"},emit:event=>{events.push(event);onEmit?.(event)}});
+    installRuntime({settings:parseSettings({protect:{enabled:false},rules:${JSON.stringify(rules)}}),stateDir:path.join(directory,"state"),identity:{id:"shell-fixture",kind:"yunzai",generation:1,pid:process.pid,originPlugin:"fixture",observability:"js-entrypoints"},contextProvider:()=>{onContext?.();return "fixture"},emit:event=>{events.push(event);onEmit?.(event)}});
     const options={cwd:directory,encoding:"utf8",windowsHide:true,env:{SystemRoot:process.env.SystemRoot,PATH:path.dirname(process.execPath)+";"+path.join(process.env.SystemRoot,"System32"),ComSpec:systemCmd,NODE_OPTIONS:"--require "+JSON.stringify(path.join(directory,"preload.cjs"))}};
     const denied=call=>assert.throws(call,{code:"GUARD_DENIED"});
     ${body}
@@ -53,7 +53,7 @@ function probe(t, body) {
   assert.equal(result.stdout.trim(), "completed")
 }
 
-test("Windows 自定义 ComSpec 在所有隐式 shell 入口执行前拒绝", { skip: !windows }, t => {
+test("显式进程拒绝规则覆盖所有隐式 shell 入口", { skip: !windows }, t => {
   probe(
     t,
     `
@@ -67,8 +67,9 @@ test("Windows 自定义 ComSpec 在所有隐式 shell 入口执行前拒绝", { 
       await assert.rejects(promisify(cp.exec)("echo",options),{code:"GUARD_DENIED"});
       await assert.rejects(promisify(cp.execFile)("echo",[],{...options,shell:true}),{code:"GUARD_DENIED"});
       for(const shell of ["node.exe","cmd","relative/custom.exe"]){process.env.ComSpec=shell;denied(()=>cp.execSync("echo",options));}
-      assert.ok(events.some(event=>event.details?.scriptExecution===true&&event.action==="deny"));
+      assert.ok(events.some(event=>event.kind==='process'&&event.action==="deny"&&event.ruleId==='deny-process'));
     `,
+    [{ id: "deny-process", kind: "process", action: "deny" }],
   )
 })
 

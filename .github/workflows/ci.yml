@@ -38,3 +38,14 @@ jobs:
       - run: npm run lint
       - run: npm run format:check
       - run: npm run test:unit
+      - name: Linux plugin compatibility
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          GUARD_TEST_LINUX_PLUGIN_COMPAT: "1"
+          GUARD_TEST_LINUX_PLUGIN_DEPENDENCIES: ${{ runner.temp }}/guard-plugin-compat/package.json
+        run: |
+          npm install --prefix "$RUNNER_TEMP/guard-plugin-compat" --ignore-scripts --no-audit --no-fund systeminformation@5.31.6 puppeteer-core@24.22.0
+          export GUARD_TEST_BROWSER="$(command -v google-chrome || command -v chromium)"
+          test -n "$GUARD_TEST_BROWSER"
+          node --test tests/linux-plugin-compatibility.test.mjs

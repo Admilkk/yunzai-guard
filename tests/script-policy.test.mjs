@@ -32,7 +32,7 @@ const { sampleDecision } = await import(
   "data:text/javascript;base64," + Buffer.from(compiledRules).toString("base64")
 )
 
-test("script execution defaults to deny for command entrypoints in runtime and host policy", () => {
+test("script and process creation default to audit in runtime and host policy", () => {
   const settings = parseSettings({})
   for (const operation of [
     "exec",
@@ -44,12 +44,12 @@ test("script execution defaults to deny for command entrypoints in runtime and h
     "fork",
   ]) {
     const event = { ...script, operation, action: "audit", ruleId: "invented" }
-    assert.deepEqual(defaultPolicyDecision(event), { action: "deny" })
-    assert.deepEqual(decide(event, []), { action: "deny" })
-    assert.deepEqual(samplePolicyDecision(event, []), { action: "deny", uncertain: false })
-    assert.deepEqual(runtimeEventDecision(settings, event), { action: "deny" })
+    assert.deepEqual(defaultPolicyDecision(event), { action: "audit" })
+    assert.deepEqual(decide(event, []), { action: "audit" })
+    assert.deepEqual(samplePolicyDecision(event, []), { action: "audit", uncertain: false })
+    assert.deepEqual(runtimeEventDecision(settings, event), { action: "audit" })
     const actual = authorizeHostEvent(settings, event)
-    assert.equal(actual.action, "deny")
+    assert.equal(actual.action, "audit")
     assert.equal(actual.ruleId, undefined)
   }
 })
@@ -139,15 +139,15 @@ test("host script evidence cannot revive an unverified redacted shell rule", () 
     action: "audit",
     ruleId: "allow-script",
   })
-  assert.equal(actual.action, "deny")
+  assert.equal(actual.action, "audit")
   assert.equal(actual.ruleId, undefined)
 })
 
 test("UI script samples share default and explicit policy while ignoring non-boolean claims", () => {
   const entry = { ...script, id: "script-1", time: 1, type: "audit", action: "deny" }
-  assert.deepEqual(sampleDecision(entry, []), { action: "deny", uncertain: false })
+  assert.deepEqual(sampleDecision(entry, []), { action: "audit", uncertain: false })
   const stored = { ...entry, details: { event: { ...script } } }
-  assert.deepEqual(sampleDecision(stored, []), { action: "deny", uncertain: false })
+  assert.deepEqual(sampleDecision(stored, []), { action: "audit", uncertain: false })
   assert.deepEqual(
     sampleDecision(entry, [{ id: "allow-node", kind: "process", target: "node", action: "audit" }]),
     { action: "audit", ruleId: "allow-node", uncertain: false },

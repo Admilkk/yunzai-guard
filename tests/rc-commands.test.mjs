@@ -57,9 +57,8 @@ test("TRSS rc 普通提示符包装和编码正文按实际内容检查", () => 
       check(posix(text), { shell: "/bin/sh", env: { PATH: "/usr/bin:/bin" } }).limited,
       undefined,
     )
-    assert.equal(
-      check(bash(text), { shell: "/bin/bash", env: { PATH: "/usr/bin:/bin" } }).script,
-      false,
+    assert.doesNotThrow(() =>
+      check(bash(text), { shell: "/bin/bash", env: { PATH: "/usr/bin:/bin" } }),
     )
   }
   assert.equal(
@@ -86,9 +85,8 @@ test("编码正文的写入、追加、删除与嵌套解释器不能取得业�
     `Remove-Item 'ordinary','${target}'`,
     `Set-Content -Path:'${target}' -Value changed`,
     `cpi -Destination:'${protectedRoot}' -Path ordinary`,
-    `Remove-Item '${protectedRoot.replace(/guard$/, "gu`u{61}rd")}'`,
-    `Remove-Item -LiteralPath '${protectedRoot.replace(/guard$/, "gu`\nard")}'`,
-    `powershell -NoProfile -EncodedCommand ${encode(`Remove-Item '${target}'`)}`,
+    `Remove-Item "${protectedRoot.replace(/guard$/, "gu`u{61}rd")}"`,
+    `Remove-Item -LiteralPath "${protectedRoot.replace(/guard$/, "gu`\nard")}"`,
   ])
     for (const audit of [false, true])
       assert.throws(
@@ -96,10 +94,15 @@ test("编码正文的写入、追加、删除与嵌套解释器不能取得业�
         { code: "ERR_GUARD_SELF_PROTECTION" },
         body,
       )
-  assert.throws(() => check(ps(prelude + 'node -e "1"')), { code: "GUARD_DENIED" })
-  assert.throws(() => check(ps("Set-Alias echo Remove-Item;echo guard/settings.yaml")), {
-    code: "ERR_GUARD_SELF_PROTECTION",
-  })
+  // Linux 未安装 Windows PowerShell，嵌套命令的程序解析不足只审计。
+  const nested = ps(
+    prelude + `powershell -NoProfile -EncodedCommand ${encode(`Remove-Item '${target}'`)}`,
+  )
+  if (process.platform === "win32")
+    assert.throws(() => check(nested, {}, true), { code: "ERR_GUARD_SELF_PROTECTION" })
+  else assert.doesNotThrow(() => check(nested, {}, true))
+  assert.doesNotThrow(() => check(ps(prelude + 'node -e "1"')))
+  assert.doesNotThrow(() => check(ps("Set-Alias echo Remove-Item;echo guard/settings.yaml")))
   for (const body of [
     "powershell -NoProfile -UnknownOption body",
     "powershell -e invalid",
@@ -107,14 +110,12 @@ test("编码正文的写入、追加、删除与嵌套解释器不能取得业�
     "Start-Process node",
     "[IO.File]::WriteAllText('guard/settings.yaml','x')",
   ])
-    assert.throws(() => check(ps(body), {}, true), { code: "ERR_GUARD_SELF_PROTECTION" })
+    assert.doesNotThrow(() => check(ps(body), {}, true))
   for (const code of ["!invalid!", "YQ==", encode("echo ordinary") + "=", "A".repeat(140000)])
-    assert.throws(() => check(`powershell -EncodedCommand ${code}`), {
-      code: "ERR_GUARD_SELF_PROTECTION",
-    })
+    assert.doesNotThrow(() => check(`powershell -EncodedCommand ${code}`))
 })
 
-test("POSIX 命令替换递归检查目标，动态写目标仍保守拒绝", () => {
+test("POSIX 明确写目标固定拒绝，无法判断的目标不猜测", () => {
   const options = { shell: "/bin/sh", env: { PATH: "/usr/bin:/bin" } }
   for (const text of [
     'echo "$(touch guard/settings.yaml)"',
@@ -123,30 +124,28 @@ test("POSIX 命令替换递归检查目标，动态写目标仍保守拒绝", ()
     "rm -rf gu\\\nard",
   ])
     assert.throws(() => check(text, options, true), { code: "ERR_GUARD_SELF_PROTECTION" })
-  assert.throws(() => check('tee "$(echo guard/settings.yaml)"', options, true), {
-    code: "ERR_GUARD_SELF_PROTECTION",
-  })
-  assert.throws(() => check(posix("node -e 1"), options), { code: "GUARD_DENIED" })
-  for (const command of ["find . -delete", "find . -name guard -exec rm -rf {} +"])
-    assert.throws(() => check(command, options, true), { code: "ERR_GUARD_SELF_PROTECTION" })
+  assert.doesNotThrow(() => check('tee "$(echo guard/settings.yaml)"', options, true))
+  assert.doesNotThrow(() => check(posix("node -e 1"), options))
+  assert.throws(() => check("find . -delete", options, true), { code: "ERR_GUARD_SELF_PROTECTION" })
+  assert.doesNotThrow(() => check("find . -name guard -exec rm -rf {} +", options, true))
 })
 
-test("启动参数关闭隐藏的 Shell 启动脚本，缩写编码仍按正文解析", () => {
+test("不因启动脚本或进程类型改写调用者的参数与环境", () => {
   const argv = snapshotLaunch("execFile", [
     "powershell.exe",
     ["-e", encode("echo hi")],
     { env: { PATH: "", BASH_ENV: "bad.sh", ENV: "bad.sh", "BASH_FUNC_echo%%": "bad" } },
   ])
-  assert.equal(argv[1][0], "-NoProfile")
-  assert.equal(argv[2].env.BASH_ENV, undefined)
-  assert.equal(argv[2].env.ENV, undefined)
-  assert.equal(argv[2].env["BASH_FUNC_echo%%"], undefined)
+  assert.equal(argv[1][0], "-e")
+  assert.equal(argv[2].env.BASH_ENV, "bad.sh")
+  assert.equal(argv[2].env.ENV, "bad.sh")
+  assert.equal(argv[2].env["BASH_FUNC_echo%%"], "bad")
   const cmd = snapshotLaunch("spawn", ["cmd.exe", ["/c", "echo hi"], {}])
-  assert.equal(cmd[1][0], "/d")
+  assert.equal(cmd[1][0], "/c")
 })
 
 test(
-  "Linux 实际 rc 输出可用，Bash 提示符不执行启动文件",
+  "Linux rc 保留启动环境，明确 Guard 写目标仍拒绝",
   { skip: process.platform !== "linux", timeout: 30000 },
   t => {
     const temporary = fs.realpathSync(os.tmpdir()),
@@ -162,7 +161,7 @@ test(
       startup = path.join(directory, "startup.sh")
     fs.mkdirSync(state)
     fs.writeFileSync(sentinel, "unchanged")
-    fs.writeFileSync(startup, `printf changed > '${sentinel}'\n`)
+    fs.writeFileSync(startup, `printf initialized > '${path.join(directory, "startup-marker")}'\n`)
     const runtime = new URL("../dist/runtime/index.js", import.meta.url).href,
       config = new URL("../dist/config/index.js", import.meta.url).href
     const source = `
@@ -171,7 +170,7 @@ test(
  installRuntime({settings:parseSettings({}),stateDir:${JSON.stringify(state)},identity:{id:'rc',kind:'yunzai',generation:1,pid:process.pid,originPlugin:'TRSS-Plugin',observability:'js-entrypoints'},emit(){}});
  const env={...process.env,BASH_ENV:${JSON.stringify(startup)}};
  assert.equal(cp.execSync(${JSON.stringify(posix("echo ordinary"))},{encoding:'utf8',env}).trim().endsWith('ordinary'),true);
- assert.equal(cp.execSync(${JSON.stringify(bash("echo bash-ok"))},{shell:'/bin/bash',encoding:'utf8',env}).trim(),'bash-ok');
+ assert.equal(cp.execSync(${JSON.stringify(bash("echo bash-ok"))},{shell:'/bin/bash',encoding:'utf8',env}).trim().endsWith('bash-ok'),true);
  for(const command of [${JSON.stringify(posix(`rm -rf '${state}'`))},${JSON.stringify(bash(`echo changed > '${sentinel}'`))}])assert.throws(()=>cp.execSync(command,{shell:'/bin/bash',env}),{code:'ERR_GUARD_SELF_PROTECTION'});
  console.log('posix-rc-ok');`
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", source], {
@@ -211,7 +210,7 @@ test(
  assert.equal(cp.execSync(command('Write-Output ordinary'),{encoding:'utf8',timeout:10000}).trim().endsWith('ordinary'),true);
  assert.equal((await promisify(cp.exec)(command('Write-Output asynchronous'),{timeout:10000})).stdout.trim().endsWith('asynchronous'),true);
  for(const body of [${JSON.stringify(`Set-Content '${sentinel}' changed`)},${JSON.stringify(`Remove-Item -Recurse -Force '${state}'`)}])assert.throws(()=>cp.execSync(command(body)),{code:'ERR_GUARD_SELF_PROTECTION'});
- assert.throws(()=>cp.execSync(command('node -e 1')),{code:'GUARD_DENIED'});
+ assert.equal(cp.execSync(command('node -e 1'),{encoding:'utf8',timeout:10000}).includes('PS '),true);
  console.log('rc-ok');`
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", source], {
       cwd: directory,

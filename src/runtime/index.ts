@@ -145,11 +145,7 @@ export function installRuntime(options: RuntimeOptions): RuntimeHandle {
     },
     createCommandGuard({
       roots,
-      readRoots,
-      settings: options.settings,
       deny: refuse,
-      emit,
-      originPlugin,
     }),
   )
   instrumentation.protect(sealApi)

@@ -22,6 +22,8 @@ import {
 import {
   arrayIsArray,
   arraySlice,
+  arrayEach,
+  arrayPush,
   objectCreate,
   objectHasOwn,
   stringIndexOf,
@@ -58,7 +60,6 @@ import {
   type Description,
 } from "./descriptions.js"
 import { M } from "../shared/messages.js"
-import { refuse } from "../protect/objects.js"
 
 type Callable = (...args: any[]) => any
 type ContextProvider = () => string | undefined
@@ -99,6 +100,7 @@ const construct = Reflect.construct
 const getPrototype = Object.getPrototypeOf
 const clock = performance.now.bind(performance)
 const windows = process.platform === "win32"
+const LaunchTypeError = TypeError
 /** 同一插件对同一文件的同类审计记录的最短间隔。 */
 const fileRepeatMs = 60000
 const spawnChannel = diagnostics.channel("tracing:child_process.spawn:start")
@@ -613,8 +615,39 @@ export function installInstrumentation(
                 args[2] === checked.cwd &&
                 args[3] === checked.envPairs &&
                 args[4] === checked.stdio))
-          if (!sameLaunch || publishingSpawn !== launch?.publishingDepth)
-            refuse("native-process.spawn", "unguarded-process-handle")
+          if (launch && publishingSpawn !== launch.publishingDepth)
+            throw new LaunchTypeError("Process handle is already starting")
+          if (!sameLaunch) {
+            if (typeof args[0] !== "string" || !arrayIsArray(args[1]))
+              throw new LaunchTypeError("Invalid native process arguments")
+            const options = prepareSpawnOptions({
+              file: args[0],
+              args: args[1],
+              cwd: args[2],
+              envPairs: args[3],
+            })
+            const env = arrayIsArray(options.envPairs)
+              ? (objectCreate(null) as Record<string, string>)
+              : undefined
+            if (env)
+              for (let index = 0; index < options.envPairs.length; index++) {
+                const pair = options.envPairs[index]
+                if (typeof pair !== "string") continue
+                const at = stringIndexOf(pair, "=")
+                if (at > 0) {
+                  const key = stringSlice(pair, 0, at)
+                  if (!objectHasOwn(env, key)) env[key] = stringSlice(pair, at + 1)
+                }
+              }
+            checkCommand("spawn", [
+              options.file,
+              arraySlice(options.args, 1),
+              { cwd: options.cwd, env },
+            ])
+            const next = [options.file, options.args, options.cwd, options.envPairs]
+            arrayEach(arraySlice(args, 4), value => arrayPush(next, value))
+            args = next
+          }
           return apply(nativeSpawn, this, args)
         },
       )

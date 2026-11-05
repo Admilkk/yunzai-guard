@@ -174,17 +174,18 @@ test("复制到既有目录按源文件名计算输出，不把整个父目录�
   )
 })
 
-test("Git 修改按 -C 或 cwd 检查，status 可能刷新索引所以保守标记写入", () => {
-  for (const command of ["reset", "checkout", "apply", "status"])
+test("Git 修改按 -C 或 cwd 检查，只读查询不推测成写入", () => {
+  for (const command of ["reset", "checkout", "apply"])
     assert.equal(write(analyze("git", ["-C", "guard", command]), path.join(base, "guard")), true)
   assert.equal(
     write(analyze("git", ["reset"], { cwd: path.join(base, "guard") }), path.join(base, "guard")),
     true,
   )
   assert.equal(write(analyze("git", ["-C", "guard", "log"]), path.join(base, "guard")), false)
+  assert.equal(write(analyze("git", ["-C", "guard", "status"]), path.join(base, "guard")), false)
 })
 
-test("媒体输出 basename 与受保护 cwd 下未知工具仍有写目标", () => {
+test("媒体输出 basename 有写目标，未知工具不推测写入", () => {
   const directory = path.join(base, "guard")
   for (const program of ["ffmpeg", "convert", "magick"])
     assert.equal(
@@ -195,7 +196,7 @@ test("媒体输出 basename 与受保护 cwd 下未知工具仍有写目标", ()
     write(analyze("curl", ["-o", "settings.yaml", "https://example.test"], { cwd: directory })),
     true,
   )
-  assert.equal(write(analyze("unknown-tool", ["message"], { cwd: directory }), directory), true)
+  assert.equal(write(analyze("unknown-tool", ["message"], { cwd: directory }), directory), false)
   assert.equal(write(analyze("pwd", [], { cwd: directory }), directory), false)
 })
 

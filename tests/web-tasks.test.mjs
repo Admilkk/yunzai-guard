@@ -138,10 +138,10 @@ test("已放行的历史事件退出待办，脱敏不确定保留，自保护�
   assert.equal(fixed.cases[0].currentAction, "deny")
 })
 
-test("默认拒绝的脚本保留待办与诊断，显式放行后退出待办", t => {
+test("显式拒绝的脚本保留待办与诊断，移除限制后退出待办", t => {
   const app = fixture(
     t,
-    [],
+    [{ id: "deny-script", kind: "process", target: "node", action: "deny" }],
     [
       {
         kind: "process",
@@ -162,7 +162,7 @@ test("默认拒绝的脚本保留待办与诊断，显式放行后退出待办",
   assert.equal(result.cases.length, 1)
   assert.equal(result.cases[0].target, "node")
   assert.equal(result.cases[0].currentAction, "deny")
-  assert.equal(result.cases[0].currentRuleId, undefined)
+  assert.equal(result.cases[0].currentRuleId, "deny-script")
   assert.equal(result.cases[0].uncertain, false)
   assert.equal(diagnosePlugin(app.stateDir, app.settings, "alpha").findings[0].kind, "blocked")
   const allowed = parseSettings({

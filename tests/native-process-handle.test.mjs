@@ -26,19 +26,23 @@ test("原生子进程句柄不能绕过永久保护，正常入口与诊断回�
     const events=[];
     const guard=installRuntime({settings:parseSettings({rules:[{id:'allow-all',action:'audit'}]}),identity:{id:'native-process',generation:1,kind:'yunzai',pid:process.pid,originPlugin:'probe',observability:'js-entrypoints'},emit:event=>events.push(event)});
     const refused=call=>assert.throws(call,{code:'ERR_GUARD_SELF_PROTECTION'});
-    const raw=()=>{
+    const raw=async()=>{
       const child=new cp.ChildProcess();
       try {
-        refused(()=>child._handle.spawn(process.execPath,[process.execPath,'--version'],process.cwd(),[],[{type:'ignore'},{type:'ignore'},{type:'ignore'}],0,undefined,undefined));
-        refused(()=>child._handle.spawn({file:process.execPath,args:[process.execPath,'--version']}));
-        refused(()=>cachedSpawn.call(child,{file:process.execPath,args:[process.execPath,'--version'],stdio:['ignore','ignore','ignore']}));
+        const exited=once(child,'exit');
+        assert.equal(child._handle.spawn(process.execPath,[process.execPath,'--version'],process.cwd(),[],[{type:'ignore'},{type:'ignore'},{type:'ignore'}],0,undefined,undefined),0);
+        assert.equal((await exited)[0],0);
       } finally { child._handle?.close() }
+      const cached=new cp.ChildProcess(),closed=once(cached,'close');
+      cachedSpawn.call(cached,{file:process.execPath,args:[process.execPath,'--version'],stdio:['ignore','ignore','ignore']});assert.equal((await closed)[0],0);
+      const target=new cp.ChildProcess();
+      try{refused(()=>target._handle.spawn('rm',['rm','-rf',process.cwd()+'/data/yunzai-guard'],process.cwd(),[],[{type:'ignore'},{type:'ignore'},{type:'ignore'}],0,undefined,undefined));assert.throws(()=>target._handle.spawn({}),{name:'TypeError'})}finally{target._handle?.close()}
     };
-    raw();
+    await raw();
     let intercepted=0,nested;
     const channel=diagnostics.channel('tracing:child_process.spawn:start');
     const subscriber=({process:child,options})=>{
-      refused(()=>child._handle.spawn(options.file,options.args,options.cwd,options.envPairs,options.stdio,0,options.uid,options.gid));
+      assert.throws(()=>child._handle.spawn(options.file,options.args,options.cwd,options.envPairs,options.stdio,0,options.uid,options.gid),{name:'TypeError'});
       intercepted++;
       if(intercepted===1)nested=once(cp.spawn(process.execPath,['--version'],{stdio:'ignore'}),'close');
     };
@@ -53,9 +57,9 @@ test("原生子进程句柄不能绕过永久保护，正常入口与诊断回�
     } finally { channel.unsubscribe(subscriber) }
     assert.equal(cp.execSync('echo normal-native',{encoding:'utf8'}).trim(),'normal-native');
     guard.instrumentation();
-    raw();
+    await raw();
     assert.equal(cp.execFileSync(process.execPath,['--version'],{encoding:'utf8'}).trim(),process.version);
-    assert.ok(events.some(event=>event.kind==='self-protection'&&event.operation==='native-process.spawn'));
+    assert.ok(events.some(event=>event.kind==='self-protection'&&event.operation==='spawn'));
     console.log('native-process-protection-ok');
   `
   const entry = path.join(directory, "probe.mjs")

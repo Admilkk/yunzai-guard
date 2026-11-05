@@ -3,6 +3,7 @@ import test from "node:test"
 import path from "node:path"
 import fs from "node:fs"
 import os from "node:os"
+import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import {
   monitoredExecArgv,
@@ -19,6 +20,39 @@ const runtime = new URL("../dist/child-preload.js", import.meta.url).href
 const worker = new URL("../dist/worker-preload.js", import.meta.url).href
 const user = path.join(path.dirname(bootstrap), "user file.cjs")
 const context = { runtimeId: "native-fixture", originPlugin: () => "fixture-plugin" }
+
+test("node -e 父进程的 fork 不继承父进程内联正文", t => {
+  const temporaryRoot = fs.realpathSync(os.tmpdir())
+  const directory = fs.mkdtempSync(path.join(temporaryRoot, "guard-fork-eval-"))
+  t.after(() => {
+    const absolute = fs.realpathSync(directory)
+    assert.equal(path.dirname(absolute), temporaryRoot)
+    assert.ok(path.basename(absolute).startsWith("guard-fork-eval-"))
+    fs.rmSync(absolute, { recursive: true, force: true })
+  })
+  const child = path.join(directory, "child.cjs")
+  fs.writeFileSync(child, "process.send('child-ok');process.disconnect()\n")
+  const launch = new URL("../dist/runtime/launch.js", import.meta.url).href
+  const source = `
+    (async()=>{
+      const assert=require('node:assert/strict'),cp=require('node:child_process');
+      const {prepareNodeLaunch}=await import(${JSON.stringify(launch)});
+      const options={silent:true};
+      const args=prepareNodeLaunch('fork',[${JSON.stringify(child)},[],options],{runtimeId:'fork-eval',originPlugin:()=>undefined});
+      assert.equal(options.execArgv,undefined);
+      const fork=cp.fork(...args);
+      let message;fork.on('message',value=>message=value);
+      fork.on('close',code=>{assert.equal(code,0);assert.equal(message,'child-ok')});
+    })().catch(error=>{console.error(error);process.exitCode=1});
+  `
+  const result = spawnSync(process.execPath, ["-e", source], {
+    cwd: directory,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 10000,
+  })
+  assert.equal(result.status, 0, `${result.error ?? ""}${result.stderr}`)
+})
 
 test("cwd 快照保留链接与 .. 的顺序，低层 falsey 目录继承而非法高层类型拒绝", () => {
   const relative = `link${path.sep}..${path.sep}work`

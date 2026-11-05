@@ -41,9 +41,9 @@ for (const enabled of [undefined, false, true])
         await import(${JSON.stringify(preload)});
         const broker=await import(${JSON.stringify(windowsModule)});
         const prepared=${enabled === true} && process.platform==="win32";
-        if(prepared) assert.equal(broker.compileWindowsSandbox(),"fixture-broker");
-        else assert.throws(()=>broker.compileWindowsSandbox(),{code:"GUARD_DENIED"});
-        assert.throws(()=>execFileSync(process.execPath,["-p","'business-script'"]),{code:"GUARD_DENIED"});
+        assert.equal(broker.preparationState().count,prepared?1:0);
+        assert.equal(broker.compileWindowsSandbox(),"fixture-broker");
+        assert.equal(execFileSync(process.execPath,["-p","'business-script'"],{encoding:"utf8"}).trim(),"business-script");
         assert.equal(execFileSync(process.execPath,["--version"],{encoding:"utf8",windowsHide:true}).trim(),process.version);
         process.send({type:"preparation-result",...broker.preparationState()},()=>process.exit(0));
       `,
@@ -81,8 +81,8 @@ for (const enabled of [undefined, false, true])
       const [code] = await once(child, "exit")
       assert.equal(code, 0, stderr)
       assert.ok(result, "worker reaches business code after installing runtime")
-      assert.equal(result.count, enabled === true && process.platform === "win32" ? 1 : 0)
-      if (result.count) assert.equal(result.preparedAfterRuntime, false)
+      assert.equal(result.count, 1)
+      assert.equal(result.preparedAfterRuntime, !(enabled === true && process.platform === "win32"))
     } finally {
       clearTimeout(watchdog)
       if (child.exitCode === null && child.signalCode === null) {

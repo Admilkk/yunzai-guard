@@ -47,19 +47,8 @@ export function kindMatches(kind: GuardRule["kind"], eventKind: string): boolean
   return false
 }
 
-/** 只允许明确的脚本执行证据收紧命令默认值，其他行为保持审计。 */
-export function defaultPolicyDecision(event: GuardEvent): PolicyDecision {
-  if (event.kind === "process" && event.details?.scriptExecution === true)
-    switch (event.operation) {
-      case "exec":
-      case "execSync":
-      case "execFile":
-      case "execFileSync":
-      case "spawn":
-      case "spawnSync":
-      case "fork":
-        return { action: "deny" }
-    }
+/** 未匹配业务规则的行为只审计，不因新进程或脚本类型自动拒绝。 */
+export function defaultPolicyDecision(_event: GuardEvent): PolicyDecision {
   return { action: "audit" }
 }
 

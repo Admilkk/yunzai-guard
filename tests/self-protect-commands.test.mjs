@@ -56,10 +56,6 @@ function probe(t, body, settings = {}) {
     let onEmit,onContext;
     const runtime=installRuntime({settings:parseSettings(${JSON.stringify(settings)}),identity:{id:"command-probe",generation:1,kind:"yunzai",pid:process.pid,originPlugin:"command-fixture",observability:"js-entrypoints"},contextProvider:()=>onContext?.(),emit:event=>{events.push(event);onEmit?.(event)}});
     const denied=call=>assert.throws(call,{code:"ERR_GUARD_SELF_PROTECTION"});
-    const scriptDenied=call=>assert.throws(call,{code:"GUARD_DENIED"});
-    const scriptEnvironment={...process.env};
-    for(const key of Object.keys(scriptEnvironment))if(key.toLowerCase()==='path')delete scriptEnvironment[key];
-    scriptEnvironment.PATH=directory;
     const quote=value=>'"'+value+'"';
     ${body}
     console.log(JSON.stringify({completed:true}));
@@ -103,34 +99,19 @@ test("普通 exec、spawn 和版本查询保持审计及原有异步返回语义
   )
 })
 
-test("脚本、解释器内联代码、fork 与低层 spawn 默认在执行前拒绝", { timeout: 30000 }, t => {
+test("脚本、解释器内联代码、fork 与低层 spawn 默认审计且保持返回语义", { timeout: 30000 }, t => {
   probe(
     t,
     `
-    for(const [program,args] of [
-      [process.execPath,["business.js"]],
-      ["node",["-e","console.log('script-ran')"]],
-      ["python",["-c","print('script-ran')"]],
-      ["bash",["business.sh"]],
-      ["cmd.exe",["/c","business.cmd"]],
-      [path.join(directory,"business.sh"),[]],
-      [path.join(directory,"without-extension"),[]],
-    ]){
-      scriptDenied(()=>childProcess.spawnSync(program,args,{env:scriptEnvironment}));
-      scriptDenied(()=>childProcess.execFileSync(program,args,{env:scriptEnvironment}));
-    }
-    scriptDenied(()=>childProcess.exec("node business.js",{env:scriptEnvironment}));
-    scriptDenied(()=>childProcess.execSync("sh business.sh",{env:scriptEnvironment}));
-    scriptDenied(()=>childProcess.execFile(process.execPath,["business.js"]));
-    scriptDenied(()=>childProcess.spawn(process.execPath,["business.js"]));
-    scriptDenied(()=>childProcess.fork("business.js"));
-    await assert.rejects(promisify(childProcess.exec)("node business.js",{env:scriptEnvironment}),{code:"GUARD_DENIED"});
-    await assert.rejects(promisify(childProcess.execFile)(process.execPath,["business.js"]),{code:"GUARD_DENIED"});
+    assert.equal(childProcess.execFileSync(process.execPath,["business.js"],{encoding:"utf8"}).trim(),"script-ran");
+    assert.equal(childProcess.spawnSync(process.execPath,["-p","1+1"],{encoding:"utf8"}).stdout.trim(),"2");
+    assert.equal((await promisify(childProcess.execFile)(process.execPath,["business.js"])).stdout.trim(),"script-ran");
+    assert.equal((await promisify(childProcess.exec)(quote(process.execPath)+" business.js")).stdout.trim(),"script-ran");
+    const fork=childProcess.fork("business.js",[],{stdio:"ignore",execArgv:[]});assert.equal((await once(fork,"close"))[0],0);
+    const spawned=childProcess.spawn(process.execPath,["business.js"],{stdio:"ignore"});assert.equal((await once(spawned,"close"))[0],0);
     const child=new childProcess.ChildProcess();
-    try{scriptDenied(()=>child.spawn({file:process.execPath,args:[process.execPath,"business.js"],stdio:["ignore","ignore","ignore"]}))}finally{child._handle?.close()}
-    const pathChild=new childProcess.ChildProcess();
-    try{scriptDenied(()=>pathChild.spawn({file:"without-extension",args:["without-extension"],cwd:work,envPairs:["PATH="+directory],stdio:["ignore","ignore","ignore"]}))}finally{pathChild._handle?.close()}
-    assert.ok(events.some(event=>event.kind==="process"&&event.action==="deny"&&event.details?.scriptExecution===true));
+    child.spawn({file:process.execPath,args:[process.execPath,"business.js"],stdio:["ignore","ignore","ignore"]});assert.equal((await once(child,"close"))[0],0);
+    assert.equal(events.some(event=>event.action==="deny"),false);
   `,
   )
 })
@@ -165,7 +146,7 @@ test("参数、相对 cwd、重定向及文件修改目标均受固定自保护"
     denied(()=>childProcess.execSync("echo changed > ../data/yunzai-guard/unchanged.txt",{cwd:pathToFileURL(work+path.sep)}));
     if(linked)denied(()=>childProcess.spawnSync("touch",["state-alias/unchanged.txt"]));
     const read=process.platform==="win32"?"type "+quote(sentinel):"cat "+quote(sentinel);
-    denied(()=>childProcess.execSync(read));
+    assert.equal(childProcess.execSync(read,{encoding:"utf8"}).trim(),"original");
     if(process.platform==="win32"){
       for(const [program,args] of [
         ["del",[sentinel]],["copy",[ordinary,sentinel]],["move",[ordinary,sentinel]],
@@ -198,7 +179,7 @@ test("显式脚本审计保留执行能力，监控卸载不解除命令文件�
   )
 })
 
-test("回调切换目录不能改变启动目标，卸载监控仍保留默认脚本拒绝", { timeout: 30000 }, t => {
+test("回调切换目录不能改变启动目标，卸载监控不增加脚本限制", { timeout: 30000 }, t => {
   const app = probe(
     t,
     `
@@ -215,8 +196,8 @@ test("回调切换目录不能改变启动目标，卸载监控仍保留默认�
       assert.ok(attributed>0,"attribution callback must run after launch snapshot");
     }finally{onContext=undefined;process.chdir(originalCwd)}
     runtime.instrumentation();
-    scriptDenied(()=>childProcess.spawnSync(process.execPath,["-e","console.log('not-run')"]));
-    scriptDenied(()=>childProcess.execSync("sh business.sh",{env:scriptEnvironment}));
+    assert.equal(childProcess.spawnSync(process.execPath,["-p","1+1"],{encoding:"utf8"}).stdout.trim(),"2");
+    assert.equal(childProcess.execFileSync(process.execPath,["business.js"],{encoding:"utf8"}).trim(),"script-ran");
     assert.equal(childProcess.execSync("echo ordinary-after-dispose",{encoding:"utf8"}).trim(),"ordinary-after-dispose");
     assert.equal(process.cwd(),originalCwd);
   `,
@@ -242,7 +223,7 @@ test("低层对象参数和环境只转换一次，原数组保持原引用且�
     const code={toString(){codeConversions++;return "process.stdout.write('unexpected-script')"}};
     const scriptArgs=[process.execPath,flag,code];
     const scriptChild=new childProcess.ChildProcess();
-    try{scriptDenied(()=>scriptChild.spawn({file:process.execPath,args:scriptArgs,envPairs:[],stdio:["ignore","ignore","ignore"]}))}finally{scriptChild._handle?.close()}
+    scriptChild.spawn({file:process.execPath,args:scriptArgs,envPairs:[],stdio:["ignore","ignore","ignore"]});assert.equal((await once(scriptChild,"close"))[0],0);
     assert.equal(flagConversions,1);assert.equal(codeConversions,1);
     assert.equal(scriptArgs[1],flag);assert.equal(scriptArgs[2],code);
     assert.equal(Object.isFrozen(scriptArgs),false);

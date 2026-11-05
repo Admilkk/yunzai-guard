@@ -59,7 +59,7 @@ const kindLabels: Record<string, string> = {
   native: "加载原生扩展",
   listen: "端口监听",
   plugin: "插件调用",
-  "self-protection": "改动 Guard 自身文件",
+  "self-protection": "触发 Guard 自保护",
 }
 const maxStateIds = 500
 const maxMutes = 50

@@ -294,14 +294,12 @@ async function runCase(t, { label, ids, rules, ordinary, restart = false }) {
       } else if (ordinary) {
         assert.deepEqual(result.effectiveDefaults.rules, [])
         for (const operation of ["execFileSync", "spawnSync", "fork"]) {
-          assert.equal(result[operation].allowed, false)
-          assert.equal(result[operation].code, "GUARD_DENIED")
-          assert.equal(result[operation].ruleId, undefined)
+          assert.equal(result[operation].allowed, true)
         }
         for (const operation of ["execFileSync", "spawnSync"])
           assert.equal(
             fs.existsSync(path.join(fixture.root, "plugins", id, `${operation}-side-effect.txt`)),
-            false,
+            true,
           )
         assert.equal(result.ordinaryCommands.execSync, "ordinary-command")
         assert.equal(result.ordinaryCommands.execFileSync, result.ordinaryCommands.version)
@@ -385,10 +383,9 @@ async function runCase(t, { label, ids, rules, ordinary, restart = false }) {
               event.kind === "process" &&
               event.operation === operation &&
               event.plugin === ids[0] &&
-              event.action === "deny" &&
-              event.details?.scriptExecution === true,
+              event.action === "audit",
           ),
-          `Missing default script denial for ${operation}`,
+          `Missing default audit for ${operation}`,
         )
       assert.ok(
         audits.some(
@@ -403,11 +400,10 @@ async function runCase(t, { label, ids, rules, ordinary, restart = false }) {
         audits.some(event => event.action === "restart"),
         false,
       )
-      assert.ok(
-        audits
-          .filter(event => event.action === "deny")
-          .every(event => event.kind === "process" && event.details?.scriptExecution === true),
-        "Only script execution should receive the default deny action",
+      assert.equal(
+        audits.some(event => event.action === "deny"),
+        false,
+        "Default process and script observation must not deny",
       )
     } else {
       assert.ok(
@@ -495,7 +491,7 @@ async function runCase(t, { label, ids, rules, ordinary, restart = false }) {
 }
 
 test(
-  "default managed observation audits ordinary commands and preserves Worker/Hook while denying scripts",
+  "default managed observation audits commands and scripts while preserving Worker/Hook",
   {
     skip: enabled
       ? false

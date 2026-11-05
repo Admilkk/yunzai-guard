@@ -3,12 +3,6 @@ import { fileURLToPath } from "node:url"
 import { resolveCommandExecutable } from "../protect/command-resolution.js"
 import { snapshotCommandShell } from "../protect/command-shell.js"
 import {
-  normalizeShellText,
-  isShellProgram,
-  powershellInlineOption,
-} from "../protect/shell-text.js"
-import {
-  arraySome,
   arrayEach,
   arrayEvery,
   arrayIsArray,
@@ -291,42 +285,6 @@ export function snapshotLaunch(operation: string, input: unknown[]): unknown[] {
   )
   snapshotCwd(options)
   snapshotCommandShell(operation, options, current, previousEnvironment)
-  if (
-    operation === "exec" ||
-    operation === "execSync" ||
-    options.shell ||
-    (typeof args[0] === "string" && isShellProgram(args[0]))
-  )
-    arrayEach(objectKeys(options.env), key => {
-      if (regexpTest(/^(?:BASH_ENV|ENV|BASH_FUNC_.*)$/i, key)) delete options.env[key]
-    })
-  if ((operation === "exec" || operation === "execSync") && typeof args[0] === "string")
-    args[0] = normalizeShellText(args[0])
-  else if (typeof args[0] === "string" && isShellProgram(args[0]) && arrayIsArray(args[1])) {
-    const argv = args[1] as string[]
-    if (
-      regexpTest(/(?:^|[\\/])cmd(?:\.exe)?$/i, args[0]) &&
-      arraySome(argv, value => stringLower(value) === "/c")
-    ) {
-      const next = ["/d"]
-      arrayEach(argv, value => arrayPush(next, value))
-      args[1] = next
-    }
-    for (let index = 0; index < argv.length; index++)
-      if (
-        arrayIncludes(["-c", "-Command", "-command"], argv[index]) &&
-        typeof argv[index + 1] === "string"
-      )
-        argv[index + 1] = normalizeShellText(argv[index + 1])
-    if (
-      regexpTest(/(?:^|[\\/])(?:powershell|pwsh)(?:\.exe)?$/i, args[0]) &&
-      arraySome(argv, value => powershellInlineOption(value) !== undefined)
-    ) {
-      const next = ["-NoProfile"]
-      arrayEach(argv, value => arrayPush(next, value))
-      args[1] = next
-    }
-  }
   args[at] = options
   if (callbackOnly) arrayPush(args, current)
   return args
@@ -381,7 +339,23 @@ export function prepareNodeLaunch(
     (!arrayIsArray(inherited) || !arrayEvery(inherited, item => typeof item === "string"))
   )
     return input
-  const argv = arrayIsArray(inherited) ? (arraySlice(inherited) as string[]) : []
+  let argv = arrayIsArray(inherited) ? (arraySlice(inherited) as string[]) : []
+  // 显式设置 execArgv 后 Node 不再剔除父进程的 -e，须保留原生 fork 的继承语义。
+  const parentEval = objectDescriptor(process, "_eval")?.value
+  if (fork && options.execArgv === undefined && typeof parentEval === "string") {
+    let at = -1
+    for (let index = argv.length - 1; index >= 0; index--)
+      if (argv[index] === parentEval) {
+        at = index
+        break
+      }
+    if (at > 0) {
+      const cleaned: string[] = []
+      for (let index = 0; index < argv.length; index++)
+        if (index !== at && index !== at - 1) arrayPush(cleaned, argv[index])
+      argv = cleaned
+    }
+  }
   const env = options.env as NodeJS.ProcessEnv
   if (!context.manifestPath) {
     options.env = ordinaryEnvironment(env)
